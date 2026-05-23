@@ -15,7 +15,19 @@ composable concurrency.
 
 ## Usage
 
-Load a plugin into pi-agent directly from its package directory:
+Install a published plugin with pi-agent:
+
+```bash
+pi install npm:@pi-plugins/webfetch
+```
+
+Or try it for a single run without adding it to settings:
+
+```bash
+pi -e npm:@pi-plugins/webfetch
+```
+
+For local development, load a plugin directly from its package directory:
 
 ```bash
 pi -e ./plugins/webfetch

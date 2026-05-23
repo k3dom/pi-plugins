@@ -1,19 +1,33 @@
 {
   "name": "@pi-plugins/shared",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "description": "Shared utilities for pi-plugins extensions.",
+  "homepage": "https://github.com/k3dom/pi-plugins/tree/main/tooling/shared#readme",
+  "bugs": {
+    "url": "https://github.com/k3dom/pi-plugins/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/k3dom/pi-plugins.git",
+    "directory": "tooling/shared"
+  },
   "files": [
     "dist",
     "src",
     "README.md"
   ],
   "type": "module",
+  "types": "./dist/index.d.mts",
   "exports": {
     ".": "./dist/index.mjs",
     "./package.json": "./package.json"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
+    "prepack": "pnpm run build",
     "build": "tsdown",
     "check-types": "tsc -b",
     "lint": "oxlint",

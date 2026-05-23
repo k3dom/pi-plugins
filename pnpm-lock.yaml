@@ -21,7 +21,7 @@ importers:
   plugins/webfetch:
     dependencies:
       '@pi-plugins/shared':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../tooling/shared
       defuddle:
         specifier: 0.18.1

@@ -1,7 +1,6 @@
 {
   "name": "@pi-plugins/webfetch",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "description": "WebFetch tool extension for pi-agent.",
   "keywords": [
     "pi",
@@ -10,16 +9,31 @@
     "pi-package",
     "webfetch"
   ],
+  "homepage": "https://github.com/k3dom/pi-plugins/tree/main/plugins/webfetch#readme",
+  "bugs": {
+    "url": "https://github.com/k3dom/pi-plugins/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/k3dom/pi-plugins.git",
+    "directory": "plugins/webfetch"
+  },
   "files": [
     "dist",
     "README.md"
   ],
   "type": "module",
+  "types": "./dist/index.d.mts",
   "exports": {
     ".": "./dist/index.mjs",
     "./package.json": "./package.json"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
+    "prepack": "pnpm run build",
     "build": "tsdown",
     "check-types": "tsc -b",
     "lint": "oxlint",
@@ -27,7 +41,7 @@
     "format:check": "oxfmt --check"
   },
   "dependencies": {
-    "@pi-plugins/shared": "workspace:*",
+    "@pi-plugins/shared": "workspace:^",
     "defuddle": "0.18.1",
     "effect": "4.0.0-beta.70",
     "linkedom": "0.18.12",

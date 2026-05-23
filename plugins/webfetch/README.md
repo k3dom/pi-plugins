@@ -3,6 +3,18 @@
 A [pi-agent](https://github.com/earendil-works/pi) extension that registers a
 `web_fetch` tool for fetching content over HTTP(S).
 
+## Install
+
+```bash
+pi install npm:@pi-plugins/webfetch
+```
+
+For one-off testing without adding it to settings:
+
+```bash
+pi -e npm:@pi-plugins/webfetch
+```
+
 ## Tool: `web_fetch`
 
 The tool fetches a URL and returns its content as Markdown (the default) or raw
