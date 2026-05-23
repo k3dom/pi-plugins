@@ -9,9 +9,9 @@ composable concurrency.
 
 ## Packages
 
-| Package                                     | Description                                                     | Tools       |
-| ------------------------------------------- | --------------------------------------------------------------- | ----------- |
-| [`webfetch`](packages/webfetch) | Fetches HTTP(S) pages and returns them as Markdown or raw HTML. | `web_fetch` |
+| Package                         | Description                                                            | Tools       |
+| ------------------------------- | ---------------------------------------------------------------------- | ----------- |
+| [`webfetch`](packages/webfetch) | Fetches content over HTTP(S) and returns them as Markdown or raw HTML. | `web_fetch` |
 
 ## Usage
 
