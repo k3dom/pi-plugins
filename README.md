@@ -9,8 +9,8 @@ composable concurrency.
 
 ## Packages
 
-| Package                         | Description                                                            | Tools       |
-| ------------------------------- | ---------------------------------------------------------------------- | ----------- |
+| Package                        | Description                                                            | Tools       |
+| ------------------------------ | ---------------------------------------------------------------------- | ----------- |
 | [`webfetch`](plugins/webfetch) | Fetches content over HTTP(S) and returns them as Markdown or raw HTML. | `web_fetch` |
 
 ## Usage
