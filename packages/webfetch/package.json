@@ -11,15 +11,16 @@
     "webfetch"
   ],
   "files": [
-    "src",
+    "dist",
     "README.md"
   ],
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsc --noEmit",
+    "build": "tsdown",
     "check-types": "tsc --noEmit",
     "lint": "oxlint",
     "test": "node -e \"console.log('no tests yet')\"",
@@ -37,6 +38,7 @@
     "@types/node": "^25.9.1",
     "oxfmt": "^0.51.0",
     "oxlint": "^1.66.0",
+    "tsdown": "^0.22.0",
     "typebox": "^1.1.38",
     "typescript": "^6.0.3"
   },
@@ -46,7 +48,7 @@
   },
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./dist/index.js"
     ]
   }
 }
