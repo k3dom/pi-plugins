@@ -30,9 +30,7 @@
     in {
       default = pkgs.mkShell {
         packages = with pkgs; [
-          # Node.js 24 still includes corepack; later versions will drop corepack.
           nodejs_24
-          # Provides package-manager shims such as pnpm without mutating the Nix store.
           corepack
 
           statix
