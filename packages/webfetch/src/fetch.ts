@@ -1,4 +1,4 @@
-import { Context, Duration, Effect, Layer, Option } from 'effect'
+import { Context, Duration, Effect, Layer, Option, Schedule } from 'effect'
 import type { TimeoutError } from 'effect/Cause'
 import {
   FetchHttpClient,
@@ -8,14 +8,19 @@ import {
 } from 'effect/unstable/http'
 import { HtmlConverter, HtmlConverterError } from './converter'
 
+export type WebFetchFormat = 'markdown' | 'html'
+
+const ACCEPT_HEADERS: Record<WebFetchFormat, string> = {
+  markdown:
+    'text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1',
+  html: 'text/html;q=1.0, application/xhtml+xml;q=0.9, text/plain;q=0.8, text/markdown;q=0.7, */*;q=0.1',
+}
+
 const BROWSER_HEADERS = {
-  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9',
   'User-Agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
 }
-
-export type WebFetchFormat = 'markdown' | 'html'
 
 export interface WebFetchResult {
   content: string
@@ -44,6 +49,10 @@ export class WebFetch extends Context.Service<WebFetch, WebFetchService>()(
           HttpClientRequest.setHeaders(request, BROWSER_HEADERS),
         ),
         HttpClient.filterStatusOk,
+        HttpClient.retryTransient({
+          times: 3,
+          schedule: Schedule.jittered(Schedule.exponential('1 second')),
+        }),
       )
 
       const fetch = Effect.fn(
@@ -52,7 +61,11 @@ export class WebFetch extends Context.Service<WebFetch, WebFetchService>()(
           format: WebFetchFormat
           timeout: Duration.Input
         }) {
-          const response = yield* http.get(options.url)
+          const response = yield* http.get(options.url, {
+            headers: {
+              Accept: ACCEPT_HEADERS[options.format],
+            },
+          })
           const contentType = Option.fromNullishOr(response.headers['content-type'])
           const raw = yield* response.text
 
