@@ -7,7 +7,7 @@ import {
   getTextOutput,
   renderExpandableText,
 } from '@pi-plugins/shared'
-import { Duration, Effect } from 'effect'
+import { Duration, Effect, Number } from 'effect'
 import { Type, type Static } from 'typebox'
 import { WebFetch, type WebFetchFormat } from './fetch'
 
@@ -52,9 +52,9 @@ export default function webFetch(pi: ExtensionAPI) {
     parameters: webFetchSchema,
     async execute(_toolCallId, params, signal) {
       const format: WebFetchFormat = params.format ?? 'markdown'
-      const timeoutSeconds = Math.min(
-        Math.max(params.timeout ?? DEFAULT_TIMEOUT_SECONDS, 1),
-        MAX_TIMEOUT_SECONDS,
+      const timeoutSeconds = Number.clamp(
+        params.timeout ?? DEFAULT_TIMEOUT_SECONDS,
+        { minimum: 1, maximum: MAX_TIMEOUT_SECONDS },
       )
 
       const program = Effect.gen(function* () {
