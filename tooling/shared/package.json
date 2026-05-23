@@ -1,48 +1,27 @@
 {
   "name": "@pi-plugins/shared",
-  "version": "0.1.0",
+  "version": "0.0.0",
+  "private": true,
   "description": "Shared utilities for pi-plugins extensions.",
-  "homepage": "https://github.com/k3dom/pi-plugins/tree/main/tooling/shared#readme",
-  "bugs": {
-    "url": "https://github.com/k3dom/pi-plugins/issues"
-  },
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/k3dom/pi-plugins.git",
-    "directory": "tooling/shared"
-  },
-  "files": [
-    "dist",
-    "src",
-    "README.md"
-  ],
   "type": "module",
-  "types": "./dist/index.d.mts",
   "exports": {
-    ".": "./dist/index.mjs",
+    ".": "./src/index.ts",
     "./package.json": "./package.json"
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
-    "prepack": "pnpm run build",
-    "build": "tsdown",
     "check-types": "tsc -b",
     "lint": "oxlint",
     "format": "oxfmt",
     "format:check": "oxfmt --check"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.75.4",
+    "@earendil-works/pi-coding-agent": "0.75.4",
     "@pi-plugins/fmt": "workspace:*",
     "@pi-plugins/lint": "workspace:*",
     "@pi-plugins/tsconfig": "workspace:*",
-    "oxfmt": "^0.51.0",
-    "oxlint": "^1.66.0",
-    "tsdown": "^0.22.0",
-    "typescript": "^6.0.3"
+    "oxfmt": "0.51.0",
+    "oxlint": "1.66.0",
+    "typescript": "6.0.3"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
