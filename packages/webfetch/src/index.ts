@@ -1,6 +1,12 @@
 import { StringEnum } from '@earendil-works/pi-ai'
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
+import type { ExtensionAPI, TruncationResult } from '@earendil-works/pi-coding-agent'
 import { truncateHead } from '@earendil-works/pi-coding-agent'
+import { Text } from '@earendil-works/pi-tui'
+import {
+  formatTruncationNotice,
+  getTextOutput,
+  renderExpandableText,
+} from '@pi-plugins/shared'
 import { Duration, Effect } from 'effect'
 import { Type, type Static } from 'typebox'
 import { WebFetch, type WebFetchFormat } from './fetch'
@@ -30,8 +36,14 @@ const webFetchSchema = Type.Object({
 
 export type WebFetchInput = Static<typeof webFetchSchema>
 
+interface WebFetchDetails {
+  url: string
+  format: WebFetchFormat
+  truncation: TruncationResult
+}
+
 export default function webFetch(pi: ExtensionAPI) {
-  pi.registerTool({
+  pi.registerTool<typeof webFetchSchema, WebFetchDetails>({
     name: 'web_fetch',
     label: 'WebFetch',
     description:
@@ -62,14 +74,39 @@ export default function webFetch(pi: ExtensionAPI) {
           {
             type: 'text' as const,
             text: body.truncated
-              ? `${body.content}\n\n[Truncated to ${body.outputLines} of ${body.totalLines} lines]`
+              ? `${body.content}\n\n${formatTruncationNotice(body)}`
               : body.content,
           },
         ],
         details: {
-          truncated: body.truncated,
+          url: params.url,
+          format,
+          truncation: body,
         },
       }
+    },
+    renderResult(result, { expanded }, theme, context) {
+      const text = (context.lastComponent as Text | undefined) ?? new Text('', 0, 0)
+      const details = result.details
+      const format = context.args.format ?? details?.format ?? 'markdown'
+      const url = context.args.url ?? details?.url ?? 'unknown URL'
+      const truncation = details?.truncation
+      const output = truncation?.content ?? getTextOutput(result)
+      const header = `${theme.fg('success', '✓')} ${theme.fg('accent', url)} ${theme.fg(
+        'muted',
+        `(${format})`,
+      )}`
+
+      text.setText(
+        renderExpandableText({
+          header,
+          content: output,
+          expanded,
+          theme,
+          truncation,
+        }),
+      )
+      return text
     },
   })
 }
