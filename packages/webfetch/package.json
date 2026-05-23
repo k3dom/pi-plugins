@@ -27,6 +27,7 @@
     "format:check": "oxfmt --check"
   },
   "dependencies": {
+    "@pi-plugins/shared": "workspace:*",
     "defuddle": "^0.18.1",
     "effect": "4.0.0-beta.70",
     "linkedom": "^0.18.12",
@@ -35,6 +36,7 @@
   "devDependencies": {
     "@earendil-works/pi-ai": "0.75.5",
     "@earendil-works/pi-coding-agent": "0.75.3",
+    "@earendil-works/pi-tui": "0.75.5",
     "@pi-plugins/fmt": "workspace:*",
     "@pi-plugins/lint": "workspace:*",
     "@pi-plugins/tsconfig": "workspace:*",
@@ -48,6 +50,7 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
   "pi": {
