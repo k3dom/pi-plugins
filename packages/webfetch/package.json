@@ -23,12 +23,14 @@
     "build": "tsdown",
     "check-types": "tsc -b",
     "lint": "oxlint",
-    "test": "node -e \"console.log('no tests yet')\"",
     "format": "oxfmt",
     "format:check": "oxfmt --check"
   },
   "dependencies": {
-    "effect": "4.0.0-beta.70"
+    "defuddle": "^0.18.1",
+    "effect": "4.0.0-beta.70",
+    "linkedom": "^0.18.12",
+    "turndown": "^7.2.0"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.75.3",
@@ -48,7 +50,7 @@
   },
   "pi": {
     "extensions": [
-      "./dist/index.js"
+      "./dist/index.mjs"
     ]
   }
 }

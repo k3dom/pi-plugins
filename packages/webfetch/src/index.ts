@@ -1,13 +1,28 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { truncateHead } from '@earendil-works/pi-coding-agent'
-import { Effect } from 'effect'
-import { FetchHttpClient, HttpClient } from 'effect/unstable/http'
+import { Duration, Effect } from 'effect'
 import { Type, type Static } from 'typebox'
+import { WebFetch, type WebFetchFormat } from './fetch'
+
+const DEFAULT_TIMEOUT_SECONDS = 30
+const MAX_TIMEOUT_SECONDS = 120
 
 const webFetchSchema = Type.Object({
   url: Type.String({
     description: 'HTTP or HTTPS URL to fetch.',
   }),
+  format: Type.Optional(
+    Type.Union([Type.Literal('markdown'), Type.Literal('html')], {
+      description:
+        "Return format: 'markdown' (default) extracts the main content and converts it to Markdown; 'html' returns the raw response body.",
+      default: 'markdown',
+    }),
+  ),
+  timeout: Type.Optional(
+    Type.Number({
+      description: `Optional timeout in seconds (max ${MAX_TIMEOUT_SECONDS}).`,
+    }),
+  ),
 })
 
 export type WebFetchInput = Static<typeof webFetchSchema>
@@ -17,68 +32,48 @@ export default function webFetch(pi: ExtensionAPI) {
     name: 'web_fetch',
     label: 'WebFetch',
     description:
-      "Fetch an HTTP(S) page with a GET request using Effect's HTTP client.",
-    promptSnippet: 'Fetch HTTP(S) pages and return response text.',
+      'Fetch an HTTP(S) page and return its main content as Markdown (default) or the raw HTML.',
+    promptSnippet: 'Fetch HTTP(S) pages as Markdown or raw HTML.',
     parameters: webFetchSchema,
     async execute(_toolCallId, params, signal) {
-      const url = normalizeHttpUrl(params.url)
-      const response = await fetchWithEffect(url, signal)
-      const body = truncateHead(response.body)
+      const format: WebFetchFormat = params.format ?? 'markdown'
+      const timeoutSeconds = Math.min(
+        params.timeout ?? DEFAULT_TIMEOUT_SECONDS,
+        MAX_TIMEOUT_SECONDS,
+      )
+
+      const program = Effect.gen(function* () {
+        const webfetch = yield* WebFetch
+        return yield* webfetch.fetch({
+          url: params.url,
+          format,
+          timeout: Duration.seconds(timeoutSeconds),
+        })
+      }).pipe(Effect.provide(WebFetch.layer))
+
+      const result = await Effect.runPromise(program, { signal })
+      const body = truncateHead(result.content, { maxLines: 5 })
 
       return {
         content: [
           {
             type: 'text' as const,
             text: [
-              `Fetched ${url}`,
-              `Status: ${response.status}`,
+              `Fetched ${params.url}`,
+              `Status: ${result.status}`,
               '',
               body.content,
             ].join('\n'),
           },
         ],
         details: {
-          url,
-          status: response.status,
+          url: params.url,
+          status: result.status,
+          format,
+          contentType: result.contentType,
           truncated: body.truncated,
         },
       }
     },
   })
-}
-
-async function fetchWithEffect(
-  url: string,
-  signal: AbortSignal | undefined,
-): Promise<{ readonly status: number; readonly body: string }> {
-  const program = HttpClient.get(url).pipe(
-    Effect.flatMap((response) =>
-      response.text.pipe(
-        Effect.map((body) => ({
-          status: response.status,
-          body,
-        })),
-      ),
-    ),
-    Effect.provide(FetchHttpClient.layer),
-  )
-
-  return Effect.runPromise(program, { signal })
-}
-
-function normalizeHttpUrl(value: string): string {
-  let url: URL
-  try {
-    url = new URL(value)
-  } catch (_error) {
-    throw new Error(`Invalid URL: ${value}`)
-  }
-
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error(
-      `web_fetch only supports http: and https: URLs, received ${url.protocol}`,
-    )
-  }
-
-  return url.toString()
 }

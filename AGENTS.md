@@ -5,7 +5,7 @@ Packages live under `packages/`.
 
 ## Validation
 
-Use the `ci` command to validate code changes (format, lint, type-check, build, test).
+Use the `ci` command to validate code changes (format, lint, type-check, build).
 
 ## Vendored Repositories
 

@@ -17,9 +17,6 @@
     "check-types": {
       "dependsOn": ["^check-types"]
     },
-    "test": {
-      "outputs": ["coverage/**"]
-    },
     "format": {
       "cache": false
     },
