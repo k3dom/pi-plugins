@@ -85,8 +85,6 @@ manual `pi install` step needed.
 }
 ```
 
-After a `home-manager switch`, the enabled plugins are available to pi-agent.
-
 ## License
 
 [MIT](LICENSE)
