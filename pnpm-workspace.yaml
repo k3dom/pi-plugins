@@ -1,3 +1,8 @@
 packages:
   - plugins/*
   - tooling/*
+allowBuilds:
+  '@google/genai': false
+  koffi: false
+  msgpackr-extract: false
+  protobufjs: false

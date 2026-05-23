@@ -28,24 +28,24 @@
   },
   "dependencies": {
     "@pi-plugins/shared": "workspace:*",
-    "defuddle": "^0.18.1",
+    "defuddle": "0.18.1",
     "effect": "4.0.0-beta.70",
-    "linkedom": "^0.18.12",
-    "turndown": "^7.2.0"
+    "linkedom": "0.18.12",
+    "turndown": "7.2.4"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.75.5",
-    "@earendil-works/pi-coding-agent": "0.75.3",
-    "@earendil-works/pi-tui": "0.75.5",
+    "@earendil-works/pi-ai": "^0.75.4",
+    "@earendil-works/pi-coding-agent": "^0.75.4",
+    "@earendil-works/pi-tui": "^0.75.4",
     "@pi-plugins/fmt": "workspace:*",
     "@pi-plugins/lint": "workspace:*",
     "@pi-plugins/tsconfig": "workspace:*",
     "@types/node": "^25.9.1",
-    "oxfmt": "^0.51.0",
-    "oxlint": "^1.66.0",
-    "tsdown": "^0.22.0",
+    "oxfmt": "0.51.0",
+    "oxlint": "1.66.0",
+    "tsdown": "0.22.0",
     "typebox": "^1.1.38",
-    "typescript": "^6.0.3"
+    "typescript": "6.0.3"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

@@ -21,7 +21,7 @@
     "format:check": "oxfmt --check"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.75.3",
+    "@earendil-works/pi-coding-agent": "^0.75.4",
     "@pi-plugins/fmt": "workspace:*",
     "@pi-plugins/lint": "workspace:*",
     "@pi-plugins/tsconfig": "workspace:*",
