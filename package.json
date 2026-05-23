@@ -8,9 +8,11 @@
   "type": "module",
   "scripts": {
     "format": "oxfmt --disable-nested-config",
-    "format:check": "oxfmt --disable-nested-config --check"
+    "format:check": "oxfmt --disable-nested-config --check",
+    "release": "changeset publish"
   },
   "devDependencies": {
+    "@changesets/cli": "2.31.0",
     "@pi-plugins/fmt": "workspace:*",
     "oxfmt": "0.51.0",
     "turbo": "2.9.14"
