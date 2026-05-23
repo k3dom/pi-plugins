@@ -54,26 +54,19 @@ export default function webFetch(pi: ExtensionAPI) {
         })
       }).pipe(Effect.provide(WebFetch.layer))
 
-      const result = await Effect.runPromise(program, { signal })
-      const body = truncateHead(result.content)
+      const content = await Effect.runPromise(program, { signal })
+      const body = truncateHead(content)
 
       return {
         content: [
           {
             type: 'text' as const,
-            text: [
-              `Fetched ${params.url}`,
-              `Status: ${result.status}`,
-              '',
-              body.content,
-            ].join('\n'),
+            text: body.truncated
+              ? `${body.content}\n\n[Truncated to ${body.outputLines} of ${body.totalLines} lines]`
+              : body.content,
           },
         ],
         details: {
-          url: params.url,
-          status: result.status,
-          format,
-          contentType: result.contentType,
           truncated: body.truncated,
         },
       }

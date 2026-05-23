@@ -34,19 +34,13 @@ function shouldConvertToMarkdown(
   return /^(?:<!doctype html|<html|<\?xml[\s\S]*<html)/i.test(prefix)
 }
 
-export interface WebFetchResult {
-  content: string
-  contentType: string | undefined
-  status: number
-}
-
 interface WebFetchService {
   fetch: (options: {
     url: string
     format: WebFetchFormat
     timeout: Duration.Input
   }) => Effect.Effect<
-    WebFetchResult,
+    string,
     HtmlConverterError | HttpClientError.HttpClientError | TimeoutError
   >
 }
@@ -81,19 +75,14 @@ export class WebFetch extends Context.Service<WebFetch, WebFetchService>()(
           const contentType = response.headers['content-type']
           const raw = yield* response.text
 
-          let content = raw
           if (
             options.format === 'markdown' &&
             shouldConvertToMarkdown(contentType, raw)
           ) {
-            content = yield* converter.toMarkdown(raw, options.url)
+            return yield* converter.toMarkdown(raw, options.url)
           }
 
-          return {
-            content,
-            contentType,
-            status: response.status,
-          }
+          return raw
         },
         (_, options) =>
           _.pipe(
