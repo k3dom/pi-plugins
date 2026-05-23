@@ -1,0 +1,52 @@
+{
+  "name": "@pi-plugins/webfetch",
+  "version": "0.0.0",
+  "private": true,
+  "description": "WebFetch tool extension for pi-agent.",
+  "keywords": [
+    "pi",
+    "pi-agent",
+    "pi-extension",
+    "pi-package",
+    "webfetch"
+  ],
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "check-types": "tsc --noEmit",
+    "lint": "oxlint",
+    "test": "node -e \"console.log('no tests yet')\"",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
+  },
+  "dependencies": {
+    "effect": "4.0.0-beta.70"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.75.3",
+    "@pi-plugins/fmt": "workspace:*",
+    "@pi-plugins/lint": "workspace:*",
+    "@pi-plugins/tsconfig": "workspace:*",
+    "@types/node": "^25.9.1",
+    "oxfmt": "^0.51.0",
+    "oxlint": "^1.66.0",
+    "typebox": "^1.1.38",
+    "typescript": "^6.0.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}
