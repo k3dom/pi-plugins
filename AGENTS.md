@@ -14,4 +14,5 @@ under `.agents/repos/`. Use vendored repositories as read-only reference
 material when working with related libraries to explore API's, find usage
 examples, and understand implementation details.
 
+- Effect-TS v4 (`.agents/repos/effect-smol/packages/`)
 - pi-agent (`.agents/repos/pi/`)

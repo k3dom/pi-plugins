@@ -3,3 +3,8 @@
 	url = https://github.com/earendil-works/pi
 	update = none
 	fetchRecurseSubmodules = false
+[submodule ".agents/repos/effect-smol"]
+	path = .agents/repos/effect-smol
+	url = https://github.com/Effect-TS/effect-smol
+	update = none
+	fetchRecurseSubmodules = false
