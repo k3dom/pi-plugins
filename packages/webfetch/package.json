@@ -33,6 +33,7 @@
     "turndown": "^7.2.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "0.75.5",
     "@earendil-works/pi-coding-agent": "0.75.3",
     "@pi-plugins/fmt": "workspace:*",
     "@pi-plugins/lint": "workspace:*",
@@ -45,6 +46,7 @@
     "typescript": "^6.0.3"
   },
   "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
   },

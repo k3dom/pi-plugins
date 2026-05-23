@@ -1,4 +1,4 @@
-import { Context, Duration, Effect, Layer, Option, Schedule } from 'effect'
+import { Context, Duration, Effect, Layer, Schedule } from 'effect'
 import type { TimeoutError } from 'effect/Cause'
 import {
   FetchHttpClient,
@@ -22,9 +22,21 @@ const BROWSER_HEADERS = {
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
 }
 
+function shouldConvertToMarkdown(
+  contentType: string | undefined,
+  content: string,
+): boolean {
+  if (contentType !== undefined) {
+    const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase()
+    return mediaType === 'text/html' || mediaType === 'application/xhtml+xml'
+  }
+  const prefix = content.trimStart().slice(0, 1024)
+  return /^(?:<!doctype html|<html|<\?xml[\s\S]*<html)/i.test(prefix)
+}
+
 export interface WebFetchResult {
   content: string
-  contentType: Option.Option<string>
+  contentType: string | undefined
   status: number
 }
 
@@ -66,14 +78,13 @@ export class WebFetch extends Context.Service<WebFetch, WebFetchService>()(
               Accept: ACCEPT_HEADERS[options.format],
             },
           })
-          const contentType = Option.fromNullishOr(response.headers['content-type'])
+          const contentType = response.headers['content-type']
           const raw = yield* response.text
 
           let content = raw
           if (
             options.format === 'markdown' &&
-            Option.isSome(contentType) &&
-            contentType.value.includes('text/html')
+            shouldConvertToMarkdown(contentType, raw)
           ) {
             content = yield* converter.toMarkdown(raw, options.url)
           }

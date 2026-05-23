@@ -65,6 +65,9 @@ importers:
         specifier: ^7.2.0
         version: 7.2.4
     devDependencies:
+      '@earendil-works/pi-ai':
+        specifier: 0.75.5
+        version: 0.75.5(ws@8.21.0)(zod@4.4.3)
       '@earendil-works/pi-coding-agent':
         specifier: 0.75.3
         version: 0.75.3(ws@8.21.0)(zod@4.4.3)

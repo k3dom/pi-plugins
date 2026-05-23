@@ -1,3 +1,4 @@
+import { StringEnum } from '@earendil-works/pi-ai'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { truncateHead } from '@earendil-works/pi-coding-agent'
 import { Duration, Effect } from 'effect'
@@ -12,7 +13,7 @@ const webFetchSchema = Type.Object({
     description: 'The URL to fetch content from',
   }),
   format: Type.Optional(
-    Type.Union([Type.Literal('markdown'), Type.Literal('html')], {
+    StringEnum(['markdown', 'html'] as const, {
       description:
         "The format to return the content in ('markdown' or 'html'). Default is 'markdown'.",
       default: 'markdown',
@@ -21,6 +22,8 @@ const webFetchSchema = Type.Object({
   timeout: Type.Optional(
     Type.Number({
       description: `Optional timeout in seconds (max ${MAX_TIMEOUT_SECONDS}).`,
+      minimum: 1,
+      maximum: MAX_TIMEOUT_SECONDS,
     }),
   ),
 })
@@ -38,7 +41,7 @@ export default function webFetch(pi: ExtensionAPI) {
     async execute(_toolCallId, params, signal) {
       const format: WebFetchFormat = params.format ?? 'markdown'
       const timeoutSeconds = Math.min(
-        params.timeout ?? DEFAULT_TIMEOUT_SECONDS,
+        Math.max(params.timeout ?? DEFAULT_TIMEOUT_SECONDS, 1),
         MAX_TIMEOUT_SECONDS,
       )
 
@@ -52,7 +55,7 @@ export default function webFetch(pi: ExtensionAPI) {
       }).pipe(Effect.provide(WebFetch.layer))
 
       const result = await Effect.runPromise(program, { signal })
-      const body = truncateHead(result.content, { maxLines: 5 })
+      const body = truncateHead(result.content)
 
       return {
         content: [
