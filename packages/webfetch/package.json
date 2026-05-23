@@ -21,7 +21,7 @@
   },
   "scripts": {
     "build": "tsdown",
-    "check-types": "tsc --noEmit",
+    "check-types": "tsc -b",
     "lint": "oxlint",
     "test": "node -e \"console.log('no tests yet')\"",
     "format": "oxfmt",

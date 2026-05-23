@@ -11,7 +11,7 @@
     ".": "./index.ts"
   },
   "scripts": {
-    "check-types": "tsc --noEmit",
+    "check-types": "tsc -b",
     "format": "oxfmt",
     "format:check": "oxfmt --check"
   },
