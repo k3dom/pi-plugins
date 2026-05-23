@@ -2,11 +2,7 @@ import { StringEnum } from '@earendil-works/pi-ai'
 import type { ExtensionAPI, TruncationResult } from '@earendil-works/pi-coding-agent'
 import { truncateHead } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
-import {
-  formatTruncationNotice,
-  getTextOutput,
-  renderExpandableText,
-} from '@pi-plugins/shared'
+import { formatTruncationNotice, renderExpandableText } from '@pi-plugins/shared'
 import { Duration, Effect, Number } from 'effect'
 import { Type, type Static } from 'typebox'
 import { WebFetch, type WebFetchFormat } from './fetch'
@@ -85,25 +81,21 @@ export default function webFetch(pi: ExtensionAPI) {
         },
       }
     },
-    renderResult(result, { expanded }, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text('', 0, 0)
-      const details = result.details
-      const format = context.args.format ?? details?.format ?? 'markdown'
-      const url = context.args.url ?? details?.url ?? 'unknown URL'
-      const truncation = details?.truncation
-      const output = truncation?.content ?? getTextOutput(result)
-      const header = `${theme.fg('success', '✓')} ${theme.fg('accent', url)} ${theme.fg(
+    renderResult({ details }, { expanded }, theme, context) {
+      const format = context.args.format ?? 'markdown'
+      const header = `${theme.fg('success', '✓')} ${theme.fg('accent', context.args.url)} ${theme.fg(
         'muted',
         `(${format})`,
       )}`
 
+      const text = new Text('', 0, 0)
       text.setText(
         renderExpandableText({
           header,
-          content: output,
+          content: details.truncation.content,
           expanded,
           theme,
-          truncation,
+          truncation: details.truncation,
         }),
       )
       return text
