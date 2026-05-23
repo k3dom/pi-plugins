@@ -1,7 +1,7 @@
 # pi-plugins
 
 This repository is a pnpm/Turbo monorepo containing plugins/extensions for the pi-agent harness.
-Packages live under `packages/`.
+Pi-agent plugins live under `plugins/`; shared tooling and support packages live under `tooling/`.
 
 ## Validation
 

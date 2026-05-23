@@ -11,14 +11,14 @@ composable concurrency.
 
 | Package                         | Description                                                            | Tools       |
 | ------------------------------- | ---------------------------------------------------------------------- | ----------- |
-| [`webfetch`](packages/webfetch) | Fetches content over HTTP(S) and returns them as Markdown or raw HTML. | `web_fetch` |
+| [`webfetch`](plugins/webfetch) | Fetches content over HTTP(S) and returns them as Markdown or raw HTML. | `web_fetch` |
 
 ## Usage
 
 Load a plugin into pi-agent directly from its package directory:
 
 ```bash
-pi -e ./packages/webfetch
+pi -e ./plugins/webfetch
 ```
 
 Then ask pi to use the tool it registers — for example, to fetch a URL.
