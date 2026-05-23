@@ -9,12 +9,12 @@ const MAX_TIMEOUT_SECONDS = 120
 
 const webFetchSchema = Type.Object({
   url: Type.String({
-    description: 'HTTP or HTTPS URL to fetch.',
+    description: 'The URL to fetch content from',
   }),
   format: Type.Optional(
     Type.Union([Type.Literal('markdown'), Type.Literal('html')], {
       description:
-        "Return format: 'markdown' (default) extracts the main content and converts it to Markdown; 'html' returns the raw response body.",
+        "The format to return the content in ('markdown' or 'html'). Default is 'markdown'.",
       default: 'markdown',
     }),
   ),
@@ -32,7 +32,7 @@ export default function webFetch(pi: ExtensionAPI) {
     name: 'web_fetch',
     label: 'WebFetch',
     description:
-      'Fetch an HTTP(S) page and return its main content as Markdown (default) or the raw HTML.',
+      'Fetch an HTTP(S) page and return its content as Markdown (default) or the raw HTML.',
     promptSnippet: 'Fetch HTTP(S) pages as Markdown or raw HTML.',
     parameters: webFetchSchema,
     async execute(_toolCallId, params, signal) {

@@ -71,11 +71,11 @@ export class WebFetch extends Context.Service<WebFetch, WebFetchService>()(
             status: response.status,
           }
         },
-        (_, params) =>
+        (_, options) =>
           _.pipe(
-            Effect.timeout(params.timeout),
+            Effect.timeout(options.timeout),
             Effect.withSpan('WebFetch.fetch', {
-              attributes: { url: params.url, format: params.format },
+              attributes: { url: options.url, format: options.format },
             }),
           ),
       )
