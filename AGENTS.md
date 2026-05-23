@@ -5,12 +5,7 @@ Packages live under `packages/`.
 
 ## Validation
 
-Use the standard workspace commands to validate changes:
-
-- `pnpm build`
-- `pnpm lint`
-- `pnpm check-types`
-- `pnpm test`
+Use the `ci` command to validate code changes (format, lint, type-check, build, test).
 
 ## Vendored Repositories
 

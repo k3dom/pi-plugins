@@ -12,11 +12,31 @@
           }
       );
   in {
-    devShells = eachSupportedSystem ({pkgs}: {
+    devShells = eachSupportedSystem ({pkgs}: let
+      ci = pkgs.writeShellApplication {
+        name = "ci";
+        runtimeInputs = with pkgs; [nodejs_24];
+        text = ''
+          export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+
+          corepack pnpm install --frozen-lockfile
+          corepack pnpm format:check
+          corepack pnpm lint
+          corepack pnpm check-types
+          corepack pnpm build
+          corepack pnpm test
+        '';
+      };
+    in {
       default = pkgs.mkShell {
         packages = with pkgs; [
           # Node.js 24 still includes corepack; later versions will drop corepack.
           nodejs_24
+
+          statix
+          zizmor
+
+          ci
         ];
       };
     });
