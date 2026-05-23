@@ -1,0 +1,28 @@
+{
+  "name": "@pi-plugins/lint",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared oxlint linter configuration for pi-plugins.",
+  "files": [
+    "index.ts"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
+  },
+  "devDependencies": {
+    "@pi-plugins/fmt": "workspace:*",
+    "@pi-plugins/tsconfig": "workspace:*",
+    "oxfmt": "^0.51.0",
+    "oxlint": "^1.66.0",
+    "typescript": "^6.0.3"
+  },
+  "peerDependencies": {
+    "oxlint": "*"
+  }
+}
