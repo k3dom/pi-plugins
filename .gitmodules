@@ -1,0 +1,5 @@
+[submodule ".agents/repos/pi"]
+	path = .agents/repos/pi
+	url = https://github.com/earendil-works/pi
+	update = none
+	fetchRecurseSubmodules = false
