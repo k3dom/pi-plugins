@@ -23,7 +23,7 @@ export class HtmlConverter extends Context.Service<
   // oxlint-disable-next-line require-yield
   make: Effect.gen(function* () {
     const toMarkdown = Effect.fn(
-      function* (html, url) {
+      function* (html: string, url: string) {
         const response = yield* Effect.tryPromise({
           try: () => Defuddle(html, url, { markdown: true }),
           catch: (cause) =>
@@ -34,9 +34,9 @@ export class HtmlConverter extends Context.Service<
         })
         return response.content
       },
-      Effect.withSpan('HtmlConverter.toMarkdown', (request) => ({
+      Effect.withSpan('HtmlConverter.toMarkdown', (_, url) => ({
         attributes: {
-          url: request.url,
+          url: url,
         },
       })),
     )
