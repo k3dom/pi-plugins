@@ -11,7 +11,7 @@ composable concurrency.
 
 | Package                                     | Description                                                     | Tools       |
 | ------------------------------------------- | --------------------------------------------------------------- | ----------- |
-| [`@pi-plugins/webfetch`](packages/webfetch) | Fetches HTTP(S) pages and returns them as Markdown or raw HTML. | `web_fetch` |
+| [`webfetch`](packages/webfetch) | Fetches HTTP(S) pages and returns them as Markdown or raw HTML. | `web_fetch` |
 
 ## Usage
 
