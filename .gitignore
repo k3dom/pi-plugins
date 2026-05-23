@@ -19,3 +19,7 @@ result
 .DS_Store
 .vscode
 .idea
+
+# Additional
+.agents/context/*
+!.agents/context/.gitkeep
