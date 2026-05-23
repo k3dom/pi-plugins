@@ -20,7 +20,13 @@
     "test": {
       "outputs": ["coverage/**"]
     },
-    "format": {},
-    "format:check": {}
+    "format": {
+      "cache": false
+    },
+    "format:check": {},
+    "//#format": {
+      "cache": false
+    },
+    "//#format:check": {}
   }
 }

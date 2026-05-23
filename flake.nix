@@ -15,16 +15,12 @@
     devShells = eachSupportedSystem ({pkgs}: let
       ci = pkgs.writeShellApplication {
         name = "ci";
-        runtimeInputs = with pkgs; [nodejs_24 corepack];
+        runtimeInputs = with pkgs; [nodejs_24 corepack turbo];
         text = ''
           export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
           pnpm install --frozen-lockfile
-          pnpm format:check
-          pnpm lint
-          pnpm check-types
-          pnpm build
-          pnpm test
+          turbo run format:check lint check-types build test
         '';
       };
     in {
@@ -32,6 +28,7 @@
         packages = with pkgs; [
           nodejs_24
           corepack
+          turbo
 
           statix
           zizmor
