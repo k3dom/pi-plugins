@@ -15,16 +15,16 @@
     devShells = eachSupportedSystem ({pkgs}: let
       ci = pkgs.writeShellApplication {
         name = "ci";
-        runtimeInputs = with pkgs; [nodejs_24];
+        runtimeInputs = with pkgs; [nodejs_24 corepack];
         text = ''
           export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
-          corepack pnpm install --frozen-lockfile
-          corepack pnpm format:check
-          corepack pnpm lint
-          corepack pnpm check-types
-          corepack pnpm build
-          corepack pnpm test
+          pnpm install --frozen-lockfile
+          pnpm format:check
+          pnpm lint
+          pnpm check-types
+          pnpm build
+          pnpm test
         '';
       };
     in {
@@ -32,6 +32,8 @@
         packages = with pkgs; [
           # Node.js 24 still includes corepack; later versions will drop corepack.
           nodejs_24
+          # Provides package-manager shims such as pnpm without mutating the Nix store.
+          corepack
 
           statix
           zizmor
