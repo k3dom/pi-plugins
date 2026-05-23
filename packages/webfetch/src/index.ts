@@ -33,8 +33,6 @@ const webFetchSchema = Type.Object({
 export type WebFetchInput = Static<typeof webFetchSchema>
 
 interface WebFetchDetails {
-  url: string
-  format: WebFetchFormat
   truncation: TruncationResult
 }
 
@@ -63,21 +61,19 @@ export default function webFetch(pi: ExtensionAPI) {
       }).pipe(Effect.provide(WebFetch.layer))
 
       const content = await Effect.runPromise(program, { signal })
-      const body = truncateHead(content)
+      const truncation = truncateHead(content)
 
       return {
         content: [
           {
             type: 'text' as const,
-            text: body.truncated
-              ? `${body.content}\n\n${formatTruncationNotice(body)}`
-              : body.content,
+            text: truncation.truncated
+              ? `${truncation.content}\n\n${formatTruncationNotice(truncation)}`
+              : truncation.content,
           },
         ],
         details: {
-          url: params.url,
-          format,
-          truncation: body,
+          truncation,
         },
       }
     },
