@@ -11,6 +11,7 @@ composable concurrency.
 
 | Package                        | Description                                                            | Tools       |
 | ------------------------------ | ---------------------------------------------------------------------- | ----------- |
+| [`exit`](plugins/exit)         | Exits pi when `exit` or `quit` is submitted as the whole prompt.       | —           |
 | [`webfetch`](plugins/webfetch) | Fetches content over HTTP(S) and returns them as Markdown or raw HTML. | `web_fetch` |
 
 ## Usage
@@ -74,8 +75,8 @@ manual `pi install` step needed.
         pi-plugins.homeModules.default
         {
           programs.pi.plugins = {
-            # Enable each plugin by its name. Add more the same way, e.g.
-            # `othername.enable = true;`, to enable several at once.
+            # Enable each plugin by its name. Add more the same way to enable several at once.
+            exit.enable = true;
             webfetch.enable = true;
           };
         }
