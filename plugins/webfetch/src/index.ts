@@ -16,14 +16,14 @@ const webFetchSchema = Type.Object({
   }),
   format: Type.Optional(
     StringEnum(['markdown', 'html'] as const, {
-      description:
-        "The format to return the content in ('markdown' or 'html'). Default is 'markdown'.",
+      description: "The format to return the content in ('markdown' or 'html').",
       default: 'markdown',
     }),
   ),
   timeout: Type.Optional(
     Type.Number({
-      description: `Optional timeout in seconds (max ${MAX_TIMEOUT_SECONDS}).`,
+      description: 'Timeout in seconds.',
+      default: DEFAULT_TIMEOUT_SECONDS,
       minimum: 1,
       maximum: MAX_TIMEOUT_SECONDS,
     }),
