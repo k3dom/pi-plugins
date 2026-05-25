@@ -11,8 +11,8 @@ composable concurrency.
 
 | Package                        | Description                                                            | Tools       |
 | ------------------------------ | ---------------------------------------------------------------------- | ----------- |
-| [`exit`](plugins/exit)         | Exits pi when `exit` or `quit` is submitted as the whole prompt.       | —           |
 | [`webfetch`](plugins/webfetch) | Fetches content over HTTP(S) and returns them as Markdown or raw HTML. | `web_fetch` |
+| [`exit`](plugins/exit)         | Exits pi when `exit` or `quit` is submitted as the whole prompt.       | —           |
 
 ## Usage
 
