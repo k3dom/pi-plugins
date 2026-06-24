@@ -2,3 +2,4 @@
 # Managed by scripts/add-subtree.sh and scripts/update-subtree.sh.
 # Format: <prefix>\t<url>\t<branch>
 .agents/repos/pi	https://github.com/earendil-works/pi	main
+.agents/repos/effect-smol	https://github.com/Effect-TS/effect-smol	main
