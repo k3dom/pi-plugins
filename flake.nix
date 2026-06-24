@@ -19,7 +19,9 @@
 
     # Whole monorepo, minus build artifacts and VCS noise. Used both to read
     # the pnpm lockfile and as the build source, so filtering keeps Nix from
-    # rebuilding on irrelevant churn.
+    # rebuilding on irrelevant churn. ".agents" holds vendored reference repos
+    # (git subtrees, ~48MB) that the build never reads; excluding it keeps the
+    # build source small and avoids rebuilds when those subtrees are updated.
     src = lib.cleanSourceWith {
       src = ./.;
       filter = path: type:
@@ -29,6 +31,7 @@
           ".turbo"
           ".direnv"
           ".git"
+          ".agents"
           "result"
           ".wt"
         ]);
