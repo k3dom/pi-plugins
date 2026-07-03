@@ -51,6 +51,43 @@ importers:
         specifier: 6.0.3
         version: 6.0.3
 
+  plugins/fast-mode:
+    dependencies:
+      effect:
+        specifier: 4.0.0-beta.70
+        version: 4.0.0-beta.70
+    devDependencies:
+      '@earendil-works/pi-coding-agent':
+        specifier: 0.75.4
+        version: 0.75.4(ws@8.20.1)(zod@4.4.3)
+      '@pi-plugins/fmt':
+        specifier: workspace:*
+        version: link:../../tooling/fmt
+      '@pi-plugins/lint':
+        specifier: workspace:*
+        version: link:../../tooling/lint
+      '@pi-plugins/shared':
+        specifier: workspace:*
+        version: link:../../tooling/shared
+      '@pi-plugins/tsconfig':
+        specifier: workspace:*
+        version: link:../../tooling/tsconfig
+      '@types/node':
+        specifier: 25.9.1
+        version: 25.9.1
+      oxfmt:
+        specifier: 0.51.0
+        version: 0.51.0
+      oxlint:
+        specifier: 1.66.0
+        version: 1.66.0
+      tsdown:
+        specifier: 0.22.0
+        version: 0.22.0(typescript@6.0.3)
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+
   plugins/webfetch:
     dependencies:
       defuddle:
@@ -150,6 +187,9 @@ importers:
       '@pi-plugins/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig
+      effect:
+        specifier: 4.0.0-beta.70
+        version: 4.0.0-beta.70
       oxfmt:
         specifier: 0.51.0
         version: 0.51.0

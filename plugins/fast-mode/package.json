@@ -1,0 +1,68 @@
+{
+  "name": "@pi-plugins/fast-mode",
+  "version": "0.1.0",
+  "description": "Fast service-tier extension for pi-agent.",
+  "keywords": [
+    "fast",
+    "pi",
+    "pi-agent",
+    "pi-extension",
+    "pi-package",
+    "priority",
+    "service-tier"
+  ],
+  "homepage": "https://github.com/k3dom/pi-plugins/tree/main/plugins/fast-mode#readme",
+  "bugs": {
+    "url": "https://github.com/k3dom/pi-plugins/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/k3dom/pi-plugins.git",
+    "directory": "plugins/fast-mode"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepack": "pnpm run build",
+    "build": "tsdown",
+    "check-types": "tsc -b",
+    "lint": "oxlint",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
+  },
+  "dependencies": {
+    "effect": "4.0.0-beta.70"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.75.4",
+    "@pi-plugins/fmt": "workspace:*",
+    "@pi-plugins/lint": "workspace:*",
+    "@pi-plugins/shared": "workspace:*",
+    "@pi-plugins/tsconfig": "workspace:*",
+    "@types/node": "25.9.1",
+    "oxfmt": "0.51.0",
+    "oxlint": "1.66.0",
+    "tsdown": "0.22.0",
+    "typescript": "6.0.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./dist/index.mjs"
+    ]
+  }
+}

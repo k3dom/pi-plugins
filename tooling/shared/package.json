@@ -19,11 +19,13 @@
     "@pi-plugins/fmt": "workspace:*",
     "@pi-plugins/lint": "workspace:*",
     "@pi-plugins/tsconfig": "workspace:*",
+    "effect": "4.0.0-beta.70",
     "oxfmt": "0.51.0",
     "oxlint": "1.66.0",
     "typescript": "6.0.3"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "effect": "*"
   }
 }
