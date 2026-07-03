@@ -2,8 +2,72 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added public SDK exports for CLI-equivalent model and scoped-model resolution ([#6201](https://github.com/earendil-works/pi/issues/6201)).
+- Added extension entry renderers for persisted display-only session entries that are rendered in interactive mode without being sent to the model context.
+
 ### Fixed
 
+- Fixed startup model selection to skip unauthenticated saved defaults so configured local custom models can be selected instead ([#6231](https://github.com/earendil-works/pi/issues/6231)).
+- Fixed Escape aborts to clear runs stuck in extension context hooks that ignore abort signals ([#6234](https://github.com/earendil-works/pi/issues/6234)).
+- Fixed the question extension example to run question tool calls sequentially so multiple questions in one assistant turn remain answerable ([#6189](https://github.com/earendil-works/pi/issues/6189)).
+- Fixed `/login` to report auth storage persistence failures instead of claiming credentials were saved when `auth.json` is locked ([#6223](https://github.com/earendil-works/pi/issues/6223)).
+- Fixed split-turn compaction to serialize summary requests so single-concurrency local providers do not fail with 429 errors ([#5536](https://github.com/earendil-works/pi/issues/5536)).
+- Fixed custom session entries appended during assistant streaming to render before the live assistant message, matching persisted session order.
+- Fixed oversized bash tool timeouts to fail with a clear validation error instead of being clamped to an immediate timeout ([#6181](https://github.com/earendil-works/pi/issues/6181)).
+
+### Removed
+
+- Removed default attribution headers from Vercel AI Gateway requests.
+
+## [0.80.3] - 2026-06-30
+
+### New Features
+
+- **Anthropic Claude Sonnet 5 support** - Claude Sonnet 5 is available through inherited Anthropic-compatible and Bedrock provider catalogs with adaptive thinking enabled. See [Providers](docs/providers.md) and [Model Options](docs/usage.md#model-options).
+- **Configurable output spacing** - `outputPad` controls horizontal padding for user messages, assistant messages, and thinking blocks. See [Settings](docs/settings.md#ui--display).
+- **External editor configuration** - `externalEditor` lets Ctrl+G use a configured editor before `$VISUAL`/`$EDITOR` fallbacks. See [Settings](docs/settings.md#ui--display) and [Keybindings](docs/keybindings.md).
+- **Richer RPC session tree access** - RPC clients can inspect session entries and tree snapshots with `get_entries` and `get_tree`. See [get_entries](docs/rpc.md#get_entries) and [get_tree](docs/rpc.md#get_tree).
+- **Extension session metadata updates** - Extensions can observe session name changes through `session_info_changed`. See [session_info_changed](docs/extensions.md#session_info_changed).
+- **Modern Azure Foundry endpoint support** - Azure OpenAI Responses provider setup supports current Microsoft Foundry endpoint URLs. See [Azure OpenAI](docs/providers.md#azure-openai).
+
+### Added
+
+- Added inherited Anthropic Claude Sonnet 5 model support.
+- Added `get_entries` and `get_tree` RPC commands for reading session entries and tree snapshots over RPC ([#6078](https://github.com/earendil-works/pi/pull/6078) by [@geraschenko](https://github.com/geraschenko)).
+- Added a package `./rpc-entry` export for launching Pi directly in RPC mode.
+- Added session-name change events for extensions ([#6175](https://github.com/earendil-works/pi/pull/6175) by [@xl0](https://github.com/xl0)).
+- Added inherited Azure OpenAI Responses support for modern Microsoft Foundry endpoint URLs ([#6004](https://github.com/earendil-works/pi/pull/6004) by [@gukoff](https://github.com/gukoff)).
+- Added inherited `Usage.reasoning` token counts for providers that report reasoning/thinking token usage ([#6057](https://github.com/earendil-works/pi/issues/6057)).
+- Added an `externalEditor` settings.json override for Ctrl+G external editor commands, with default fallbacks to Notepad on Windows and `nano` elsewhere ([#6122](https://github.com/earendil-works/pi/issues/6122)).
+- Added an `outputPad` setting for user message, assistant message, and thinking horizontal padding ([#6168](https://github.com/earendil-works/pi/issues/6168)).
+
+### Changed
+
+- Changed the default OpenAI model to `gpt-5.5`.
+- Changed inherited OpenAI Codex Responses SSE response-header waits to use the configured HTTP timeout instead of the previous fixed 20 second timeout, reducing false timeouts on slow connections ([#4945](https://github.com/earendil-works/pi/issues/4945)).
+
+### Fixed
+
+- Fixed inherited Claude Sonnet 5 metadata to use adaptive thinking payloads for Anthropic-compatible and Bedrock requests.
+- Fixed inherited generated Xiaomi MiMo model pricing to match current pay-as-you-go pricing from models.dev ([#6138](https://github.com/earendil-works/pi/issues/6138)).
+- Fixed inherited provider HTTP errors to include response bodies instead of opaque SDK messages ([#5832](https://github.com/earendil-works/pi/pull/5832) by [@stephanmck](https://github.com/stephanmck)).
+- Fixed inherited `streamSimple()` max-token caps so providers that count input and output against one context window do not reject long requests ([#5595](https://github.com/earendil-works/pi/issues/5595)).
+- Fixed inherited OpenAI Responses streams to preserve reasoning replay state when output items finish out of order ([#6009](https://github.com/earendil-works/pi/issues/6009)).
+- Fixed inherited Z.AI preserved thinking requests to send `thinking.clear_thinking: false` when thinking is enabled, allowing replayed `reasoning_content` to participate in provider caching ([#6083](https://github.com/earendil-works/pi/issues/6083)).
+- Fixed pre-prompt compaction to stop after compaction instead of continuing immediately ([#6074](https://github.com/earendil-works/pi/pull/6074) by [@yzhg1983](https://github.com/yzhg1983)).
+- Fixed resource notifications to stay before messages when resuming sessions ([#6048](https://github.com/earendil-works/pi/pull/6048) by [@haoqixu](https://github.com/haoqixu)).
+- Fixed startup benchmark timing output to print after TUI shutdown, preserve extension timings, and drain terminal-query replies before stopping benchmark mode ([#6030](https://github.com/earendil-works/pi/pull/6030) by [@xl0](https://github.com/xl0), [#6063](https://github.com/earendil-works/pi/pull/6063) by [@xl0](https://github.com/xl0)).
+- Fixed extension tool changes to apply before the next provider request in the same agent run without dropping `before_agent_start` system-prompt overrides ([#6162](https://github.com/earendil-works/pi/issues/6162)).
+- Fixed a crash when undici emits an internal client error while terminating a mid-stream HTTP response ([#6133](https://github.com/earendil-works/pi/issues/6133)).
+- Fixed the compaction event regression test to cover status indicator cleanup and keep CI passing.
+- Fixed interactive status indicators so ending work, retry, compaction, or branch-summary indicators no longer shrink the TUI when clear-on-shrink is enabled ([#6026](https://github.com/earendil-works/pi/pull/6026)).
+- Fixed `--session` and `SessionManager.open()` to reject non-empty invalid session files without overwriting them ([#6002](https://github.com/earendil-works/pi/issues/6002)).
+- Fixed user-message transcript rendering to keep visible backslashes in Markdown escape sequences such as `\"` ([#6105](https://github.com/earendil-works/pi/issues/6105)).
+- Fixed assistant messages stopped by output length to show a visible incomplete-response error ([#4290](https://github.com/earendil-works/pi/issues/4290)).
+- Fixed `--no-session --session-id` so ephemeral CLI runs can use deterministic session IDs for provider cache affinity ([#6070](https://github.com/earendil-works/pi/issues/6070)).
+- Fixed disk BMP image files to be detected, converted to PNG, and attached through `read` and CLI `@file` inputs ([#6047](https://github.com/earendil-works/pi/issues/6047)).
 - Fixed auto-retry for provider stream errors that explicitly tell callers to retry the request ([#6019](https://github.com/earendil-works/pi/issues/6019)).
 
 ## [0.80.2] - 2026-06-23
