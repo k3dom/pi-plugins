@@ -1,5 +1,60 @@
 # effect
 
+## 4.0.0-beta.93
+
+### Patch Changes
+
+- [#2512](https://github.com/Effect-TS/effect-smol/pull/2512) [`00652fe`](https://github.com/Effect-TS/effect-smol/commit/00652fe95c18f87208e91343eb8bf218faa2f677) Thanks @gcanti! - Preserve content schema identifiers when emitting JSON Schema for `Schema.fromJsonString`.
+
+  This keeps user-defined identifiers attached to the decoded JSON payload while giving the generated JSON string wrapper its own derived name, avoiding client codegen outputs where the payload type is renamed behind the transport wrapper.
+
+- [#2492](https://github.com/Effect-TS/effect-smol/pull/2492) [`6c58167`](https://github.com/Effect-TS/effect-smol/commit/6c5816746eaf91d2a3c7c899c5720809fa230ae3) Thanks @maxprilutskiy! - Map HttpApi json defects to SchemaError
+
+- [#2519](https://github.com/Effect-TS/effect-smol/pull/2519) [`2bc5415`](https://github.com/Effect-TS/effect-smol/commit/2bc541501a7ef89e542d7cb98e96beb53cd205cc) Thanks @tim-smart! - Fix structural equality for request-style values when structural hashes collide.
+
+- [#2507](https://github.com/Effect-TS/effect-smol/pull/2507) [`e11cccc`](https://github.com/Effect-TS/effect-smol/commit/e11cccc7d5fe631abccc7d6e3bd296938de0fa2e) Thanks @tim-smart! - ensure handler errors don't cause httpapi security middleware to fallback
+
+- [#2518](https://github.com/Effect-TS/effect-smol/pull/2518) [`ba7e77e`](https://github.com/Effect-TS/effect-smol/commit/ba7e77e046b8641a3a4e9750bb88ca4a1d063d3f) Thanks @tim-smart! - Move `UrlParams.makeUrl` to `Url.make` and return `Url.UrlError` for URL construction failures.
+
+- [#2505](https://github.com/Effect-TS/effect-smol/pull/2505) [`5713ee7`](https://github.com/Effect-TS/effect-smol/commit/5713ee7edbc3054efde407b2286bbfd45bbc6e1c) Thanks @KhraksMamtsov! - accept UrlParams.Input in some UrlParams apis
+
+## 4.0.0-beta.92
+
+### Patch Changes
+
+- [#2501](https://github.com/Effect-TS/effect-smol/pull/2501) [`affdc13`](https://github.com/Effect-TS/effect-smol/commit/affdc139045cc325dce321a84a580fdc1b2da7b9) Thanks @gcanti! - Fix excess property handling in schema-backed class constructors, closes [#2499](https://github.com/Effect-TS/effect-smol/issues/2499).
+
+## 4.0.0-beta.91
+
+### Patch Changes
+
+- [#2498](https://github.com/Effect-TS/effect-smol/pull/2498) [`b135b25`](https://github.com/Effect-TS/effect-smol/commit/b135b2517fca9e7839734ace3699a7dfa75b9075) Thanks @gcanti! - Fix `Schedule.andThenResult` to emit `self` outputs as `Failure` and `other` outputs as `Success`, closes [#2497](https://github.com/Effect-TS/effect-smol/issues/2497).
+
+- [#2488](https://github.com/Effect-TS/effect-smol/pull/2488) [`aaa21a3`](https://github.com/Effect-TS/effect-smol/commit/aaa21a369a171c600db294f2a4f640583043e150) Thanks @fubhy! - Fix `String.camelCase` and `String.pascalCase` handling of numeric word segments, and add `String.configCase` for configuration key casing.
+
+- [#2485](https://github.com/Effect-TS/effect-smol/pull/2485) [`3475ee6`](https://github.com/Effect-TS/effect-smol/commit/3475ee6c2bda6b05c6d7a12ce30c8bb840b5b1a6) Thanks @tim-smart! - fix RequestResolver interruption
+
+## 4.0.0-beta.90
+
+### Patch Changes
+
+- [#2483](https://github.com/Effect-TS/effect-smol/pull/2483) [`d237fdf`](https://github.com/Effect-TS/effect-smol/commit/d237fdf726481f76eb52a6196e111b24122bc3d5) Thanks @tim-smart! - Fix `Config.schema` so missing array values are treated as missing data, allowing `Config.withDefault` to apply.
+
+## 4.0.0-beta.89
+
+### Patch Changes
+
+- [#2475](https://github.com/Effect-TS/effect-smol/pull/2475) [`b7d46ab`](https://github.com/Effect-TS/effect-smol/commit/b7d46ab7e1a29d8711817bab583c9febf48a0dad) Thanks @tim-smart! - Update `Schema.Void` to model ignored `void` return values.
+
+  Runtime parsing now accepts any present value and discards it as `undefined`.
+  This matches TypeScript `void` return values, where callers do not observe the
+  returned value. Use `Schema.Undefined` when the input must be exactly
+  `undefined`.
+
+- [#2479](https://github.com/Effect-TS/effect-smol/pull/2479) [`7777e15`](https://github.com/Effect-TS/effect-smol/commit/7777e1540fd3680dd8346723cffec812b9384669) Thanks @tim-smart! - Add custom error callbacks to Effect.fromOption.
+
+- [#2480](https://github.com/Effect-TS/effect-smol/pull/2480) [`5376197`](https://github.com/Effect-TS/effect-smol/commit/5376197ca8e50358a41b1fd3cec27bd1ec680ec6) Thanks @tim-smart! - render causes in OtlpTracer exception events
+
 ## 4.0.0-beta.88
 
 ### Patch Changes
