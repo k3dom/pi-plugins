@@ -322,6 +322,9 @@ user sends another prompt ◄─────────────────
   ├─► session_start { reason: "fork", previousSessionFile }
   └─► resources_discover { reason: "startup" }
 
+/name or pi.setSessionName()
+  └─► session_info_changed
+
 /compact or auto-compaction
   ├─► session_before_compact (can cancel or customize)
   └─► session_compact
@@ -392,6 +395,17 @@ pi.on("session_start", async (event, ctx) => {
   // event.reason - "startup" | "reload" | "new" | "resume" | "fork"
   // event.previousSessionFile - present for "new", "resume", and "fork"
   ctx.ui.notify(`Session: ${ctx.sessionManager.getSessionFile() ?? "ephemeral"}`, "info");
+});
+```
+
+#### session_info_changed
+
+Fired when the current session display name is set via `/name`, RPC, or `pi.setSessionName()`.
+
+```typescript
+pi.on("session_info_changed", async (event, ctx) => {
+  // event.name - current normalized name, or undefined if cleared
+  ctx.ui.notify(`Session renamed: ${event.name ?? "(none)"}`, "info");
 });
 ```
 
@@ -930,9 +944,10 @@ Read-only access to session state. See [Session Format](session-format.md) for t
 For `tool_call`, this state is synchronized through the current assistant message before handlers run. In parallel tool execution mode it is still not guaranteed to include sibling tool results from the same assistant message.
 
 ```typescript
-ctx.sessionManager.getEntries()       // All entries
-ctx.sessionManager.getBranch()        // Current branch
-ctx.sessionManager.getLeafId()        // Current leaf entry ID
+ctx.sessionManager.getEntries()             // All entries
+ctx.sessionManager.getBranch()              // Current branch
+ctx.sessionManager.buildContextEntries()    // Active branch entries with compaction applied
+ctx.sessionManager.getLeafId()              // Current leaf entry ID
 ```
 
 ### ctx.modelRegistry / ctx.model
@@ -1338,7 +1353,7 @@ pi.registerTool({
 
 ### pi.sendMessage(message, options?)
 
-Inject a custom message into the session.
+Inject a custom message into the session. Custom messages participate in LLM context. For durable TUI-only content that should not be sent to the LLM, use [`pi.appendEntry()`](#piappendentrycustomtype-data) with [`pi.registerEntryRenderer()`](#piregisterentryrenderercustomtype-renderer).
 
 ```typescript
 pi.sendMessage({
@@ -1389,10 +1404,11 @@ See [send-user-message.ts](../examples/extensions/send-user-message.ts) for a co
 
 ### pi.appendEntry(customType, data?)
 
-Persist extension state (does NOT participate in LLM context).
+Persist extension data. Custom entries do NOT participate in LLM context. In interactive mode, they can also render inside the chat transcript when paired with `pi.registerEntryRenderer()`.
 
 ```typescript
 pi.appendEntry("my-state", { count: 42 });
+pi.appendEntry("status-card", { title: "Indexed files", count: 17 });
 
 // Restore on reload
 pi.on("session_start", async (_event, ctx) => {
@@ -1510,7 +1526,27 @@ mode and would not execute if sent via `prompt`.
 
 ### pi.registerMessageRenderer(customType, renderer)
 
-Register a custom TUI renderer for messages with your `customType`. See [Custom UI](#custom-ui).
+Register a custom TUI renderer for custom messages with your `customType`. Custom messages are created with `pi.sendMessage()` and participate in LLM context. See [Custom UI](#custom-ui).
+
+### pi.registerEntryRenderer(customType, renderer)
+
+Register a custom TUI renderer for custom entries with your `customType`. Custom entries are created with `pi.appendEntry()` and do not participate in LLM context.
+
+```typescript
+import { Box, Text } from "@earendil-works/pi-tui";
+
+pi.registerEntryRenderer("status-card", (entry, { expanded }, theme) => {
+  const data = entry.data as { title: string; count: number };
+  const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+  box.addChild(new Text(`${theme.bold(data.title)}: ${data.count}`));
+  if (expanded) {
+    box.addChild(new Text(theme.fg("dim", JSON.stringify(data, null, 2))));
+  }
+  return box;
+});
+
+pi.appendEntry("status-card", { title: "Indexed files", count: 17 });
+```
 
 ### pi.registerShortcut(shortcut, options)
 
@@ -2514,9 +2550,9 @@ ctx.ui.setEditorComponent((tui, theme, keybindings) =>
 
 See [tui.md](tui.md) Pattern 7 for a complete example with mode indicator.
 
-### Message Rendering
+### Message and Entry Rendering
 
-Register a custom renderer for messages with your `customType`:
+Register a custom renderer for messages with your `customType`. Use message renderers for content that should participate in LLM context:
 
 ```typescript
 import { Text } from "@earendil-works/pi-tui";
@@ -2543,6 +2579,16 @@ pi.sendMessage({
   display: true,               // Show in TUI
   details: { ... },            // Available in renderer
 });
+```
+
+For TUI-only content that should not be sent to the LLM, render custom entries instead:
+
+```typescript
+pi.registerEntryRenderer("my-card", (entry, options, theme) => {
+  return new Text(theme.fg("accent", JSON.stringify(entry.data)));
+});
+
+pi.appendEntry("my-card", { status: "done" });
 ```
 
 ### Theme Colors
@@ -2671,6 +2717,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `custom-provider-gitlab-duo/` | GitLab Duo integration | `registerProvider` with OAuth |
 | **Messages & Communication** |||
 | `message-renderer.ts` | Custom message rendering | `registerMessageRenderer`, `sendMessage` |
+| `entry-renderer.ts` | TUI-only custom entry rendering | `registerEntryRenderer`, `appendEntry` |
 | `event-bus.ts` | Inter-extension events | `pi.events` |
 | **Session Metadata** |||
 | `session-name.ts` | Name sessions for selector | `setSessionName`, `getSessionName` |

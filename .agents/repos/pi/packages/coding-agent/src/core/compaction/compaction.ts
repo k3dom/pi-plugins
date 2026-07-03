@@ -778,14 +778,13 @@ export async function compact(
 		settings,
 	} = preparation;
 
-	// Generate summaries (can be parallel if both needed) and merge into one
+	// Generate summaries and merge into one
 	let summary: string;
 
 	if (isSplitTurn && turnPrefixMessages.length > 0) {
-		// Generate both summaries in parallel
-		const [historyResult, turnPrefixResult] = await Promise.all([
+		const historyResult =
 			messagesToSummarize.length > 0
-				? generateSummary(
+				? await generateSummary(
 						messagesToSummarize,
 						model,
 						settings.reserveTokens,
@@ -798,19 +797,18 @@ export async function compact(
 						streamFn,
 						env,
 					)
-				: Promise.resolve("No prior history."),
-			generateTurnPrefixSummary(
-				turnPrefixMessages,
-				model,
-				settings.reserveTokens,
-				apiKey,
-				headers,
-				env,
-				signal,
-				thinkingLevel,
-				streamFn,
-			),
-		]);
+				: "No prior history.";
+		const turnPrefixResult = await generateTurnPrefixSummary(
+			turnPrefixMessages,
+			model,
+			settings.reserveTokens,
+			apiKey,
+			headers,
+			env,
+			signal,
+			thinkingLevel,
+			streamFn,
+		);
 		// Merge into single summary
 		summary = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`;
 	} else {
