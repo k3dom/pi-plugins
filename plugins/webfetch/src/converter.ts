@@ -5,7 +5,7 @@ export class HtmlConverterError extends Schema.TaggedErrorClass<HtmlConverterErr
   '@pi-plugins/webfetch/HtmlConverterError',
   {
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 

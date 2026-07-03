@@ -15,12 +15,12 @@
     "format:check": "oxfmt --check"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.75.4",
+    "@earendil-works/pi-coding-agent": "0.80.3",
     "@pi-plugins/fmt": "workspace:*",
     "@pi-plugins/lint": "workspace:*",
     "@pi-plugins/tsconfig": "workspace:*",
-    "oxfmt": "0.51.0",
-    "oxlint": "1.66.0",
+    "oxfmt": "0.57.0",
+    "oxlint": "1.72.0",
     "typescript": "6.0.3"
   },
   "peerDependencies": {
