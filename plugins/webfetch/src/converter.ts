@@ -20,9 +20,8 @@ export class HtmlConverter extends Context.Service<
   HtmlConverter,
   HtmlConverterService
 >()('@pi-plugins/webfetch/HtmlConverter', {
-  // oxlint-disable-next-line require-yield
-  make: Effect.gen(function* () {
-    const toMarkdown = Effect.fn(
+  make: Effect.succeed({
+    toMarkdown: Effect.fn(
       function* (html: string, url: string) {
         const response = yield* Effect.tryPromise({
           try: () => Defuddle(html, url, { markdown: true }),
@@ -39,9 +38,7 @@ export class HtmlConverter extends Context.Service<
           url: url,
         },
       })),
-    )
-
-    return { toMarkdown } as const
+    ),
   }),
 }) {
   static readonly layer = Layer.effect(this, this.make)
