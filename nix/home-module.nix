@@ -4,9 +4,9 @@
   pkgs,
   ...
 }: let
-  cfg = config.programs.pi.plugins;
+  cfg = config.programs.pi-plugins;
 in {
-  options.programs.pi.plugins = {
+  options.programs.pi-plugins = {
     exit.enable = lib.mkEnableOption "the @pi-plugins/exit pi extension";
     webfetch.enable = lib.mkEnableOption "the @pi-plugins/webfetch pi extension";
   };

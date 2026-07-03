@@ -74,7 +74,7 @@ manual `pi install` step needed.
       modules = [
         pi-plugins.homeModules.default
         {
-          programs.pi.plugins = {
+          programs.pi-plugins = {
             # Enable each plugin by its name. Add more the same way to enable several at once.
             exit.enable = true;
             webfetch.enable = true;
