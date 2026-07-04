@@ -8,12 +8,12 @@ Fast mode is a per-model opt-in: you decide which `provider/model-id` pairs it
 applies to, and a single session toggle turns it on and off. Requests for any
 other model are left untouched.
 
-v1 supports OpenAI Responses models (`openai` and `openai-codex` providers) by
-injecting `service_tier: "priority"` into the request payload. pi prices each
-request from the service tier echoed back in the response, so cost tracking
-stays accurate. The provider-specific logic is a single payload applicator
-keyed by the model's API, so support for other providers (e.g. Anthropic's
-API-only fast mode) can be added without touching the core.
+## Supported providers
+
+| Provider       | Mechanism                          |
+| -------------- | ---------------------------------- |
+| `openai`       | `service_tier: "priority"` payload |
+| `openai-codex` | `service_tier: "priority"` payload |
 
 ## Install
 
