@@ -9,10 +9,11 @@ composable concurrency.
 
 ## Packages
 
-| Package                        | Description                                                            | Tools       |
-| ------------------------------ | ---------------------------------------------------------------------- | ----------- |
-| [`webfetch`](plugins/webfetch) | Fetches content over HTTP(S) and returns them as Markdown or raw HTML. | `web_fetch` |
-| [`exit`](plugins/exit)         | Exits pi when `exit` or `quit` is submitted as the whole prompt.       | —           |
+| Package                          | Description                                                                    | Tools / commands  |
+| -------------------------------- | ------------------------------------------------------------------------------ | ----------------- |
+| [`webfetch`](plugins/webfetch)   | Fetches content over HTTP(S) and returns them as Markdown or raw HTML.         | `web_fetch`       |
+| [`fast-mode`](plugins/fast-mode) | Toggles fast, priority inference for configured models on supported providers. | `/fast`, `--fast` |
+| [`exit`](plugins/exit)           | Exits pi when `exit` or `quit` is submitted as the whole prompt.               | —                 |
 
 ## Usage
 
@@ -75,9 +76,9 @@ manual `pi install` step needed.
         pi-plugins.homeModules.default
         {
           programs.pi-plugins = {
-            # Enable each plugin by its name. Add more the same way to enable several at once.
-            exit.enable = true;
+            fast-mode.enable = true;
             webfetch.enable = true;
+            # ...enable more plugins here as needed.
           };
         }
       ];
