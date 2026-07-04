@@ -1,6 +1,17 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import { NodeServices } from '@effect/platform-node'
 import { loadExtensionConfig } from '@pi-plugins/shared'
-import { Array, Data, Effect, pipe, Predicate, Record, Schema, String } from 'effect'
+import {
+  Array,
+  Data,
+  Effect,
+  Match,
+  pipe,
+  Predicate,
+  Record,
+  Schema,
+  String,
+} from 'effect'
 
 const EXTENSION_ID = 'fast-mode'
 const COMMAND_ARGS = ['on', 'off', 'status'] as const
@@ -23,8 +34,17 @@ const FastModeConfig = Schema.Struct({
 })
 type FastModeConfig = typeof FastModeConfig.Type
 
-/** Rewrites a provider request payload to ask for fast inference. */
-type Applicator = (payload: Record<string, unknown>) => Record<string, unknown>
+type ActiveModel = NonNullable<ExtensionContext['model']>
+type FastModeApi = 'openai-responses' | 'openai-codex-responses'
+
+/**
+ * Rewrites a provider request payload to ask for fast inference, returning the
+ * replacement payload — or `undefined` to leave the request untouched.
+ */
+type Applicator = (
+  payload: Record<string, unknown>,
+  model: ActiveModel,
+) => Record<string, unknown> | undefined
 
 /** Whether fast mode can apply to the active model. */
 type Eligibility = Data.TaggedEnum<{
@@ -33,21 +53,17 @@ type Eligibility = Data.TaggedEnum<{
 }>
 const Eligibility = Data.taggedEnum<Eligibility>()
 
-/**
- * How to request fast inference for a given provider API,
- * keyed by the model's `api`.
- */
 const FAST_APPLICATORS: Record<string, Applicator> = {
   'openai-responses': applyOpenAIPriorityTier,
   'openai-codex-responses': applyOpenAIPriorityTier,
-}
+} satisfies Record<FastModeApi, Applicator>
 
 function applyOpenAIPriorityTier(
   payload: Record<string, unknown>,
-): Record<string, unknown> {
-  // If the request already has a `service_tier`, don't override it.
+): Record<string, unknown> | undefined {
+  // If the request already has a `service_tier`, leave it untouched.
   return Record.has(payload, 'service_tier')
-    ? payload
+    ? undefined
     : { ...payload, service_tier: 'priority' }
 }
 
@@ -86,23 +102,29 @@ export default function fastMode(pi: ExtensionAPI) {
     }
   }
 
-  function describe(model: ExtensionContext['model']): string {
+  function notifyState(ctx: ExtensionContext): void {
+    const model = ctx.model
     const name = model?.name ?? '(none)'
-    if (!enabled) {
-      return `Fast mode is off. Current model: ${name}.`
-    }
+    const message = !enabled
+      ? `Fast mode is off. Current model: ${name}.`
+      : Eligibility.$match(checkEligibility(model), {
+          Eligible: () => `Fast mode is on for ${name}.`,
+          Ineligible: ({ message }) => {
+            const models = config.models.join(', ') || 'none'
+            return `Fast mode is on, but inactive: ${message}. Configured models: ${models}.`
+          },
+        })
 
-    return Eligibility.$match(checkEligibility(model), {
-      Eligible: () => `Fast mode is on for ${name}.`,
-      Ineligible: ({ message }) => {
-        const models = config.models.join(', ') || 'none'
-        return `Fast mode is on, but inactive: ${message}. Configured models: ${models}.`
-      },
-    })
+    ctx.ui.notify(message, 'info')
   }
 
-  pi.on('session_start', (_event, ctx) => {
-    config = loadExtensionConfig(FastModeConfig, EXTENSION_ID)
+  pi.on('session_start', async (_event, ctx) => {
+    config = await Effect.runPromise(
+      loadExtensionConfig(FastModeConfig, EXTENSION_ID).pipe(
+        Effect.orElseSucceed(() => config),
+        Effect.provide(NodeServices.layer),
+      ),
+    )
     enabled = pi.getFlag('fast') === true || config.enabled
     updateStatus(ctx)
   })
@@ -126,8 +148,7 @@ export default function fastMode(pi: ExtensionAPI) {
       return undefined
     }
 
-    const next = eligibility.apply(event.payload)
-    return next === event.payload ? undefined : next
+    return eligibility.apply(event.payload, model)
   })
 
   pi.registerFlag('fast', {
@@ -152,26 +173,15 @@ export default function fastMode(pi: ExtensionAPI) {
       })
     },
     handler: async (args, ctx) => {
-      switch (args.trim().toLowerCase()) {
-        case '':
-          enabled = !enabled
-          break
-        case 'on':
-          enabled = true
-          break
-        case 'off':
-          enabled = false
-          break
-        case 'status':
-          ctx.ui.notify(describe(ctx.model), 'info')
-          return
-        default:
-          ctx.ui.notify('Usage: /fast [on|off|status]', 'warning')
-          return
-      }
-
-      updateStatus(ctx)
-      ctx.ui.notify(describe(ctx.model), 'info')
+      Match.value(args.trim().toLowerCase()).pipe(
+        Match.whenOr('', 'on', 'off', (cmd) => {
+          enabled = cmd === '' ? !enabled : cmd === 'on'
+          updateStatus(ctx)
+          notifyState(ctx)
+        }),
+        Match.when('status', () => notifyState(ctx)),
+        Match.orElse(() => ctx.ui.notify('Usage: /fast [on|off|status]', 'warning')),
+      )
     },
   })
 }
