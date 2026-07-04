@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
-import { NodeServices } from '@effect/platform-node'
+import * as NodeServices from '@effect/platform-node/NodeServices'
 import { loadExtensionConfig } from '@pi-plugins/shared'
 import {
   Array,
