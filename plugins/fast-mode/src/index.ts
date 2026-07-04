@@ -37,6 +37,10 @@ type FastModeConfig = typeof FastModeConfig.Type
 type ActiveModel = NonNullable<ExtensionContext['model']>
 type FastModeApi = 'openai-responses' | 'openai-codex-responses'
 
+function modelKey(model: ActiveModel): string {
+  return `${model.provider}/${model.id}`
+}
+
 /**
  * Rewrites a provider request payload to ask for fast inference, returning the
  * replacement payload — or `undefined` to leave the request untouched.
@@ -76,9 +80,10 @@ export default function fastMode(pi: ExtensionAPI) {
       return Eligibility.Ineligible({ message: 'no model is selected' })
     }
 
-    if (!config.models.includes(model.name)) {
+    const key = modelKey(model)
+    if (!config.models.includes(key)) {
       return Eligibility.Ineligible({
-        message: `${model.name} is not in the configured models`,
+        message: `${key} is not in the configured models`,
       })
     }
 
@@ -109,9 +114,9 @@ export default function fastMode(pi: ExtensionAPI) {
       ? `Fast mode is off. Current model: ${name}.`
       : Eligibility.$match(checkEligibility(model), {
           Eligible: () => `Fast mode is on for ${name}.`,
-          Ineligible: ({ message }) => {
+          Ineligible: ({ message: reason }) => {
             const models = config.models.join(', ') || 'none'
-            return `Fast mode is on, but inactive: ${message}. Configured models: ${models}.`
+            return `Fast mode is on, but inactive: ${reason}. Configured models: ${models}.`
           },
         })
 
