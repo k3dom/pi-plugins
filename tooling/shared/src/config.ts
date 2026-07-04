@@ -11,13 +11,6 @@ import { Effect, Schema } from 'effect'
  */
 export type ExtensionConfigSchema = Schema.Top & Schema.Decoder<unknown, never>
 
-/** The defaults encoded in a config schema: the result of decoding `{}`. */
-export function defaultExtensionConfig<S extends ExtensionConfigSchema>(
-  schema: S,
-): S['Type'] {
-  return Schema.decodeUnknownSync(schema)({})
-}
-
 /**
  * Loads an extension's JSON config from `<agent-dir>/extensions/<name>.json`
  * and validates it with `schema`. Returns the schema's defaults when the file
@@ -28,7 +21,7 @@ export function loadExtensionConfig<S extends ExtensionConfigSchema>(
   name: string,
 ): S['Type'] {
   const path = join(getAgentDir(), 'extensions', `${name}.json`)
-  const defaults = defaultExtensionConfig(schema)
+  const defaults = Schema.decodeUnknownSync(schema)({})
   if (!existsSync(path)) return defaults
 
   return Effect.try({
