@@ -17,6 +17,9 @@
     "check-types": {
       "dependsOn": ["^check-types"]
     },
+    "check": {
+      "dependsOn": ["^check"]
+    },
     "format": {
       "cache": false
     },

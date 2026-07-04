@@ -11,6 +11,7 @@
     ".": "./index.ts"
   },
   "scripts": {
+    "check": "pnpm run check-types && pnpm run format:check",
     "check-types": "tsc -b",
     "format": "oxfmt",
     "format:check": "oxfmt --check"

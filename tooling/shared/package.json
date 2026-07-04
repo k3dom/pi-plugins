@@ -9,6 +9,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
+    "check": "pnpm run lint && pnpm run check-types && pnpm run format:check",
     "check-types": "tsc -b",
     "lint": "oxlint",
     "format": "oxfmt",
@@ -19,11 +20,13 @@
     "@pi-plugins/fmt": "workspace:*",
     "@pi-plugins/lint": "workspace:*",
     "@pi-plugins/tsconfig": "workspace:*",
+    "effect": "4.0.0-beta.93",
     "oxfmt": "0.57.0",
     "oxlint": "1.72.0",
     "typescript": "6.0.3"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "effect": "*"
   }
 }

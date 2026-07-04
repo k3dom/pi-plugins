@@ -1,15 +1,17 @@
 {
-  "name": "@pi-plugins/webfetch",
-  "version": "0.2.0",
-  "description": "WebFetch tool extension for pi-agent.",
+  "name": "@pi-plugins/fast-mode",
+  "version": "0.1.0",
+  "description": "Fast service-tier extension for pi-agent.",
   "keywords": [
+    "fast",
     "pi",
     "pi-agent",
     "pi-extension",
     "pi-package",
-    "webfetch"
+    "priority",
+    "service-tier"
   ],
-  "homepage": "https://github.com/k3dom/pi-plugins/tree/main/plugins/webfetch#readme",
+  "homepage": "https://github.com/k3dom/pi-plugins/tree/main/plugins/fast-mode#readme",
   "bugs": {
     "url": "https://github.com/k3dom/pi-plugins/issues"
   },
@@ -17,7 +19,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/k3dom/pi-plugins.git",
-    "directory": "plugins/webfetch"
+    "directory": "plugins/fast-mode"
   },
   "files": [
     "dist",
@@ -42,15 +44,11 @@
     "format:check": "oxfmt --check"
   },
   "dependencies": {
-    "defuddle": "0.19.1",
-    "effect": "4.0.0-beta.93",
-    "linkedom": "0.18.12",
-    "turndown": "7.2.4"
+    "@effect/platform-node": "4.0.0-beta.93",
+    "effect": "4.0.0-beta.93"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.80.3",
     "@earendil-works/pi-coding-agent": "0.80.3",
-    "@earendil-works/pi-tui": "0.80.3",
     "@pi-plugins/fmt": "workspace:*",
     "@pi-plugins/lint": "workspace:*",
     "@pi-plugins/shared": "workspace:*",
@@ -59,14 +57,10 @@
     "oxfmt": "0.57.0",
     "oxlint": "1.72.0",
     "tsdown": "0.22.3",
-    "typebox": "1.1.38",
     "typescript": "6.0.3"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "pi": {
     "extensions": [

@@ -7,6 +7,7 @@
   ],
   "type": "module",
   "scripts": {
+    "check": "turbo run check",
     "format": "oxfmt --disable-nested-config",
     "format:check": "oxfmt --disable-nested-config --check",
     "release": "changeset publish"
