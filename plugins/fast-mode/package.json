@@ -44,19 +44,19 @@
     "format:check": "oxfmt --check"
   },
   "dependencies": {
-    "@effect/platform-node": "4.0.0-beta.70",
-    "effect": "4.0.0-beta.70"
+    "@effect/platform-node": "4.0.0-beta.93",
+    "effect": "4.0.0-beta.93"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.75.4",
+    "@earendil-works/pi-coding-agent": "0.80.3",
     "@pi-plugins/fmt": "workspace:*",
     "@pi-plugins/lint": "workspace:*",
     "@pi-plugins/shared": "workspace:*",
     "@pi-plugins/tsconfig": "workspace:*",
-    "@types/node": "25.9.1",
-    "oxfmt": "0.51.0",
-    "oxlint": "1.66.0",
-    "tsdown": "0.22.0",
+    "@types/node": "26.1.0",
+    "oxfmt": "0.57.0",
+    "oxlint": "1.72.0",
+    "tsdown": "0.22.3",
     "typescript": "6.0.3"
   },
   "peerDependencies": {

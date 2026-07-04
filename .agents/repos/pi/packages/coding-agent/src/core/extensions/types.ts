@@ -52,6 +52,7 @@ import type { ModelRegistry } from "../model-registry.ts";
 import type {
 	BranchSummaryEntry,
 	CompactionEntry,
+	CustomEntry,
 	ReadonlySessionManager,
 	SessionEntry,
 	SessionManager,
@@ -551,6 +552,13 @@ export interface SessionStartEvent {
 	previousSessionFile?: string;
 }
 
+/** Fired when the current session metadata changes. */
+export interface SessionInfoChangedEvent {
+	type: "session_info_changed";
+	/** Current normalized session name. Undefined when the name is cleared. */
+	name: string | undefined;
+}
+
 /** Fired before switching to another session (can be cancelled) */
 export interface SessionBeforeSwitchEvent {
 	type: "session_before_switch";
@@ -630,6 +638,7 @@ export interface SessionTreeEvent {
 
 export type SessionEvent =
 	| SessionStartEvent
+	| SessionInfoChangedEvent
 	| SessionBeforeSwitchEvent
 	| SessionBeforeForkEvent
 	| SessionBeforeCompactEvent
@@ -1085,16 +1094,26 @@ export interface SessionBeforeTreeResult {
 }
 
 // ============================================================================
-// Message Rendering
+// Message and Entry Rendering
 // ============================================================================
 
 export interface MessageRenderOptions {
 	expanded: boolean;
 }
 
+export interface EntryRenderOptions {
+	expanded: boolean;
+}
+
 export type MessageRenderer<T = unknown> = (
 	message: CustomMessage<T>,
 	options: MessageRenderOptions,
+	theme: Theme,
+) => Component | undefined;
+
+export type EntryRenderer<T = unknown> = (
+	entry: CustomEntry<T>,
+	options: EntryRenderOptions,
 	theme: Theme,
 ) => Component | undefined;
 
@@ -1133,6 +1152,7 @@ export interface ExtensionAPI {
 	on(event: "project_trust", handler: ProjectTrustHandler): void;
 	on(event: "resources_discover", handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>): void;
 	on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): void;
+	on(event: "session_info_changed", handler: ExtensionHandler<SessionInfoChangedEvent>): void;
 	on(
 		event: "session_before_switch",
 		handler: ExtensionHandler<SessionBeforeSwitchEvent, SessionBeforeSwitchResult>,
@@ -1214,6 +1234,9 @@ export interface ExtensionAPI {
 
 	/** Register a custom renderer for CustomMessageEntry. */
 	registerMessageRenderer<T = unknown>(customType: string, renderer: MessageRenderer<T>): void;
+
+	/** Register a custom renderer for CustomEntry. Custom entries do not participate in LLM context. */
+	registerEntryRenderer<T = unknown>(customType: string, renderer: EntryRenderer<T>): void;
 
 	// =========================================================================
 	// Actions
@@ -1589,6 +1612,7 @@ export interface Extension {
 	handlers: Map<string, HandlerFn[]>;
 	tools: Map<string, RegisteredTool>;
 	messageRenderers: Map<string, MessageRenderer>;
+	entryRenderers?: Map<string, EntryRenderer>;
 	commands: Map<string, RegisteredCommand>;
 	flags: Map<string, ExtensionFlag>;
 	shortcuts: Map<KeyId, ExtensionShortcut>;

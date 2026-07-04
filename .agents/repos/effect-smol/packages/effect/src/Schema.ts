@@ -122,6 +122,12 @@ export interface MakeOptions {
    * Whether to disable validation for the schema.
    */
   readonly disableChecks?: boolean | undefined
+
+  /** @internal */
+  readonly "~payload"?: {
+    readonly token: unknown
+    readonly value: unknown
+  }
 }
 
 /**
@@ -10975,7 +10981,10 @@ export interface fromJsonString<S extends Constraint> extends decodeTo<S, String
  * @since 4.0.0
  */
 export function fromJsonString<S extends Constraint>(schema: S): fromJsonString<S> {
+  const identifier = SchemaAST.resolveIdentifier(schema.ast)
   return String.annotate({
+    // Give the transport wrapper its own name so the decoded payload keeps its identifier.
+    identifier: identifier === undefined ? undefined : `${identifier}JsonString`,
     expected: "a string that will be decoded as JSON",
     contentMediaType: "application/json",
     contentSchema: SchemaAST.toEncoded(schema.ast)
@@ -12467,6 +12476,8 @@ type InheritStaticMembers<C, Static> = C & Pick<Static, Exclude<keyof Static, ke
 
 const immerable: unique symbol = globalThis.Symbol.for("immer-draftable") as any
 
+const payloadToken = {}
+
 function makeClass<
   Self,
   S extends Struct<Struct.Fields>,
@@ -12483,9 +12494,12 @@ function makeClass<
 
   const out = class extends Inherited {
     constructor(...[input, options]: ReadonlyArray<any>) {
-      input = input ?? {}
-      const validated = struct.make(input, options)
-      super({ ...input, ...validated }, { ...options, disableChecks: true })
+      const internalOptions = options as MakeOptions | undefined
+      const payload = internalOptions?.["~payload"]
+      const value = payload?.token === payloadToken
+        ? payload.value
+        : struct.make(input ?? {}, options)
+      super(value, { ...options, disableChecks: true, "~payload": { token: payloadToken, value } })
     }
 
     static readonly [TypeId] = TypeId
