@@ -37,6 +37,7 @@
   "scripts": {
     "prepack": "pnpm run build",
     "build": "tsdown",
+    "check": "pnpm run lint && pnpm run check-types && pnpm run format:check",
     "check-types": "tsc -b",
     "lint": "oxlint",
     "format": "oxfmt",

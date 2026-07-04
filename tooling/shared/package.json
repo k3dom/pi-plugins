@@ -9,6 +9,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
+    "check": "pnpm run lint && pnpm run check-types && pnpm run format:check",
     "check-types": "tsc -b",
     "lint": "oxlint",
     "format": "oxfmt",
