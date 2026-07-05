@@ -1,0 +1,68 @@
+{
+  "name": "@pi-plugins/claude-max",
+  "version": "0.1.0",
+  "description": "Make pi's Anthropic OAuth (Claude Pro/Max subscription) requests match the current Claude Code fingerprint.",
+  "keywords": [
+    "anthropic",
+    "claude",
+    "claude-code",
+    "oauth",
+    "pi",
+    "pi-agent",
+    "pi-extension",
+    "pi-package",
+    "subscription"
+  ],
+  "homepage": "https://github.com/k3dom/pi-plugins/tree/main/plugins/claude-max#readme",
+  "bugs": {
+    "url": "https://github.com/k3dom/pi-plugins/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/k3dom/pi-plugins.git",
+    "directory": "plugins/claude-max"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepack": "pnpm run build",
+    "build": "tsdown",
+    "capture": "node scripts/claude-trace.ts",
+    "check": "pnpm run lint && pnpm run check-types && pnpm run format:check",
+    "check-types": "tsc -b",
+    "lint": "oxlint",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.80.3",
+    "@pi-plugins/fmt": "workspace:*",
+    "@pi-plugins/lint": "workspace:*",
+    "@pi-plugins/tsconfig": "workspace:*",
+    "@types/node": "26.1.0",
+    "oxfmt": "0.57.0",
+    "oxlint": "1.72.0",
+    "tsdown": "0.22.3",
+    "typescript": "6.0.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./dist/index.mjs"
+    ]
+  }
+}
