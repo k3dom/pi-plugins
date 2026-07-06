@@ -7,7 +7,7 @@
  * one request it extracts every version/header/body constant the plugin pins,
  * verifies the two values that cannot simply be read off the wire (the `cch`
  * XXH64 seed and the billing-header salt) against the captured bytes, and diffs
- * everything against the current `src/fingerprint.ts`.
+ * everything against the current `src/request.ts`.
  *
  * Why MITM and not `ANTHROPIC_BASE_URL`: Claude Code only sends its full billing
  * header and `cch` value against the real `api.anthropic.com` endpoint. Pointing
@@ -27,7 +27,7 @@
  *   --timeout <ms>     Overall timeout (default: 120000)
  *   --skip <substr>    Skip requests whose model contains this (default: haiku)
  *   --manual           Do not spawn claude; print the env and wait for you to run it
- *   --write            Patch src/fingerprint.ts in place with the captured values
+ *   --write            Patch src/request.ts in place with the captured values
  *   --json             Print the raw captured exchange as JSON
  *   --keep-cert        Leave the generated debug cert on disk (for debugging)
  *   -h, --help         Show this help
@@ -46,14 +46,14 @@ import { fileURLToPath } from 'node:url'
 const MITM_HOST = 'api.anthropic.com'
 const BILLING_PREFIX = 'x-anthropic-billing-header:'
 const BILLING_SYSTEM_MARKER = `"system":[{"type":"text","text":"${BILLING_PREFIX}`
-// Must stay in sync with src/cch.ts / src/fingerprint.ts — the script verifies
+// Must stay in sync with src/cch.ts / src/request.ts — the script verifies
 // these against the captured bytes and reports a mismatch rather than trusting them.
 const CCH_SEED = 0x4d659218e32a3268n
 const FINGERPRINT_SALT = '59cf53e54c78'
 const FINGERPRINT_INDICES = [4, 7, 20] as const
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
-const FINGERPRINT_FILE = path.join(SCRIPT_DIR, '..', 'src', 'fingerprint.ts')
+const REQUEST_FILE = path.join(SCRIPT_DIR, '..', 'src', 'request.ts')
 const encoder = new TextEncoder()
 
 // ── xxh64 (mirror of src/xxhash.ts; kept inline so the script has no imports) ─
@@ -682,7 +682,7 @@ function verify(request: CapturedRequest, extracted: Extracted): Verification[] 
   return checks
 }
 
-// ── diff against current src/fingerprint.ts ─────────────────────────────────
+// ── diff against current src/request.ts ─────────────────────────────────────
 
 function currentConstant(source: string, name: string): string | undefined {
   // Match the opening quote, then any run up to the *same* closing quote, so an
@@ -776,10 +776,10 @@ function report(capture: Capture, extracted: Extracted, source: string): boolean
   return allGood
 }
 
-// ── writing back to src/fingerprint.ts ──────────────────────────────────────
+// ── writing back to src/request.ts ──────────────────────────────────────────
 
 function writeBack(extracted: Extracted): void {
-  let source = readFileSync(FINGERPRINT_FILE, 'utf8')
+  let source = readFileSync(REQUEST_FILE, 'utf8')
   const changed: string[] = []
 
   // Function replacements: the captured value is inserted literally, so a `$` in
@@ -825,9 +825,9 @@ function writeBack(extracted: Extracted): void {
     }
   }
 
-  writeFileSync(FINGERPRINT_FILE, source)
+  writeFileSync(REQUEST_FILE, source)
   console.log(
-    `\n${GREEN}wrote${RESET} ${path.relative(process.cwd(), FINGERPRINT_FILE)}`,
+    `\n${GREEN}wrote${RESET} ${path.relative(process.cwd(), REQUEST_FILE)}`,
   )
   console.log(`  updated: ${changed.join(', ')}`)
   console.log(
@@ -898,7 +898,7 @@ async function run(opts: Options): Promise<void> {
       return
     }
 
-    const source = readFileSync(FINGERPRINT_FILE, 'utf8')
+    const source = readFileSync(REQUEST_FILE, 'utf8')
     const extracted = extract(capture.request)
     const allGood = report(capture, extracted, source)
 
@@ -906,7 +906,7 @@ async function run(opts: Options): Promise<void> {
       writeBack(extracted)
     } else if (!allGood) {
       console.log(
-        `\n${DIM}run again with --write to patch src/fingerprint.ts${RESET}`,
+        `\n${DIM}run again with --write to patch src/request.ts${RESET}`,
       )
     } else {
       console.log(`\n${GREEN}request details are already up to date.${RESET}`)

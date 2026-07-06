@@ -6,7 +6,7 @@ import {
   CLAUDE_CODE_MAX_OUTPUT_TOKENS,
   createBillingHeader,
   PI_OAUTH_SYSTEM_MARKER,
-} from './fingerprint'
+} from './request'
 import { sanitizeSystemText } from './system-prompt'
 
 interface SystemTextBlock {
