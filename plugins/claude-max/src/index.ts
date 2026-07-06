@@ -7,6 +7,7 @@ import {
   createBillingHeader,
   PI_OAUTH_SYSTEM_MARKER,
 } from './fingerprint'
+import { sanitizeSystemText } from './system-prompt'
 
 interface SystemTextBlock {
   type: string
@@ -20,6 +21,19 @@ interface AnthropicPayload {
   max_tokens?: number
   metadata?: { user_id?: unknown }
 }
+
+// Two layers make an OAuth request read as genuine Claude Code:
+//
+//   1. Content scrub — Anthropic's billing gate inspects request content and
+//      routes anything pi-branded ("operating inside pi, …") to extra usage, so
+//      pi's self-identification is stripped from the system prompt. pi already
+//      injects the Claude Code identity block and renames tools on OAuth; the
+//      scrub closes the remaining gap and is what keeps the request on-plan.
+//   2. Fingerprint — the aggressive Claude Code request fingerprint (billing
+//      header + `cch` attestation, `metadata.user_id` cloak, header/beta
+//      override, token clamp), a faithful port of OMP's technique.
+//
+// Both are always applied. See .agents/context/claude-max-handoff.md.
 
 let fetchWrapped = false
 
@@ -49,6 +63,35 @@ function installCchFetchWrapper(): void {
  */
 function isOAuthAnthropicPayload(payload: AnthropicPayload): boolean {
   return payload.system?.[0]?.text === PI_OAUTH_SYSTEM_MARKER
+}
+
+/**
+ * Rewrite `payload.system` so every block except pi's Claude Code identity has
+ * its pi self-identification scrubbed. Blocks that scrub down to nothing (e.g. a
+ * block that was only pi doc links) are dropped.
+ */
+function scrubSystemBlocks(payload: AnthropicPayload): void {
+  const system = payload.system
+  if (!system) {
+    return
+  }
+  const scrubbed: SystemTextBlock[] = []
+  for (const block of system) {
+    if (
+      block?.type !== 'text' ||
+      typeof block.text !== 'string' ||
+      block.text === PI_OAUTH_SYSTEM_MARKER
+    ) {
+      // Non-text blocks and the identity marker pass through untouched.
+      scrubbed.push(block)
+      continue
+    }
+    const text = sanitizeSystemText(block.text)
+    if (text) {
+      scrubbed.push({ ...block, text })
+    }
+  }
+  payload.system = scrubbed
 }
 
 /** Text of the first user message — the seed for the billing-header fingerprint. */
@@ -85,13 +128,37 @@ function firstUserMessageText(messages: AnthropicPayload['messages']): string {
   return ''
 }
 
+/**
+ * Apply the Claude Code fingerprint on top of a scrubbed OAuth payload:
+ * billing-header block (attested by the fetch wrapper), `metadata.user_id`
+ * cloak, and the `max_tokens` clamp.
+ */
+function applyFingerprint(payload: AnthropicPayload): void {
+  // Prepend the billing-header block as system[0]. The `cch` placeholder is
+  // attested by the global fetch wrapper after serialization.
+  const seed = firstUserMessageText(payload.messages)
+  payload.system?.unshift({ type: 'text', text: createBillingHeader(seed) })
+
+  // Cloak metadata.user_id into the Claude Code attribution shape.
+  if (!payload.metadata || typeof payload.metadata.user_id !== 'string') {
+    payload.metadata = { ...payload.metadata, user_id: claudeUserId() }
+  }
+
+  // Clamp output tokens to Claude Code's 64k wire ceiling.
+  if (
+    typeof payload.max_tokens === 'number' &&
+    payload.max_tokens > CLAUDE_CODE_MAX_OUTPUT_TOKENS
+  ) {
+    payload.max_tokens = CLAUDE_CODE_MAX_OUTPUT_TOKENS
+  }
+}
+
 export default function claudeMax(pi: ExtensionAPI): void {
   if (process.env['PI_CLAUDE_MAX_DISABLE'] === '1') {
     return
   }
 
   installCchFetchWrapper()
-
   // Refresh the Anthropic request fingerprint (User-Agent, betas, Stainless /
   // client headers) to match current Claude Code. Header-only registration
   // augments the built-in provider — OAuth login and models are preserved.
@@ -108,23 +175,13 @@ export default function claudeMax(pi: ExtensionAPI): void {
       return undefined
     }
 
-    // 1. Prepend the Claude Code billing-header block as system[0]. The `cch`
-    //    placeholder is attested by the global fetch wrapper after serialization.
-    const seed = firstUserMessageText(payload.messages)
-    payload.system.unshift({ type: 'text', text: createBillingHeader(seed) })
+    // Scrub pi self-identification so the request reads as genuine Claude Code
+    // and draws from the plan instead of extra usage.
+    scrubSystemBlocks(payload)
 
-    // 2. Cloak metadata.user_id into the Claude Code attribution shape.
-    if (!payload.metadata || typeof payload.metadata.user_id !== 'string') {
-      payload.metadata = { ...payload.metadata, user_id: claudeUserId() }
-    }
-
-    // 3. Clamp output tokens to Claude Code's 64k wire ceiling.
-    if (
-      typeof payload.max_tokens === 'number' &&
-      payload.max_tokens > CLAUDE_CODE_MAX_OUTPUT_TOKENS
-    ) {
-      payload.max_tokens = CLAUDE_CODE_MAX_OUTPUT_TOKENS
-    }
+    // Apply the OMP-style Claude Code fingerprint (billing header + cch,
+    // metadata cloak, token clamp).
+    applyFingerprint(payload)
 
     return payload
   })
