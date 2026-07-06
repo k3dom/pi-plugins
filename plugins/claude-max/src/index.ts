@@ -22,19 +22,6 @@ interface AnthropicPayload {
   metadata?: { user_id?: unknown }
 }
 
-// Two layers make an OAuth request read as genuine Claude Code:
-//
-//   1. Content scrub — Anthropic's billing gate inspects request content and
-//      routes anything pi-branded ("operating inside pi, …") to extra usage, so
-//      pi's self-identification is stripped from the system prompt. pi already
-//      injects the Claude Code identity block and renames tools on OAuth; the
-//      scrub closes the remaining gap and is what keeps the request on-plan.
-//   2. Fingerprint — the aggressive Claude Code request fingerprint (billing
-//      header + `cch` attestation, `metadata.user_id` cloak, header/beta
-//      override, token clamp), a faithful port of OMP's technique.
-//
-// Both are always applied. See .agents/context/claude-max-handoff.md.
-
 let fetchWrapped = false
 
 /**
