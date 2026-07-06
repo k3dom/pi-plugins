@@ -1,9 +1,3 @@
-/**
- * Claude Code request details: identity/Stainless headers, the beta set, the
- * `x-anthropic-billing-header` system block, and `metadata.user_id`. Matching
- * these to the current Claude Code client is what lets pi's OAuth requests work.
- */
-
 import { createHash, randomUUID } from 'node:crypto'
 import {
   arch as osArch,
@@ -13,67 +7,43 @@ import {
   userInfo,
 } from 'node:os'
 import { BILLING_HEADER_PREFIX, CCH_PLACEHOLDER } from './cch'
+import {
+  CLAUDE_AGENT_SDK_VERSION,
+  CLAUDE_CLIENT_VERSION,
+  CLAUDE_CODE_AGENT_BETAS,
+  CLAUDE_CODE_STAINLESS_PACKAGE_VERSION,
+  CLAUDE_CODE_STAINLESS_RUNTIME_VERSION,
+  CLAUDE_CODE_VERSION,
+} from './constants'
 
-export const CLAUDE_CODE_VERSION = '2.1.165'
-export const CLAUDE_AGENT_SDK_VERSION = '0.3.165'
-export const CLAUDE_CLIENT_VERSION = '1.11187.4'
-export const CLAUDE_CODE_STAINLESS_PACKAGE_VERSION = '0.94.0'
-export const CLAUDE_CODE_STAINLESS_RUNTIME_VERSION = 'v24.3.0'
+// The `os.arch()` / `os.platform()` values the SDK reports, mapped to the labels
+// Stainless emits. Anything unlisted falls through to an `other::<value>` marker.
+const STAINLESS_ARCH: Record<string, string> = {
+  amd64: 'x64',
+  x64: 'x64',
+  arm64: 'arm64',
+  aarch64: 'arm64',
+  '386': 'x86',
+  x86: 'x86',
+  ia32: 'x86',
+}
 
-// Claude Code caps requested output at 64k even when the model ceiling is higher
-// (e.g. Opus 128k); OAuth requests clamp to match the client.
-export const CLAUDE_CODE_MAX_OUTPUT_TOKENS = 64000
-
-// pi injects this exact block as system[0] on OAuth requests. Its presence is the
-// trigger to apply the rest of the Claude Code request details.
-export const PI_OAUTH_SYSTEM_MARKER =
-  "You are Claude Code, Anthropic's official CLI for Claude."
-
-// Claude Code's agent beta set; order matches the live client.
-const CLAUDE_CODE_AGENT_BETAS = [
-  'claude-code-20250219',
-  'oauth-2025-04-20',
-  'interleaved-thinking-2025-05-14',
-  'fine-grained-tool-streaming-2025-05-14',
-  'context-management-2025-06-27',
-  'prompt-caching-scope-2026-01-05',
-  'mid-conversation-system-2026-04-07',
-  'advanced-tool-use-2025-11-20',
-  'effort-2025-11-24',
-  'extended-cache-ttl-2025-04-11',
-] as const
+const STAINLESS_OS: Record<string, string> = {
+  darwin: 'MacOS',
+  win32: 'Windows',
+  windows: 'Windows',
+  linux: 'Linux',
+  freebsd: 'FreeBSD',
+}
 
 function mapStainlessArch(value: string): string {
-  switch (value.toLowerCase()) {
-    case 'amd64':
-    case 'x64':
-      return 'x64'
-    case 'arm64':
-    case 'aarch64':
-      return 'arm64'
-    case '386':
-    case 'x86':
-    case 'ia32':
-      return 'x86'
-    default:
-      return `other::${value.toLowerCase()}`
-  }
+  const key = value.toLowerCase()
+  return STAINLESS_ARCH[key] ?? `other::${key}`
 }
 
 function mapStainlessOs(value: string): string {
-  switch (value.toLowerCase()) {
-    case 'darwin':
-      return 'MacOS'
-    case 'win32':
-    case 'windows':
-      return 'Windows'
-    case 'linux':
-      return 'Linux'
-    case 'freebsd':
-      return 'FreeBSD'
-    default:
-      return `Other::${value.toLowerCase()}`
-  }
+  const key = value.toLowerCase()
+  return STAINLESS_OS[key] ?? `Other::${key}`
 }
 
 // Static headers merged over pi's Anthropic defaults. pi merges provider headers
@@ -98,15 +68,22 @@ export function buildProviderHeaders(): Record<string, string> {
   }
 }
 
+// Claude Code fingerprints the billing header with
+// `SHA256(salt + msg[4] + msg[7] + msg[20] + version)[:3]`. The salt and indices
+// are pinned to the client and verified by `scripts/claude-trace.ts`.
+const BILLING_FINGERPRINT_SALT = '59cf53e54c78'
+const BILLING_FINGERPRINT_INDICES = [4, 7, 20] as const
+
 /**
- * `x-anthropic-billing-header` text for system[0]. The version suffix is
- * `SHA256(salt + msg[4] + msg[7] + msg[20] + version)[:3]`, matching how Claude
- * Code builds it. The `cch=00000` placeholder is filled in by the fetch wrapper.
+ * Builds the `x-anthropic-billing-header` text for system[0]. The `cch=00000`
+ * placeholder is filled in later by the fetch wrapper once the body is serialized.
  */
-export function createBillingHeader(firstUserMessageText: string): string {
-  const k = [4, 7, 20].map((i) => firstUserMessageText[i] ?? '0').join('')
+export function createBillingHeader(firstUserMessage: string): string {
+  const fingerprintSeed = BILLING_FINGERPRINT_INDICES.map(
+    (i) => firstUserMessage[i] ?? '0',
+  ).join('')
   const versionSuffix = createHash('sha256')
-    .update(`59cf53e54c78${k}${CLAUDE_CODE_VERSION}`)
+    .update(`${BILLING_FINGERPRINT_SALT}${fingerprintSeed}${CLAUDE_CODE_VERSION}`)
     .digest('hex')
     .slice(0, 3)
   return `${BILLING_HEADER_PREFIX} cc_version=${CLAUDE_CODE_VERSION}.${versionSuffix}; cc_entrypoint=local-agent; ${CCH_PLACEHOLDER};`

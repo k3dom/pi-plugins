@@ -22,6 +22,10 @@ importers:
         version: 2.10.2
 
   plugins/claude-oauth:
+    dependencies:
+      effect:
+        specifier: 4.0.0-beta.93
+        version: 4.0.0-beta.93
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 0.80.3

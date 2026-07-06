@@ -7,7 +7,7 @@
  * one request it extracts every version/header/body constant the plugin pins,
  * verifies the two values that cannot simply be read off the wire (the `cch`
  * XXH64 seed and the billing-header salt) against the captured bytes, and diffs
- * everything against the current `src/request.ts`.
+ * everything against the current `src/constants.ts`.
  *
  * Why MITM and not `ANTHROPIC_BASE_URL`: Claude Code only sends its full billing
  * header and `cch` value against the real `api.anthropic.com` endpoint. Pointing
@@ -27,7 +27,7 @@
  *   --timeout <ms>     Overall timeout (default: 120000)
  *   --skip <substr>    Skip requests whose model contains this (default: haiku)
  *   --manual           Do not spawn claude; print the env and wait for you to run it
- *   --write            Patch src/request.ts in place with the captured values
+ *   --write            Patch src/constants.ts in place with the captured values
  *   --json             Print the raw captured exchange as JSON
  *   --keep-cert        Leave the generated debug cert on disk (for debugging)
  *   -h, --help         Show this help
@@ -53,7 +53,11 @@ const FINGERPRINT_SALT = '59cf53e54c78'
 const FINGERPRINT_INDICES = [4, 7, 20] as const
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
-const REQUEST_FILE = path.join(SCRIPT_DIR, '..', 'src', 'request.ts')
+// The captured version/header/body constants the plugin pins all live here, so
+// this is the single file --write patches and the report diffs against. writeBack
+// relies on each being a plain top-level `export const` (string, number, or
+// `as const` array) so its regex patching can find and rewrite it.
+const CONSTANTS_FILE = path.join(SCRIPT_DIR, '..', 'src', 'constants.ts')
 const encoder = new TextEncoder()
 
 // ── xxh64 (mirror of src/xxhash.ts; kept inline so the script has no imports) ─
@@ -682,7 +686,7 @@ function verify(request: CapturedRequest, extracted: Extracted): Verification[] 
   return checks
 }
 
-// ── diff against current src/request.ts ─────────────────────────────────────
+// ── diff against current src/constants.ts ─────────────────────────────────────
 
 function currentConstant(source: string, name: string): string | undefined {
   // Match the opening quote, then any run up to the *same* closing quote, so an
@@ -776,10 +780,10 @@ function report(capture: Capture, extracted: Extracted, source: string): boolean
   return allGood
 }
 
-// ── writing back to src/request.ts ──────────────────────────────────────────
+// ── writing back to src/constants.ts ──────────────────────────────────────────
 
 function writeBack(extracted: Extracted): void {
-  let source = readFileSync(REQUEST_FILE, 'utf8')
+  let source = readFileSync(CONSTANTS_FILE, 'utf8')
   const changed: string[] = []
 
   // Function replacements: the captured value is inserted literally, so a `$` in
@@ -825,9 +829,9 @@ function writeBack(extracted: Extracted): void {
     }
   }
 
-  writeFileSync(REQUEST_FILE, source)
+  writeFileSync(CONSTANTS_FILE, source)
   console.log(
-    `\n${GREEN}wrote${RESET} ${path.relative(process.cwd(), REQUEST_FILE)}`,
+    `\n${GREEN}wrote${RESET} ${path.relative(process.cwd(), CONSTANTS_FILE)}`,
   )
   console.log(`  updated: ${changed.join(', ')}`)
   console.log(
@@ -898,16 +902,14 @@ async function run(opts: Options): Promise<void> {
       return
     }
 
-    const source = readFileSync(REQUEST_FILE, 'utf8')
+    const source = readFileSync(CONSTANTS_FILE, 'utf8')
     const extracted = extract(capture.request)
     const allGood = report(capture, extracted, source)
 
     if (opts.write) {
       writeBack(extracted)
     } else if (!allGood) {
-      console.log(
-        `\n${DIM}run again with --write to patch src/request.ts${RESET}`,
-      )
+      console.log(`\n${DIM}run again with --write to patch src/constants.ts${RESET}`)
     } else {
       console.log(`\n${GREEN}request details are already up to date.${RESET}`)
     }

@@ -1,7 +1,3 @@
-/**
- * XXH64, used to reproduce Claude Code's `cch` request-integrity value.
- */
-
 const MASK = (1n << 64n) - 1n
 const PRIME64_1 = 11400714785074694791n
 const PRIME64_2 = 14029467366897019727n
@@ -21,6 +17,7 @@ const mergeRound = (acc: bigint, val: bigint): bigint => {
   return (((merged * PRIME64_1) & MASK) + PRIME64_4) & MASK
 }
 
+/** XXH64, used to reproduce Claude Code's `cch` request-integrity value. */
 export function xxHash64(input: Uint8Array, seed: bigint): bigint {
   const len = input.length
   const dv = new DataView(input.buffer, input.byteOffset, input.byteLength)

@@ -1,12 +1,3 @@
-/**
- * Claude Code `cch` billing-header request-integrity value.
- *
- * Claude Code seeds system[0] with `x-anthropic-billing-header: …; cch=00000;`
- * then, at the fetch layer, replaces `cch=00000` with `XXH64(body) & 0xfffff`
- * as 5 hex chars. The hash covers the serialized body, so the patch must happen
- * after serialization — hence wrapping `globalThis.fetch` rather than the payload.
- */
-
 import { xxHash64 } from './xxhash'
 
 export const BILLING_HEADER_PREFIX = 'x-anthropic-billing-header:'
@@ -55,8 +46,10 @@ type FetchImpl = typeof fetch
 
 /**
  * Wrap fetch so request bodies carrying the `cch=00000` placeholder get their
- * attestation patched in place. Every other request passes through byte-for-byte,
- * so a global install is safe.
+ * attestation patched in place: `cch=00000` becomes `XXH64(body) & 0xfffff` as 5
+ * hex chars. The hash covers the serialized body, so the patch must happen here at
+ * the fetch layer rather than on the payload. Every other request passes through
+ * byte-for-byte, so a global install is safe.
  */
 export function wrapFetchForCch(base: FetchImpl): FetchImpl {
   const wrapped: FetchImpl = (input, init) => {
