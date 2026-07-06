@@ -1,14 +1,8 @@
 /**
- * XXH64 — used to reproduce Claude Code's `cch` billing attestation.
- *
- * Claude Code hashes the serialized `/v1/messages` request body with XXHash64
- * (seed `0x4d659218e32a3268`) and keeps the low 20 bits as a 5-hex-char
- * attestation. OMP computes this with `Bun.hash.xxHash64`, so we prefer Bun's
- * native hash (bit-for-bit identical) and fall back to a spec-faithful BigInt
- * implementation. Both are validated at load against the canonical
- * `XXH64("", seed=0) = 0xef46db3751d8e999` vector; if neither passes, `xxh64`
- * is `null` and the caller leaves the placeholder untouched (unattested — the
- * same graceful fallback OMP uses when it cannot anchor the placeholder).
+ * XXH64, used to reproduce Claude Code's `cch` request-integrity value. Prefers
+ * Bun's native xxHash64, falling back to a BigInt implementation. Both are
+ * validated at load against XXH64("", seed=0); if neither matches, `xxh64` is
+ * null and callers leave the `cch` value unpatched.
  */
 
 const MASK = (1n << 64n) - 1n
@@ -18,7 +12,6 @@ const PRIME64_3 = 1609587929392839161n
 const PRIME64_4 = 9650029242287828579n
 const PRIME64_5 = 2870177450012600261n
 
-// XXH64("", seed=0) — the canonical empty-input vector.
 const KNOWN_EMPTY_HASH = 0xef46db3751d8e999n
 
 const rotl = (x: bigint, r: bigint): bigint => ((x << r) | (x >> (64n - r))) & MASK
@@ -106,7 +99,7 @@ function selectXxh64(): Xxh64 | null {
         return (input, seed) => bunHash(input, seed) & MASK
       }
     } catch {
-      // Bun's signature differs or rejects a bigint seed — fall through.
+      // Signature differs or rejects a bigint seed — fall through to the pure impl.
     }
   }
   if (xxh64Pure(new Uint8Array(0), 0n) === KNOWN_EMPTY_HASH) {

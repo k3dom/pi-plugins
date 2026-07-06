@@ -21,7 +21,7 @@ importers:
         specifier: 2.10.2
         version: 2.10.2
 
-  plugins/claude-max:
+  plugins/claude-oauth:
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 0.80.3

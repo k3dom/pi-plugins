@@ -1,22 +1,21 @@
 #!/usr/bin/env node
 /**
- * claude-trace — seed the claude-max fingerprint from a live Claude Code request.
+ * claude-trace — refresh the claude-oauth request details from a live Claude Code request.
  *
  * Runs a local MITM proxy, drives the real `claude` CLI through it (headless
- * `claude -p`), and captures the first genuine `/v1/messages` request. From that
+ * `claude -p`), and captures the first real `/v1/messages` request. From that
  * one request it extracts every version/header/body constant the plugin pins,
  * verifies the two values that cannot simply be read off the wire (the `cch`
- * XXH64 seed and the billing-header fingerprint salt) against the captured
- * bytes, and diffs everything against the current `src/fingerprint.ts`.
+ * XXH64 seed and the billing-header salt) against the captured bytes, and diffs
+ * everything against the current `src/fingerprint.ts`.
  *
- * Why MITM and not `ANTHROPIC_BASE_URL`: Claude Code only emits its full
- * production fingerprint (billing header + `cch` attestation) when it believes
- * it is talking to the real first-party endpoint. Pointing it at a custom base
- * URL suppresses the very thing we want to capture, so we transparently
- * intercept `api.anthropic.com` instead and blind-tunnel everything else.
+ * Why MITM and not `ANTHROPIC_BASE_URL`: Claude Code only sends its full billing
+ * header and `cch` value against the real `api.anthropic.com` endpoint. Pointing
+ * it at a custom base URL suppresses them, so we transparently intercept
+ * `api.anthropic.com` and blind-tunnel everything else.
  *
  * Requirements: Node 24+ (runs `.ts` directly), `openssl` and `claude` on PATH,
- * and a Claude Code that is logged into a subscription (Pro/Max).
+ * and a Claude Code that is logged in via OAuth.
  *
  * Usage:
  *   node scripts/claude-trace.ts [options]
@@ -718,7 +717,7 @@ function report(capture: Capture, extracted: Extracted, source: string): boolean
   console.log(`  response: ${capture.responseStatus ?? '(not observed)'}`)
   if (capture.responseStatus && !capture.responseStatus.includes(' 200')) {
     console.log(
-      `  ${YELLOW}note: response was not 200 — the fingerprint may have been rejected${RESET}`,
+      `  ${YELLOW}note: response was not 200 — the request may have been rejected${RESET}`,
     )
   }
 
@@ -910,7 +909,7 @@ async function run(opts: Options): Promise<void> {
         `\n${DIM}run again with --write to patch src/fingerprint.ts${RESET}`,
       )
     } else {
-      console.log(`\n${GREEN}fingerprint is already up to date.${RESET}`)
+      console.log(`\n${GREEN}request details are already up to date.${RESET}`)
     }
   } catch (error) {
     child?.kill('SIGKILL')

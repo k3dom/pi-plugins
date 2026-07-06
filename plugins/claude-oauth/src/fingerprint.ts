@@ -1,13 +1,11 @@
 /**
- * Claude Code request fingerprint.
- *
- * Constants and builders that reshape pi's Anthropic OAuth requests to match the
- * current Claude Code client: identity/Stainless headers, the beta set, the
- * `x-anthropic-billing-header` system block, and `metadata.user_id` cloaking.
+ * Claude Code request details: identity/Stainless headers, the beta set, the
+ * `x-anthropic-billing-header` system block, and `metadata.user_id`. Matching
+ * these to the current Claude Code client is what lets pi's OAuth requests work.
  *
  * These values are Claude-Code-version-specific. Refresh them from a live capture
- * with `pnpm --filter @pi-plugins/claude-max capture --write` (see
- * `scripts/claude-trace.ts`) whenever Claude Code updates.
+ * with `pnpm --filter @pi-plugins/claude-oauth capture --write` whenever Claude
+ * Code updates (see `scripts/claude-trace.ts`).
  */
 
 import { createHash, randomUUID } from 'node:crypto'
@@ -27,15 +25,15 @@ export const CLAUDE_CODE_STAINLESS_PACKAGE_VERSION = '0.94.0'
 export const CLAUDE_CODE_STAINLESS_RUNTIME_VERSION = 'v24.3.0'
 
 // Claude Code caps requested output at 64k even when the model ceiling is higher
-// (e.g. Opus 128k); OAuth requests clamp to match the wire fingerprint.
+// (e.g. Opus 128k); OAuth requests clamp to match the client.
 export const CLAUDE_CODE_MAX_OUTPUT_TOKENS = 64000
 
-// pi injects this exact block as system[0] on OAuth (subscription) requests.
-// Its presence is our trigger to upgrade a request to the full fingerprint.
+// pi injects this exact block as system[0] on OAuth requests. Its presence is the
+// trigger to apply the rest of the Claude Code request details.
 export const PI_OAUTH_SYSTEM_MARKER =
   "You are Claude Code, Anthropic's official CLI for Claude."
 
-// Claude Code's agent beta set (order matches OMP's buildClaudeCodeBetas).
+// Claude Code's agent beta set; order matches the live client.
 const CLAUDE_CODE_AGENT_BETAS = [
   'claude-code-20250219',
   'oauth-2025-04-20',
@@ -82,11 +80,9 @@ function mapStainlessOs(value: string): string {
   }
 }
 
-/**
- * Static headers merged over pi's Anthropic defaults. pi merges provider headers
- * last, and the Anthropic SDK applies `defaultHeaders` after its auto-generated
- * Stainless/User-Agent headers, so these win while the OAuth Bearer is preserved.
- */
+// Static headers merged over pi's Anthropic defaults. pi merges provider headers
+// last, and the SDK applies `defaultHeaders` after its auto-generated
+// Stainless/User-Agent headers, so these win while the OAuth Bearer is preserved.
 export function buildProviderHeaders(): Record<string, string> {
   return {
     'user-agent': `claude-cli/${CLAUDE_CODE_VERSION} (external, local-agent, agent-sdk/${CLAUDE_AGENT_SDK_VERSION})`,
@@ -107,10 +103,9 @@ export function buildProviderHeaders(): Record<string, string> {
 }
 
 /**
- * Build the `x-anthropic-billing-header` text for system[0]. The fingerprint
- * suffix is `SHA256(salt + msg[4] + msg[7] + msg[20] + version)[:3]`, matching
- * Claude Code's `computeFingerprint`. The `cch=00000` placeholder is patched
- * with the real attestation by the fetch wrapper after serialization.
+ * `x-anthropic-billing-header` text for system[0]. The version suffix is
+ * `SHA256(salt + msg[4] + msg[7] + msg[20] + version)[:3]`, matching how Claude
+ * Code builds it. The `cch=00000` placeholder is filled in by the fetch wrapper.
  */
 export function createBillingHeader(firstUserMessageText: string): string {
   const k = [4, 7, 20].map((i) => firstUserMessageText[i] ?? '0').join('')
@@ -128,12 +123,12 @@ function resolveMachineSeed(): string {
     // userInfo() can throw in locked-down sandboxes; hostname/homedir are safe.
     return `${hostname()}:${userInfo().username}:${homedir()}`
   } catch {
-    return `${hostname()}:claude-max-fallback`
+    return `${hostname()}:claude-oauth-fallback`
   }
 }
 
 const deviceId = createHash('sha256')
-  .update(`claude-max-device-v1:${resolveMachineSeed()}`)
+  .update(`claude-oauth-device-v1:${resolveMachineSeed()}`)
   .digest('hex')
 const sessionId = randomUUID()
 

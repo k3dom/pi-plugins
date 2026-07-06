@@ -26,10 +26,8 @@ let fetchWrapped = false
 
 /**
  * Install the `cch` attestation wrapper on the global fetch. The Anthropic SDK
- * (0.9x) resolves `fetch` from the global at client construction, and pi builds
- * a fresh client per request, so wrapping here — before any request — is picked
- * up by every Anthropic call. The wrapper is a pass-through for everything that
- * does not carry the billing placeholder.
+ * resolves `fetch` from the global at client construction and pi builds a fresh
+ * client per request, so wrapping here is picked up by every Anthropic call.
  */
 function installCchFetchWrapper(): void {
   if (fetchWrapped) {
@@ -43,45 +41,39 @@ function installCchFetchWrapper(): void {
   fetchWrapped = true
 }
 
-/**
- * pi injects `system[0] = "You are Claude Code, …"` only on OAuth (subscription)
- * Anthropic requests. Keying off that marker means we upgrade exactly those
- * requests and never touch API-key Anthropic traffic or other providers.
- */
+// pi injects `system[0] = "You are Claude Code, …"` only on OAuth requests.
+// Keying off that marker scopes this to exactly those requests and never touches
+// API-key Anthropic traffic or other providers.
 function isOAuthAnthropicPayload(payload: AnthropicPayload): boolean {
   return payload.system?.[0]?.text === PI_OAUTH_SYSTEM_MARKER
 }
 
-/**
- * Rewrite `payload.system` so every block except pi's Claude Code identity has
- * its pi self-identification scrubbed. Blocks that scrub down to nothing (e.g. a
- * block that was only pi doc links) are dropped.
- */
-function scrubSystemBlocks(payload: AnthropicPayload): void {
+// Rewrite pi's self-references to Claude Code in every system block except the
+// identity marker, so the whole prompt stays consistent. Emptied blocks are dropped.
+function normalizeSystemBlocks(payload: AnthropicPayload): void {
   const system = payload.system
   if (!system) {
     return
   }
-  const scrubbed: SystemTextBlock[] = []
+  const normalized: SystemTextBlock[] = []
   for (const block of system) {
     if (
       block?.type !== 'text' ||
       typeof block.text !== 'string' ||
       block.text === PI_OAUTH_SYSTEM_MARKER
     ) {
-      // Non-text blocks and the identity marker pass through untouched.
-      scrubbed.push(block)
+      normalized.push(block)
       continue
     }
     const text = sanitizeSystemText(block.text)
     if (text) {
-      scrubbed.push({ ...block, text })
+      normalized.push({ ...block, text })
     }
   }
-  payload.system = scrubbed
+  payload.system = normalized
 }
 
-/** Text of the first user message — the seed for the billing-header fingerprint. */
+/** Text of the first user message — the seed for the billing-header value. */
 function firstUserMessageText(messages: AnthropicPayload['messages']): string {
   if (!messages) {
     return ''
@@ -115,23 +107,18 @@ function firstUserMessageText(messages: AnthropicPayload['messages']): string {
   return ''
 }
 
-/**
- * Apply the Claude Code fingerprint on top of a scrubbed OAuth payload:
- * billing-header block (attested by the fetch wrapper), `metadata.user_id`
- * cloak, and the `max_tokens` clamp.
- */
-function applyFingerprint(payload: AnthropicPayload): void {
-  // Prepend the billing-header block as system[0]. The `cch` placeholder is
-  // attested by the global fetch wrapper after serialization.
+// Bring the request in line with the Claude Code client: prepend the billing-header
+// block, set `metadata.user_id`, and clamp `max_tokens`.
+function applyClaudeCodeRequest(payload: AnthropicPayload): void {
+  // The `cch` placeholder in this block is filled in by the fetch wrapper once
+  // the body is serialized.
   const seed = firstUserMessageText(payload.messages)
   payload.system?.unshift({ type: 'text', text: createBillingHeader(seed) })
 
-  // Cloak metadata.user_id into the Claude Code attribution shape.
   if (!payload.metadata || typeof payload.metadata.user_id !== 'string') {
     payload.metadata = { ...payload.metadata, user_id: claudeUserId() }
   }
 
-  // Clamp output tokens to Claude Code's 64k wire ceiling.
   if (
     typeof payload.max_tokens === 'number' &&
     payload.max_tokens > CLAUDE_CODE_MAX_OUTPUT_TOKENS
@@ -140,17 +127,15 @@ function applyFingerprint(payload: AnthropicPayload): void {
   }
 }
 
-export default function claudeMax(pi: ExtensionAPI): void {
+export default function claudeOauth(pi: ExtensionAPI): void {
   installCchFetchWrapper()
-  // Refresh the Anthropic request fingerprint (User-Agent, betas, Stainless /
-  // client headers) to match current Claude Code. Header-only registration
-  // augments the built-in provider — OAuth login and models are preserved.
+  // Header-only registration augments the built-in provider, so OAuth login and
+  // models are preserved while the request headers match the current Claude Code client.
   pi.registerProvider('anthropic', { headers: buildProviderHeaders() })
 
   pi.on('before_provider_request', (event) => {
     const payload = event.payload as AnthropicPayload | null
-    // Returning `undefined` leaves the payload unchanged (pi's documented
-    // before_provider_request contract); returning `payload` replaces it.
+    // Returning `undefined` leaves the payload unchanged; returning it replaces it.
     if (!payload || typeof payload !== 'object' || !Array.isArray(payload.system)) {
       return undefined
     }
@@ -158,14 +143,8 @@ export default function claudeMax(pi: ExtensionAPI): void {
       return undefined
     }
 
-    // Scrub pi self-identification so the request reads as genuine Claude Code
-    // and draws from the plan instead of extra usage.
-    scrubSystemBlocks(payload)
-
-    // Apply the OMP-style Claude Code fingerprint (billing header + cch,
-    // metadata cloak, token clamp).
-    applyFingerprint(payload)
-
+    normalizeSystemBlocks(payload)
+    applyClaudeCodeRequest(payload)
     return payload
   })
 }

@@ -1,7 +1,7 @@
 {
-  "name": "@pi-plugins/claude-max",
+  "name": "@pi-plugins/claude-oauth",
   "version": "0.1.0",
-  "description": "Make pi's Anthropic OAuth (Claude Pro/Max subscription) requests match the current Claude Code fingerprint.",
+  "description": "Make pi's Anthropic OAuth requests match the current Claude Code client so OAuth login works correctly.",
   "keywords": [
     "anthropic",
     "claude",
@@ -10,10 +10,9 @@
     "pi",
     "pi-agent",
     "pi-extension",
-    "pi-package",
-    "subscription"
+    "pi-package"
   ],
-  "homepage": "https://github.com/k3dom/pi-plugins/tree/main/plugins/claude-max#readme",
+  "homepage": "https://github.com/k3dom/pi-plugins/tree/main/plugins/claude-oauth#readme",
   "bugs": {
     "url": "https://github.com/k3dom/pi-plugins/issues"
   },
@@ -21,7 +20,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/k3dom/pi-plugins.git",
-    "directory": "plugins/claude-max"
+    "directory": "plugins/claude-oauth"
   },
   "files": [
     "dist",

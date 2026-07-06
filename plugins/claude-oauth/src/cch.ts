@@ -1,16 +1,10 @@
 /**
- * Claude Code `cch` billing-header attestation.
+ * Claude Code `cch` billing-header request-integrity value.
  *
- * Claude Code injects a synthetic first system block:
- *
- *   x-anthropic-billing-header: cc_version=...; cc_entrypoint=local-agent; cch=00000;
- *
- * and then, at the fetch layer (after the body is serialized), replaces the
- * `cch=00000` placeholder with `XXH64(body, seed) & 0xfffff` rendered as 5 hex
- * chars. Because the hash is over the final bytes, this must happen after
- * serialization — which is why the plugin wraps `globalThis.fetch` rather than
- * only editing the payload object. This is a direct port of OMP's
- * `wrapFetchForCch` (packages/ai/src/providers/anthropic.ts).
+ * Claude Code seeds system[0] with `x-anthropic-billing-header: …; cch=00000;`
+ * then, at the fetch layer, replaces `cch=00000` with `XXH64(body) & 0xfffff`
+ * as 5 hex chars. The hash covers the serialized body, so the patch must happen
+ * after serialization — hence wrapping `globalThis.fetch` rather than the payload.
  */
 
 import { xxh64 } from './xxhash'
@@ -18,21 +12,19 @@ import { xxh64 } from './xxhash'
 export const BILLING_HEADER_PREFIX = 'x-anthropic-billing-header:'
 export const CCH_PLACEHOLDER = 'cch=00000'
 
-// XXH64 seed Claude Code uses for the attestation.
 const CCH_SEED = 0x4d659218e32a3268n
 
 const encoder = new TextEncoder()
 
-// Anchor the placeholder to the *first system block*. The Anthropic SDK
-// serializes `messages` before `system`, so this exact byte sequence can only
-// appear where we inject the billing header (system[0]); user content in
-// `messages` can never collide with it.
+// Anchor the placeholder to the first system block. The Anthropic SDK serializes
+// `messages` before `system`, so these bytes can only appear at the billing
+// header we injected; user content in `messages` can never collide with them.
 const BILLING_SYSTEM_MARKER = encoder.encode(
   `"system":[{"type":"text","text":"${BILLING_HEADER_PREFIX}`,
 )
 const CCH_PLACEHOLDER_BYTES = encoder.encode(CCH_PLACEHOLDER)
-// The placeholder must sit within this many bytes after the marker, otherwise
-// something reshaped system[0] and we refuse to patch an unrelated match.
+// Placeholder must sit within this many bytes of the marker, else something
+// reshaped system[0] and we refuse to patch an unrelated match.
 const CCH_SEARCH_WINDOW = 150
 
 type PatchResult = 'patched' | 'no-billing-header' | 'unanchored' | 'unavailable'
@@ -42,7 +34,7 @@ function patchCch(body: Uint8Array): PatchResult {
     return 'unavailable'
   }
 
-  // Buffer.indexOf is a native memmem; the marker sits ~99% through the body
+  // Buffer.indexOf is a native memmem; the marker sits near the body's end
   // (messages serialize first), so a hand-rolled scan would walk the whole payload.
   const view = Buffer.from(body.buffer, body.byteOffset, body.byteLength)
   const markerIdx = view.indexOf(BILLING_SYSTEM_MARKER)
@@ -66,9 +58,9 @@ function patchCch(body: Uint8Array): PatchResult {
 type FetchImpl = typeof fetch
 
 /**
- * Wrap a fetch implementation so that outgoing request bodies carrying the
- * `cch=00000` placeholder get their attestation patched in place. Every other
- * request passes through byte-for-byte untouched, so a global install is safe.
+ * Wrap fetch so request bodies carrying the `cch=00000` placeholder get their
+ * attestation patched in place. Every other request passes through byte-for-byte,
+ * so a global install is safe.
  */
 export function wrapFetchForCch(base: FetchImpl): FetchImpl {
   const wrapped: FetchImpl = (input, init) => {
@@ -76,10 +68,10 @@ export function wrapFetchForCch(base: FetchImpl): FetchImpl {
     if (typeof body === 'string' && body.includes(CCH_PLACEHOLDER)) {
       const encoded = encoder.encode(body)
       if (patchCch(encoded) === 'unanchored') {
-        // Placeholder present but not anchored to system[0] (e.g. another hook
-        // reshaped the block). Send as-is rather than fail the request, but say so.
+        // Placeholder present but not anchored to system[0]. Send as-is rather
+        // than fail the request, but say so.
         console.warn(
-          '[claude-max] cch placeholder present but not anchored; sending unattested request',
+          '[claude-oauth] cch placeholder present but not anchored; sending request with cch left unset',
         )
       }
       return base(input, { ...init, body: encoded })
