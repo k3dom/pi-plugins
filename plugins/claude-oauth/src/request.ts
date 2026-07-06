@@ -2,10 +2,6 @@
  * Claude Code request details: identity/Stainless headers, the beta set, the
  * `x-anthropic-billing-header` system block, and `metadata.user_id`. Matching
  * these to the current Claude Code client is what lets pi's OAuth requests work.
- *
- * These values are Claude-Code-version-specific. Refresh them from a live capture
- * with `pnpm --filter @pi-plugins/claude-oauth capture --write` whenever Claude
- * Code updates (see `scripts/claude-trace.ts`).
  */
 
 import { createHash, randomUUID } from 'node:crypto'
