@@ -31,9 +31,13 @@ let fetchWrapped = false
  * does not carry the billing placeholder.
  */
 function installCchFetchWrapper(): void {
-  if (fetchWrapped) return
+  if (fetchWrapped) {
+    return
+  }
   const target = globalThis as { fetch?: typeof fetch }
-  if (typeof target.fetch !== 'function') return
+  if (typeof target.fetch !== 'function') {
+    return
+  }
   target.fetch = wrapFetchForCch(target.fetch.bind(globalThis) as typeof fetch)
   fetchWrapped = true
 }
@@ -49,11 +53,17 @@ function isOAuthAnthropicPayload(payload: AnthropicPayload): boolean {
 
 /** Text of the first user message — the seed for the billing-header fingerprint. */
 function firstUserMessageText(messages: AnthropicPayload['messages']): string {
-  if (!messages) return ''
+  if (!messages) {
+    return ''
+  }
   for (const message of messages) {
-    if (message.role !== 'user') continue
+    if (message.role !== 'user') {
+      continue
+    }
     const content = message.content
-    if (typeof content === 'string') return content
+    if (typeof content === 'string') {
+      return content
+    }
     if (Array.isArray(content)) {
       const parts: string[] = []
       for (const block of content) {
@@ -63,7 +73,9 @@ function firstUserMessageText(messages: AnthropicPayload['messages']): string {
           (block as SystemTextBlock).type === 'text'
         ) {
           const text = (block as SystemTextBlock).text
-          if (typeof text === 'string') parts.push(text)
+          if (typeof text === 'string') {
+            parts.push(text)
+          }
         }
       }
       return parts.join('')
@@ -74,7 +86,9 @@ function firstUserMessageText(messages: AnthropicPayload['messages']): string {
 }
 
 export default function claudeMax(pi: ExtensionAPI): void {
-  if (process.env['PI_CLAUDE_MAX_DISABLE'] === '1') return
+  if (process.env['PI_CLAUDE_MAX_DISABLE'] === '1') {
+    return
+  }
 
   installCchFetchWrapper()
 
@@ -85,9 +99,14 @@ export default function claudeMax(pi: ExtensionAPI): void {
 
   pi.on('before_provider_request', (event) => {
     const payload = event.payload as AnthropicPayload | null
-    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.system))
-      return
-    if (!isOAuthAnthropicPayload(payload)) return
+    // Returning `undefined` leaves the payload unchanged (pi's documented
+    // before_provider_request contract); returning `payload` replaces it.
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.system)) {
+      return undefined
+    }
+    if (!isOAuthAnthropicPayload(payload)) {
+      return undefined
+    }
 
     // 1. Prepend the Claude Code billing-header block as system[0]. The `cch`
     //    placeholder is attested by the global fetch wrapper after serialization.

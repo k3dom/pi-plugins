@@ -162,7 +162,9 @@ function parseArgs(argv: readonly string[]): Options | 'help' {
     const arg = argv[i]
     const next = (): string => {
       const value = argv[++i]
-      if (value === undefined) throw new Error(`${arg} requires a value`)
+      if (value === undefined) {
+        throw new Error(`${arg} requires a value`)
+      }
       return value
     }
     switch (arg) {
@@ -266,7 +268,11 @@ function headerValue(
   name: string,
 ): string | undefined {
   const lower = name.toLowerCase()
-  for (const h of headers) if (h.name.toLowerCase() === lower) return h.value
+  for (const h of headers) {
+    if (h.name.toLowerCase() === lower) {
+      return h.value
+    }
+  }
   return undefined
 }
 
@@ -281,7 +287,9 @@ class RequestParser {
     const out: CapturedRequest[] = []
     while (true) {
       const headEnd = this.#buffer.indexOf(CRLF2)
-      if (headEnd < 0) break
+      if (headEnd < 0) {
+        break
+      }
       const headText = this.#buffer.subarray(0, headEnd).toString('latin1')
       const lines = headText.split('\r\n')
       const [method = '', target = ''] = (lines[0] ?? '').split(/\s+/u)
@@ -289,7 +297,9 @@ class RequestParser {
       for (let i = 1; i < lines.length; i++) {
         const line = lines[i] ?? ''
         const colon = line.indexOf(':')
-        if (colon <= 0) continue
+        if (colon <= 0) {
+          continue
+        }
         headers.push({
           name: line.slice(0, colon),
           value: line.slice(colon + 1).trim(),
@@ -300,7 +310,9 @@ class RequestParser {
         10,
       )
       const bodyStart = headEnd + CRLF2.length
-      if (this.#buffer.length < bodyStart + length) break
+      if (this.#buffer.length < bodyStart + length) {
+        break
+      }
       const body = this.#buffer.subarray(bodyStart, bodyStart + length)
       this.#buffer = this.#buffer.subarray(bodyStart + length)
       out.push({
@@ -334,10 +346,14 @@ interface ConnectTarget {
 
 function parseConnectTarget(raw: string): ConnectTarget | null {
   const colon = raw.lastIndexOf(':')
-  if (colon <= 0) return null
+  if (colon <= 0) {
+    return null
+  }
   const host = raw.slice(0, colon)
   const port = Number.parseInt(raw.slice(colon + 1), 10)
-  if (!host || !Number.isSafeInteger(port) || port <= 0 || port > 65535) return null
+  if (!host || !Number.isSafeInteger(port) || port <= 0 || port > 65535) {
+    return null
+  }
   return { host, port }
 }
 
@@ -362,7 +378,9 @@ class CaptureProxy {
       this.#server.once('error', reject)
       this.#server.listen(port, '127.0.0.1', () => {
         const addr = this.#server.address()
-        if (addr && typeof addr === 'object') this.port = addr.port
+        if (addr && typeof addr === 'object') {
+          this.port = addr.port
+        }
         resolve()
       })
     })
@@ -378,7 +396,9 @@ class CaptureProxy {
     const onData = (chunk: Buffer): void => {
       buffer = Buffer.concat([buffer, chunk])
       const end = buffer.indexOf(CRLF2)
-      if (end < 0) return
+      if (end < 0) {
+        return
+      }
       socket.removeListener('data', onData)
       const headLine = buffer
         .subarray(0, buffer.indexOf(Buffer.from('\r\n')))
@@ -395,9 +415,14 @@ class CaptureProxy {
         return
       }
       socket.write('HTTP/1.1 200 Connection Established\r\n\r\n', () => {
-        if (rest.length > 0) socket.unshift(rest)
-        if (target.host === MITM_HOST) this.#mitm(socket, target)
-        else this.#tunnel(socket, target)
+        if (rest.length > 0) {
+          socket.unshift(rest)
+        }
+        if (target.host === MITM_HOST) {
+          this.#mitm(socket, target)
+        } else {
+          this.#tunnel(socket, target)
+        }
       })
     }
     socket.on('data', onData)
@@ -434,18 +459,28 @@ class CaptureProxy {
     upstream.pipe(clientTls)
 
     clientTls.on('data', (chunk: Buffer) => {
-      if (this.#captured) return
+      if (this.#captured) {
+        return
+      }
       for (const request of parser.push(chunk)) {
-        if (request.pathname !== '/v1/messages') continue
-        if (this.#skip && requestModel(request).includes(this.#skip)) continue
+        if (request.pathname !== '/v1/messages') {
+          continue
+        }
+        if (this.#skip && requestModel(request).includes(this.#skip)) {
+          continue
+        }
         pending = request
         awaitingStatus = true
       }
     })
     upstream.on('data', (chunk: Buffer) => {
-      if (!awaitingStatus || !pending || this.#captured) return
+      if (!awaitingStatus || !pending || this.#captured) {
+        return
+      }
       const text = chunk.toString('latin1')
-      if (!text.startsWith('HTTP/')) return
+      if (!text.startsWith('HTTP/')) {
+        return
+      }
       awaitingStatus = false
       this.#captured = true
       this.#onCapture({
@@ -484,9 +519,13 @@ interface AnthropicBody {
 
 function firstUserMessageText(body: AnthropicBody): string {
   for (const message of body.messages ?? []) {
-    if (message.role !== 'user') continue
+    if (message.role !== 'user') {
+      continue
+    }
     const content = message.content
-    if (typeof content === 'string') return content
+    if (typeof content === 'string') {
+      return content
+    }
     if (Array.isArray(content)) {
       const parts: string[] = []
       for (const block of content) {
@@ -496,7 +535,9 @@ function firstUserMessageText(body: AnthropicBody): string {
           (block as { type?: string }).type === 'text'
         ) {
           const text = (block as { text?: string }).text
-          if (typeof text === 'string') parts.push(text)
+          if (typeof text === 'string') {
+            parts.push(text)
+          }
         }
       }
       return parts.join('')
@@ -517,18 +558,27 @@ function extract(request: CapturedRequest): Extracted {
   const values: Record<string, string> = {}
   const ua = headerValue(request.headers, 'user-agent') ?? ''
   const { code, sdk } = userAgentVersions(ua)
-  if (code) values['CLAUDE_CODE_VERSION'] = code
-  if (sdk) values['CLAUDE_AGENT_SDK_VERSION'] = sdk
+  if (code) {
+    values['CLAUDE_CODE_VERSION'] = code
+  }
+  if (sdk) {
+    values['CLAUDE_AGENT_SDK_VERSION'] = sdk
+  }
   const clientVersion = headerValue(request.headers, 'anthropic-client-version')
-  if (clientVersion) values['CLAUDE_CLIENT_VERSION'] = clientVersion
+  if (clientVersion) {
+    values['CLAUDE_CLIENT_VERSION'] = clientVersion
+  }
   const stainlessPkg = headerValue(request.headers, 'x-stainless-package-version')
-  if (stainlessPkg) values['CLAUDE_CODE_STAINLESS_PACKAGE_VERSION'] = stainlessPkg
+  if (stainlessPkg) {
+    values['CLAUDE_CODE_STAINLESS_PACKAGE_VERSION'] = stainlessPkg
+  }
   const stainlessRuntime = headerValue(
     request.headers,
     'x-stainless-runtime-version',
   )
-  if (stainlessRuntime)
+  if (stainlessRuntime) {
     values['CLAUDE_CODE_STAINLESS_RUNTIME_VERSION'] = stainlessRuntime
+  }
 
   const betas = (headerValue(request.headers, 'anthropic-beta') ?? '')
     .split(',')
@@ -566,7 +616,9 @@ function extract(request: CapturedRequest): Extracted {
       }
     }
   }
-  if (identityMarker) values['PI_OAUTH_SYSTEM_MARKER'] = identityMarker
+  if (identityMarker) {
+    values['PI_OAUTH_SYSTEM_MARKER'] = identityMarker
+  }
 
   return {
     values,
@@ -674,7 +726,9 @@ function report(capture: Capture, extracted: Extracted, source: string): boolean
   for (const [name, value] of Object.entries(extracted.values)) {
     const current = currentConstant(source, name)
     const same = current === value
-    if (!same) allGood = false
+    if (!same) {
+      allGood = false
+    }
     const mark = same ? `${GREEN}=${RESET}` : `${YELLOW}≠${RESET}`
     const display = name === 'PI_OAUTH_SYSTEM_MARKER' ? JSON.stringify(value) : value
     const currentDisplay =
@@ -689,7 +743,9 @@ function report(capture: Capture, extracted: Extracted, source: string): boolean
   const currentBetaList = currentBetas(source)
   const betasSame =
     JSON.stringify(currentBetaList) === JSON.stringify(extracted.betas)
-  if (!betasSame) allGood = false
+  if (!betasSame) {
+    allGood = false
+  }
   console.log(
     `  ${betasSame ? `${GREEN}=${RESET}` : `${YELLOW}≠${RESET}`} CLAUDE_CODE_AGENT_BETAS (${extracted.betas.length}):`,
   )
@@ -698,8 +754,9 @@ function report(capture: Capture, extracted: Extracted, source: string): boolean
     console.log(`      ${known ? ' ' : `${YELLOW}+${RESET}`} ${beta}`)
   }
   for (const beta of currentBetaList) {
-    if (!extracted.betas.includes(beta))
+    if (!extracted.betas.includes(beta)) {
       console.log(`      ${RED}-${RESET} ${DIM}${beta}${RESET}`)
+    }
   }
 
   if (extracted.billing) {
@@ -710,7 +767,9 @@ function report(capture: Capture, extracted: Extracted, source: string): boolean
 
   console.log('\nverification (against captured bytes):')
   for (const check of verify(capture.request, extracted)) {
-    if (!check.ok) allGood = false
+    if (!check.ok) {
+      allGood = false
+    }
     const mark = check.ok ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`
     console.log(`  ${mark} ${check.label}  ${DIM}${check.detail}${RESET}`)
   }
@@ -748,8 +807,11 @@ function writeBack(extracted: Extracted): void {
   }
 
   for (const [name, value] of Object.entries(extracted.values)) {
-    if (name === 'CLAUDE_CODE_MAX_OUTPUT_TOKENS') replaceNumber(name, value)
-    else replaceString(name, value)
+    if (name === 'CLAUDE_CODE_MAX_OUTPUT_TOKENS') {
+      replaceNumber(name, value)
+    } else {
+      replaceString(name, value)
+    }
   }
 
   if (extracted.betas.length > 0) {
@@ -841,8 +903,9 @@ async function run(opts: Options): Promise<void> {
     const extracted = extract(capture.request)
     const allGood = report(capture, extracted, source)
 
-    if (opts.write) writeBack(extracted)
-    else if (!allGood) {
+    if (opts.write) {
+      writeBack(extracted)
+    } else if (!allGood) {
       console.log(
         `\n${DIM}run again with --write to patch src/fingerprint.ts${RESET}`,
       )
@@ -858,8 +921,11 @@ async function run(opts: Options): Promise<void> {
     throw new Error(`${message}${tail}`, { cause: error })
   } finally {
     proxy.close()
-    if (!opts.keepCert) rmSync(cert.dir, { recursive: true, force: true })
-    else console.error(`${DIM}debug cert kept at ${cert.dir}${RESET}`)
+    if (!opts.keepCert) {
+      rmSync(cert.dir, { recursive: true, force: true })
+    } else {
+      console.error(`${DIM}debug cert kept at ${cert.dir}${RESET}`)
+    }
   }
 }
 

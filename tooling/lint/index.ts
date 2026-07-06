@@ -8,6 +8,7 @@ export default defineConfig({
   },
   plugins: ['oxc', 'typescript', 'unicorn', 'import'],
   rules: {
+    curly: ['error', 'all'],
     'no-unused-vars': [
       'error',
       {

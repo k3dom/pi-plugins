@@ -38,20 +38,28 @@ const CCH_SEARCH_WINDOW = 150
 type PatchResult = 'patched' | 'no-billing-header' | 'unanchored' | 'unavailable'
 
 function patchCch(body: Uint8Array): PatchResult {
-  if (!xxh64) return 'unavailable'
+  if (!xxh64) {
+    return 'unavailable'
+  }
 
   // Buffer.indexOf is a native memmem; the marker sits ~99% through the body
   // (messages serialize first), so a hand-rolled scan would walk the whole payload.
   const view = Buffer.from(body.buffer, body.byteOffset, body.byteLength)
   const markerIdx = view.indexOf(BILLING_SYSTEM_MARKER)
-  if (markerIdx === -1) return 'no-billing-header'
+  if (markerIdx === -1) {
+    return 'no-billing-header'
+  }
 
   const searchFrom = markerIdx + BILLING_SYSTEM_MARKER.length
   const idx = view.indexOf(CCH_PLACEHOLDER_BYTES, searchFrom)
-  if (idx === -1 || idx - searchFrom > CCH_SEARCH_WINDOW) return 'unanchored'
+  if (idx === -1 || idx - searchFrom > CCH_SEARCH_WINDOW) {
+    return 'unanchored'
+  }
 
   const cch = (xxh64(body, CCH_SEED) & 0xfffffn).toString(16).padStart(5, '0')
-  for (let i = 0; i < 5; i++) body[idx + 4 + i] = cch.charCodeAt(i)
+  for (let i = 0; i < 5; i++) {
+    body[idx + 4 + i] = cch.charCodeAt(i)
+  }
   return 'patched'
 }
 
