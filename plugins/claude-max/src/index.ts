@@ -154,10 +154,6 @@ function applyFingerprint(payload: AnthropicPayload): void {
 }
 
 export default function claudeMax(pi: ExtensionAPI): void {
-  if (process.env['PI_CLAUDE_MAX_DISABLE'] === '1') {
-    return
-  }
-
   installCchFetchWrapper()
   // Refresh the Anthropic request fingerprint (User-Agent, betas, Stainless /
   // client headers) to match current Claude Code. Header-only registration
