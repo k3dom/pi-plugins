@@ -6,45 +6,42 @@ import {
   platform as osPlatform,
   userInfo,
 } from 'node:os'
-import { BILLING_HEADER_PREFIX, CCH_PLACEHOLDER } from './cch'
+import { Array, Match, Predicate } from 'effect'
 import {
+  CCH_PLACEHOLDER,
   CLAUDE_AGENT_SDK_VERSION,
   CLAUDE_CLIENT_VERSION,
   CLAUDE_CODE_AGENT_BETAS,
+  CLAUDE_CODE_BILLING_FINGERPRINT_INDICES,
+  CLAUDE_CODE_BILLING_FINGERPRINT_SALT,
+  CLAUDE_CODE_BILLING_HEADER_PREFIX,
+  CLAUDE_CODE_MAX_OUTPUT_TOKENS,
   CLAUDE_CODE_STAINLESS_PACKAGE_VERSION,
   CLAUDE_CODE_STAINLESS_RUNTIME_VERSION,
   CLAUDE_CODE_VERSION,
+  PI_OAUTH_SYSTEM_MARKER,
 } from './constants'
+import { sanitizeSystemText } from './system-prompt'
+import { firstUserMessageText, isTextBlock } from './utils'
 
 // The `os.arch()` / `os.platform()` values the SDK reports, mapped to the labels
 // Stainless emits. Anything unlisted falls through to an `other::<value>` marker.
-const STAINLESS_ARCH: Record<string, string> = {
-  amd64: 'x64',
-  x64: 'x64',
-  arm64: 'arm64',
-  aarch64: 'arm64',
-  '386': 'x86',
-  x86: 'x86',
-  ia32: 'x86',
-}
+const mapStainlessArch = (value: string): string =>
+  Match.value(value.toLowerCase()).pipe(
+    Match.whenOr('amd64', 'x64', () => 'x64'),
+    Match.whenOr('arm64', 'aarch64', () => 'arm64'),
+    Match.whenOr('386', 'x86', 'ia32', () => 'x86'),
+    Match.orElse((key) => `other::${key}`),
+  )
 
-const STAINLESS_OS: Record<string, string> = {
-  darwin: 'MacOS',
-  win32: 'Windows',
-  windows: 'Windows',
-  linux: 'Linux',
-  freebsd: 'FreeBSD',
-}
-
-function mapStainlessArch(value: string): string {
-  const key = value.toLowerCase()
-  return STAINLESS_ARCH[key] ?? `other::${key}`
-}
-
-function mapStainlessOs(value: string): string {
-  const key = value.toLowerCase()
-  return STAINLESS_OS[key] ?? `Other::${key}`
-}
+const mapStainlessOs = (value: string): string =>
+  Match.value(value.toLowerCase()).pipe(
+    Match.when('darwin', () => 'MacOS'),
+    Match.whenOr('win32', 'windows', () => 'Windows'),
+    Match.when('linux', () => 'Linux'),
+    Match.when('freebsd', () => 'FreeBSD'),
+    Match.orElse((key) => `Other::${key}`),
+  )
 
 // Static headers merged over pi's Anthropic defaults. pi merges provider headers
 // last, and the SDK applies `defaultHeaders` after its auto-generated
@@ -68,43 +65,101 @@ export function buildProviderHeaders(): Record<string, string> {
   }
 }
 
-// Claude Code fingerprints the billing header with
-// `SHA256(salt + msg[4] + msg[7] + msg[20] + version)[:3]`. The salt and indices
-// are pinned to the client and verified by `scripts/claude-trace.ts`.
-const BILLING_FINGERPRINT_SALT = '59cf53e54c78'
-const BILLING_FINGERPRINT_INDICES = [4, 7, 20] as const
-
 /**
  * Builds the `x-anthropic-billing-header` text for system[0]. The `cch=00000`
  * placeholder is filled in later by the fetch wrapper once the body is serialized.
  */
-export function createBillingHeader(firstUserMessage: string): string {
-  const fingerprintSeed = BILLING_FINGERPRINT_INDICES.map(
+function createBillingHeader(firstUserMessage: string): string {
+  const fingerprintSeed = CLAUDE_CODE_BILLING_FINGERPRINT_INDICES.map(
     (i) => firstUserMessage[i] ?? '0',
   ).join('')
   const versionSuffix = createHash('sha256')
-    .update(`${BILLING_FINGERPRINT_SALT}${fingerprintSeed}${CLAUDE_CODE_VERSION}`)
+    .update(
+      `${CLAUDE_CODE_BILLING_FINGERPRINT_SALT}${fingerprintSeed}${CLAUDE_CODE_VERSION}`,
+    )
     .digest('hex')
     .slice(0, 3)
-  return `${BILLING_HEADER_PREFIX} cc_version=${CLAUDE_CODE_VERSION}.${versionSuffix}; cc_entrypoint=local-agent; ${CCH_PLACEHOLDER};`
+  return `${CLAUDE_CODE_BILLING_HEADER_PREFIX} cc_version=${CLAUDE_CODE_VERSION}.${versionSuffix}; cc_entrypoint=local-agent; ${CCH_PLACEHOLDER};`
 }
 
 // Claude Code sends `metadata.user_id` as a JSON `{ device_id, session_id }`
-// envelope. device_id is machine-stable; session_id is per process.
-function resolveMachineSeed(): string {
-  try {
-    // userInfo() can throw in locked-down sandboxes; hostname/homedir are safe.
-    return `${hostname()}:${userInfo().username}:${homedir()}`
-  } catch {
-    return `${hostname()}:claude-oauth-fallback`
-  }
+// envelope: device_id is machine-stable, session_id is per process. userInfo()
+// can throw in locked-down sandboxes, so fall back to a hostname-only seed.
+let machineSeed: string
+try {
+  machineSeed = `${hostname()}:${userInfo().username}:${homedir()}`
+} catch {
+  machineSeed = `${hostname()}:claude-oauth-fallback`
 }
-
 const deviceId = createHash('sha256')
-  .update(`claude-oauth-device-v1:${resolveMachineSeed()}`)
+  .update(`claude-oauth-device-v1:${machineSeed}`)
   .digest('hex')
 const sessionId = randomUUID()
 
-export function claudeUserId(): string {
-  return JSON.stringify({ device_id: deviceId, session_id: sessionId })
+interface SystemBlock {
+  type?: string
+  text?: string
+}
+
+interface AnthropicPayload {
+  messages?: Array<{ role?: string; content?: unknown }>
+  system?: SystemBlock[]
+  max_tokens?: number
+  metadata?: { user_id?: unknown }
+}
+
+/**
+ * Rewrites an OAuth Anthropic payload to match the Claude Code client, returning
+ * it. Returns `undefined` — leaving the request unchanged — for any payload that
+ * is not a Claude Code OAuth request.
+ *
+ * The payload is mutated in place rather than decoded/re-encoded so that fields
+ * this plugin does not model pass through byte-for-byte.
+ */
+export function rewriteForClaudeCode(
+  payload: unknown,
+): AnthropicPayload | undefined {
+  if (!Predicate.isObject(payload)) {
+    return undefined
+  }
+  const typed = payload as AnthropicPayload
+  // Only Claude Code OAuth requests carry the identity marker as system[0].
+  const system = typed.system
+  if (!Array.isArray(system) || system[0]?.text !== PI_OAUTH_SYSTEM_MARKER) {
+    return undefined
+  }
+
+  // Rewrite pi's self-references to Claude Code in every system block except the
+  // identity marker, so the whole prompt stays consistent. Emptied blocks drop out.
+  const normalized = Array.flatMap(system, (block) => {
+    if (!isTextBlock(block) || block.text === PI_OAUTH_SYSTEM_MARKER) {
+      return [block]
+    }
+    const text = sanitizeSystemText(block.text)
+    return text ? [{ ...block, text }] : []
+  })
+
+  // Prepend the billing-header block; its `cch` placeholder is filled in by the
+  // fetch wrapper once the body is serialized.
+  normalized.unshift({
+    type: 'text',
+    text: createBillingHeader(firstUserMessageText(typed.messages ?? [])),
+  })
+  typed.system = normalized
+
+  if (!Predicate.isString(typed.metadata?.user_id)) {
+    typed.metadata = {
+      ...typed.metadata,
+      user_id: JSON.stringify({ device_id: deviceId, session_id: sessionId }),
+    }
+  }
+
+  if (
+    Predicate.isNumber(typed.max_tokens) &&
+    typed.max_tokens > CLAUDE_CODE_MAX_OUTPUT_TOKENS
+  ) {
+    typed.max_tokens = CLAUDE_CODE_MAX_OUTPUT_TOKENS
+  }
+
+  return typed
 }

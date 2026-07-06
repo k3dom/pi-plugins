@@ -1,7 +1,6 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { wrapFetchForCch } from './cch'
-import { rewriteForClaudeCode } from './payload'
-import { buildProviderHeaders } from './request'
+import { buildProviderHeaders, rewriteForClaudeCode } from './request'
 
 let fetchWrapped = false
 

@@ -1,3 +1,5 @@
+import { Array, Option, pipe, Predicate, Schema } from 'effect'
+
 const MASK = (1n << 64n) - 1n
 const PRIME64_1 = 11400714785074694791n
 const PRIME64_2 = 14029467366897019727n
@@ -75,4 +77,39 @@ export function xxHash64(input: Uint8Array, seed: bigint): bigint {
   h64 = (h64 * PRIME64_3) & MASK
   h64 ^= h64 >> 32n
   return h64 & MASK
+}
+
+const TextBlock = Schema.Struct({
+  type: Schema.Literal('text'),
+  text: Schema.String,
+})
+
+/** Narrows an unknown content block to an Anthropic `{ type: 'text', text }` block. */
+export const isTextBlock = Schema.is(TextBlock)
+
+/** Concatenated text of the first user message — the seed for the billing header. */
+export function firstUserMessageText(
+  messages: ReadonlyArray<{ role?: string; content?: unknown }>,
+): string {
+  return pipe(
+    Array.findFirst(messages, (message) => message.role === 'user'),
+    Option.match({
+      onNone: () => '',
+      onSome: (message) => {
+        const content = message.content
+        if (Predicate.isString(content)) {
+          return content
+        }
+        if (Array.isArray(content)) {
+          return pipe(
+            content,
+            Array.filter(isTextBlock),
+            Array.map((block) => block.text),
+            Array.join(''),
+          )
+        }
+        return ''
+      },
+    }),
+  )
 }

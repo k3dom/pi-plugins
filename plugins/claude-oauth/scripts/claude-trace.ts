@@ -46,8 +46,8 @@ import { fileURLToPath } from 'node:url'
 const MITM_HOST = 'api.anthropic.com'
 const BILLING_PREFIX = 'x-anthropic-billing-header:'
 const BILLING_SYSTEM_MARKER = `"system":[{"type":"text","text":"${BILLING_PREFIX}`
-// Must stay in sync with src/cch.ts / src/request.ts — the script verifies
-// these against the captured bytes and reports a mismatch rather than trusting them.
+// Must stay in sync with src/constants.ts — the script verifies these against the
+// captured bytes and reports a mismatch rather than trusting them.
 const CCH_SEED = 0x4d659218e32a3268n
 const FINGERPRINT_SALT = '59cf53e54c78'
 const FINGERPRINT_INDICES = [4, 7, 20] as const
@@ -60,7 +60,7 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 const CONSTANTS_FILE = path.join(SCRIPT_DIR, '..', 'src', 'constants.ts')
 const encoder = new TextEncoder()
 
-// ── xxh64 (mirror of src/xxhash.ts; kept inline so the script has no imports) ─
+// ── xxh64 (mirror of src/utils.ts; kept inline so the script has no imports) ──
 
 const MASK = (1n << 64n) - 1n
 const P1 = 11400714785074694791n
