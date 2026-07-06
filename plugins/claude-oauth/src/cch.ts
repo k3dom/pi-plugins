@@ -7,7 +7,7 @@
  * after serialization — hence wrapping `globalThis.fetch` rather than the payload.
  */
 
-import { xxh64 } from './xxhash'
+import { xxHash64 } from './xxhash'
 
 export const BILLING_HEADER_PREFIX = 'x-anthropic-billing-header:'
 export const CCH_PLACEHOLDER = 'cch=00000'
@@ -27,13 +27,9 @@ const CCH_PLACEHOLDER_BYTES = encoder.encode(CCH_PLACEHOLDER)
 // reshaped system[0] and we refuse to patch an unrelated match.
 const CCH_SEARCH_WINDOW = 150
 
-type PatchResult = 'patched' | 'no-billing-header' | 'unanchored' | 'unavailable'
+type PatchResult = 'patched' | 'no-billing-header' | 'unanchored'
 
 function patchCch(body: Uint8Array): PatchResult {
-  if (!xxh64) {
-    return 'unavailable'
-  }
-
   // Buffer.indexOf is a native memmem; the marker sits near the body's end
   // (messages serialize first), so a hand-rolled scan would walk the whole payload.
   const view = Buffer.from(body.buffer, body.byteOffset, body.byteLength)
@@ -48,7 +44,7 @@ function patchCch(body: Uint8Array): PatchResult {
     return 'unanchored'
   }
 
-  const cch = (xxh64(body, CCH_SEED) & 0xfffffn).toString(16).padStart(5, '0')
+  const cch = (xxHash64(body, CCH_SEED) & 0xfffffn).toString(16).padStart(5, '0')
   for (let i = 0; i < 5; i++) {
     body[idx + 4 + i] = cch.charCodeAt(i)
   }

@@ -1,8 +1,5 @@
 /**
- * XXH64, used to reproduce Claude Code's `cch` request-integrity value. Prefers
- * Bun's native xxHash64, falling back to a BigInt implementation. Both are
- * validated at load against XXH64("", seed=0); if neither matches, `xxh64` is
- * null and callers leave the `cch` value unpatched.
+ * XXH64, used to reproduce Claude Code's `cch` request-integrity value.
  */
 
 const MASK = (1n << 64n) - 1n
@@ -11,8 +8,6 @@ const PRIME64_2 = 14029467366897019727n
 const PRIME64_3 = 1609587929392839161n
 const PRIME64_4 = 9650029242287828579n
 const PRIME64_5 = 2870177450012600261n
-
-const KNOWN_EMPTY_HASH = 0xef46db3751d8e999n
 
 const rotl = (x: bigint, r: bigint): bigint => ((x << r) | (x >> (64n - r))) & MASK
 
@@ -26,9 +21,7 @@ const mergeRound = (acc: bigint, val: bigint): bigint => {
   return (((merged * PRIME64_1) & MASK) + PRIME64_4) & MASK
 }
 
-export type Xxh64 = (input: Uint8Array, seed: bigint) => bigint
-
-function xxh64Pure(input: Uint8Array, seed: bigint): bigint {
+export function xxHash64(input: Uint8Array, seed: bigint): bigint {
   const len = input.length
   const dv = new DataView(input.buffer, input.byteOffset, input.byteLength)
   let h64: bigint
@@ -86,26 +79,3 @@ function xxh64Pure(input: Uint8Array, seed: bigint): bigint {
   h64 ^= h64 >> 32n
   return h64 & MASK
 }
-
-declare const Bun:
-  | { hash?: { xxHash64?: (data: Uint8Array, seed?: bigint) => bigint } }
-  | undefined
-
-function selectXxh64(): Xxh64 | null {
-  const bunHash = typeof Bun !== 'undefined' ? Bun?.hash?.xxHash64 : undefined
-  if (typeof bunHash === 'function') {
-    try {
-      if ((bunHash(new Uint8Array(0), 0n) & MASK) === KNOWN_EMPTY_HASH) {
-        return (input, seed) => bunHash(input, seed) & MASK
-      }
-    } catch {
-      // Signature differs or rejects a bigint seed — fall through to the pure impl.
-    }
-  }
-  if (xxh64Pure(new Uint8Array(0), 0n) === KNOWN_EMPTY_HASH) {
-    return xxh64Pure
-  }
-  return null
-}
-
-export const xxh64: Xxh64 | null = selectXxh64()
