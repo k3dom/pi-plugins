@@ -1,6 +1,6 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { Effect, Fiber, Stream } from 'effect'
+import { Effect, Fiber, Filter, Schema, Stream } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 
 /** Cap on buffered stderr (in characters) so a pathological child can't exhaust memory. */
@@ -26,9 +26,9 @@ export interface SubagentSnapshot {
   output: string
   toolCalls: number
   usage: SubagentUsage
-  model?: string
-  stopReason?: string
-  errorMessage?: string
+  model?: string | undefined
+  stopReason?: string | undefined
+  errorMessage?: string | undefined
 }
 
 /** Final outcome of a subagent run. */
@@ -47,23 +47,87 @@ export interface RunSubagentOptions {
   onUpdate?: ((snapshot: SubagentSnapshot) => void) | undefined
 }
 
-/** Shape of the `--mode json` event lines we care about (see pi docs/json.md). */
-interface PiJsonEvent {
-  type?: string
-  message?: {
-    role?: string
-    content?: Array<{ type?: string; text?: string }>
-    usage?: {
-      input?: number
-      output?: number
-      cacheRead?: number
-      cacheWrite?: number
-      totalTokens?: number
-      cost?: { total?: number }
+/**
+ * The `--mode json` event lines we care about (see pi docs/json.md): completed
+ * assistant messages.
+ */
+const AssistantMessageEnd = Schema.fromJsonString(
+  Schema.Struct({
+    type: Schema.Literal('message_end'),
+    message: Schema.Struct({
+      role: Schema.Literal('assistant'),
+      content: Schema.Array(
+        Schema.Struct({
+          type: Schema.String,
+          text: Schema.optional(Schema.String),
+        }),
+      ),
+      usage: Schema.optional(
+        Schema.Struct({
+          input: Schema.optional(Schema.Number),
+          output: Schema.optional(Schema.Number),
+          cacheRead: Schema.optional(Schema.Number),
+          cacheWrite: Schema.optional(Schema.Number),
+          totalTokens: Schema.optional(Schema.Number),
+          cost: Schema.optional(
+            Schema.Struct({ total: Schema.optional(Schema.Number) }),
+          ),
+        }),
+      ),
+      model: Schema.optional(Schema.String),
+      stopReason: Schema.optional(Schema.String),
+      errorMessage: Schema.optional(Schema.String),
+    }),
+  }),
+)
+
+type AssistantMessage = (typeof AssistantMessageEnd)['Type']['message']
+
+const initialSnapshot: SubagentSnapshot = {
+  output: '',
+  toolCalls: 0,
+  usage: {
+    turns: 0,
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+    contextTokens: 0,
+  },
+}
+
+/** Folds one completed assistant message into the snapshot. */
+function foldMessage(
+  snapshot: SubagentSnapshot,
+  message: AssistantMessage,
+): SubagentSnapshot {
+  let output = snapshot.output
+  let toolCalls = snapshot.toolCalls
+  for (const part of message.content) {
+    if (part.type === 'text' && part.text !== undefined) {
+      output = part.text
+    } else if (part.type === 'toolCall') {
+      toolCalls += 1
     }
-    model?: string
-    stopReason?: string
-    errorMessage?: string
+  }
+
+  const usage = message.usage
+  return {
+    output,
+    toolCalls,
+    usage: {
+      turns: snapshot.usage.turns + 1,
+      input: snapshot.usage.input + (usage?.input ?? 0),
+      output: snapshot.usage.output + (usage?.output ?? 0),
+      cacheRead: snapshot.usage.cacheRead + (usage?.cacheRead ?? 0),
+      cacheWrite: snapshot.usage.cacheWrite + (usage?.cacheWrite ?? 0),
+      cost: snapshot.usage.cost + (usage?.cost?.total ?? 0),
+      contextTokens: usage?.totalTokens ?? snapshot.usage.contextTokens,
+    },
+    model: message.model ?? snapshot.model,
+    stopReason: message.stopReason ?? snapshot.stopReason,
+    errorMessage: message.errorMessage ?? snapshot.errorMessage,
   }
 }
 
@@ -89,73 +153,6 @@ function resolvePiInvocation(args: ReadonlyArray<string>): {
   }
 
   return { command: 'pi', args }
-}
-
-function emptySnapshot(): SubagentSnapshot {
-  return {
-    output: '',
-    toolCalls: 0,
-    usage: {
-      turns: 0,
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      cost: 0,
-      contextTokens: 0,
-    },
-  }
-}
-
-/** Folds one JSONL event from the subagent's stdout into the snapshot. */
-function processEventLine(line: string, snapshot: SubagentSnapshot): boolean {
-  if (!line.trim()) {
-    return false
-  }
-
-  let event: PiJsonEvent
-  try {
-    event = JSON.parse(line) as PiJsonEvent
-  } catch {
-    return false
-  }
-
-  if (event.type !== 'message_end' || event.message?.role !== 'assistant') {
-    return false
-  }
-
-  const message = event.message
-  snapshot.usage.turns += 1
-
-  const usage = message.usage
-  if (usage) {
-    snapshot.usage.input += usage.input ?? 0
-    snapshot.usage.output += usage.output ?? 0
-    snapshot.usage.cacheRead += usage.cacheRead ?? 0
-    snapshot.usage.cacheWrite += usage.cacheWrite ?? 0
-    snapshot.usage.cost += usage.cost?.total ?? 0
-    snapshot.usage.contextTokens = usage.totalTokens ?? snapshot.usage.contextTokens
-  }
-
-  if (message.model !== undefined) {
-    snapshot.model = message.model
-  }
-  if (message.stopReason !== undefined) {
-    snapshot.stopReason = message.stopReason
-  }
-  if (message.errorMessage !== undefined) {
-    snapshot.errorMessage = message.errorMessage
-  }
-
-  for (const part of message.content ?? []) {
-    if (part.type === 'text' && part.text !== undefined) {
-      snapshot.output = part.text
-    } else if (part.type === 'toolCall') {
-      snapshot.toolCalls += 1
-    }
-  }
-
-  return true
 }
 
 /**
@@ -195,8 +192,7 @@ export function runSubagent(
         },
       )
 
-      const snapshot = emptySnapshot()
-      options.onUpdate?.({ ...snapshot, usage: { ...snapshot.usage } })
+      options.onUpdate?.(initialSnapshot)
 
       const stderrFiber = yield* Effect.forkScoped(
         handle.stderr.pipe(
@@ -211,27 +207,34 @@ export function runSubagent(
         ),
       )
 
-      yield* handle.stdout.pipe(
+      const finalSnapshot = yield* handle.stdout.pipe(
         Stream.decodeText,
         Stream.splitLines,
-        Stream.runForEach((line) =>
-          Effect.sync(() => {
-            if (processEventLine(line, snapshot)) {
-              options.onUpdate?.({ ...snapshot, usage: { ...snapshot.usage } })
-            }
-          }),
+        Stream.filterMap(
+          Filter.fromPredicateOption(
+            Schema.decodeUnknownOption(AssistantMessageEnd),
+          ),
+        ),
+        Stream.runFoldEffect(
+          () => initialSnapshot,
+          (snapshot, event) =>
+            Effect.sync(() => {
+              const next = foldMessage(snapshot, event.message)
+              options.onUpdate?.(next)
+              return next
+            }),
         ),
       )
 
       const exitCode = yield* handle.exitCode
       const stderr = yield* Fiber.join(stderrFiber)
 
-      return { ...snapshot, exitCode: Number(exitCode), stderr }
+      return { ...finalSnapshot, exitCode: Number(exitCode), stderr }
     }),
   ).pipe(
     Effect.catch((error) =>
       Effect.succeed<SubagentResult>({
-        ...emptySnapshot(),
+        ...initialSnapshot,
         stopReason: 'error',
         errorMessage: `Failed to run subagent: ${error.message}`,
         exitCode: 1,
