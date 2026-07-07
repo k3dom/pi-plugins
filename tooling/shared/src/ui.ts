@@ -10,6 +10,44 @@ import {
   keyHint,
 } from '@earendil-works/pi-coding-agent'
 
+/** Row-local renderer state driving a running-spinner animation. */
+export interface SpinnerState {
+  frame?: number
+  timer?: ReturnType<typeof setTimeout>
+}
+
+/** Same braille spinner pi's own "Working..." loader uses. */
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+const SPINNER_INTERVAL_MS = 80
+
+/**
+ * Returns the current spinner frame and schedules the next animation tick.
+ *
+ * Each tick re-renders the row via `invalidate()`, which calls back into the
+ * renderer and schedules the next tick — so the animation stops by itself as
+ * soon as the row is no longer rendered. Call {@link stopSpinner} when the
+ * spinner is no longer needed to cancel the pending tick eagerly.
+ */
+export function spinnerFrame(state: SpinnerState, invalidate: () => void): string {
+  if (state.timer === undefined) {
+    state.timer = setTimeout(() => {
+      state.timer = undefined
+      state.frame = ((state.frame ?? 0) + 1) % SPINNER_FRAMES.length
+      invalidate()
+    }, SPINNER_INTERVAL_MS)
+    state.timer.unref?.()
+  }
+  return SPINNER_FRAMES[(state.frame ?? 0) % SPINNER_FRAMES.length] ?? ''
+}
+
+/** Cancels a pending spinner tick, if any. */
+export function stopSpinner(state: SpinnerState): void {
+  if (state.timer !== undefined) {
+    clearTimeout(state.timer)
+    state.timer = undefined
+  }
+}
+
 /** Joins all text blocks of a tool result into one string, stripping carriage returns. */
 export function getTextOutput(
   result: Pick<AgentToolResult<unknown>, 'content'>,
