@@ -2,10 +2,7 @@ import { truncateHead } from '@earendil-works/pi-coding-agent'
 import { formatTruncationNotice } from '@pi-plugins/shared'
 import type { SubagentUsage } from './runner'
 
-/**
- * Caps text to pi's standard tool-output limits (head-truncated), appending a
- * truncation notice when content was dropped.
- */
+/** Caps text to pi's standard tool-output limits, appending a notice when truncated. */
 export function capToolOutput(text: string): string {
   const truncation = truncateHead(text)
   return truncation.truncated
@@ -48,10 +45,7 @@ export function formatUsage(usage: SubagentUsage, model?: string): string {
   return parts.join(' ')
 }
 
-/**
- * Builds a `pi --model` pattern (`provider/id:<thinking>`) that pins the child
- * to the given model and thinking level instead of its own default resolution.
- */
+/** Builds a `pi --model` pattern (`provider/id:<thinking>`) pinning model and thinking level. */
 export function modelPattern(
   model: { provider: string; id: string },
   thinkingLevel?: string,

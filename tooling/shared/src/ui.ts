@@ -23,10 +23,9 @@ const SPINNER_INTERVAL_MS = 80
 /**
  * Returns the current spinner frame and schedules the next animation tick.
  *
- * Each tick re-renders the row via `invalidate()`, which calls back into the
- * renderer and schedules the next tick — so the animation stops by itself as
- * soon as the row is no longer rendered. Call {@link stopSpinner} when the
- * spinner is no longer needed to cancel the pending tick eagerly.
+ * Each tick invalidates the row, whose re-render schedules the next tick — so
+ * the animation stops by itself once the row is no longer rendered. Use
+ * {@link stopSpinner} to cancel the pending tick eagerly.
  */
 export function spinnerFrame(state: SpinnerState, invalidate: () => void): string {
   if (state.timer === undefined) {

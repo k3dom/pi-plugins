@@ -52,8 +52,7 @@ export default function subagent(pi: ExtensionAPI) {
       'Delegate self-contained tasks to subagents (isolated headless pi instances).',
     parameters: subagentSchema,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      // Inherit the parent's model and thinking level unless overridden, so an
-      // omitted `model` param behaves like "same model", not "child default".
+      // An omitted `model` should mean "same model", not "child default".
       const model =
         params.model ??
         (ctx.model !== undefined

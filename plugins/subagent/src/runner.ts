@@ -68,10 +68,9 @@ interface PiJsonEvent {
 }
 
 /**
- * Resolves how to spawn another instance of the currently running pi harness.
- *
- * Prefers re-running the current entry script with the current runtime,
- * falling back to the executable itself (compiled binaries) or `pi` on PATH.
+ * Resolves how to re-invoke the running pi harness: the current entry script
+ * via the current runtime, the executable itself (compiled binaries), or
+ * `pi` on PATH.
  */
 function resolvePiInvocation(args: ReadonlyArray<string>): {
   command: string
@@ -160,17 +159,12 @@ function processEventLine(line: string, snapshot: SubagentSnapshot): boolean {
 }
 
 /**
- * Runs one headless pi instance (`pi --mode json -p --no-session`) for the
- * given prompt and folds its JSONL event stream into a `SubagentResult`.
+ * Runs one headless pi instance for the given prompt and folds its JSONL
+ * event stream into a `SubagentResult`.
  *
- * The prompt is piped via stdin (pi merges piped stdin into the initial
- * prompt in print mode), avoiding OS argv length limits and keeping it out
- * of process listings.
- *
- * The spawned process lives in an Effect scope, so interruption (e.g. the
- * tool-call `AbortSignal`) terminates it automatically — SIGTERM first,
- * escalating to SIGKILL after a grace period. Spawn and stream failures are
- * mapped into a failed `SubagentResult` instead of an error channel.
+ * The prompt is piped via stdin to avoid argv length limits. Interruption
+ * kills the child via the enclosing scope, and spawn/stream failures are
+ * folded into a failed result instead of an error channel.
  */
 export function runSubagent(
   options: RunSubagentOptions,
