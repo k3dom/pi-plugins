@@ -10,6 +10,69 @@ import {
   keyHint,
 } from '@earendil-works/pi-coding-agent'
 
+/** Row-local renderer state driving a running-spinner animation. */
+export interface SpinnerState {
+  frame?: number
+  timer?: ReturnType<typeof setTimeout>
+}
+
+/** Same braille spinner pi's own "Working..." loader uses. */
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+const SPINNER_INTERVAL_MS = 80
+
+/**
+ * Returns the current spinner frame and schedules the next animation tick.
+ *
+ * Each tick invalidates the row, whose re-render schedules the next tick — so
+ * the animation stops by itself once the row is no longer rendered. Use
+ * {@link stopSpinner} to cancel the pending tick eagerly.
+ */
+export function spinnerFrame(state: SpinnerState, invalidate: () => void): string {
+  if (state.timer === undefined) {
+    state.timer = setTimeout(() => {
+      state.timer = undefined
+      state.frame = ((state.frame ?? 0) + 1) % SPINNER_FRAMES.length
+      invalidate()
+    }, SPINNER_INTERVAL_MS)
+    state.timer.unref?.()
+  }
+  return SPINNER_FRAMES[(state.frame ?? 0) % SPINNER_FRAMES.length] ?? ''
+}
+
+/** Cancels a pending spinner tick, if any. */
+export function stopSpinner(state: SpinnerState): void {
+  if (state.timer !== undefined) {
+    clearTimeout(state.timer)
+    state.timer = undefined
+  }
+}
+
+/**
+ * Wraps text into at most `maxLines` preview lines of `width` characters,
+ * marking the last line with `...` when the text was cut off.
+ */
+export function previewLines(
+  text: string,
+  maxLines: number,
+  width: number,
+): string[] {
+  const lines: string[] = []
+  outer: for (const line of text.split('\n')) {
+    for (let i = 0; i === 0 || i < line.length; i += width) {
+      lines.push(line.slice(i, i + width))
+      if (lines.length > maxLines) {
+        break outer
+      }
+    }
+  }
+  if (lines.length <= maxLines) {
+    return lines
+  }
+  const preview = lines.slice(0, maxLines)
+  preview[maxLines - 1] += '...'
+  return preview
+}
+
 /** Joins all text blocks of a tool result into one string, stripping carriage returns. */
 export function getTextOutput(
   result: Pick<AgentToolResult<unknown>, 'content'>,

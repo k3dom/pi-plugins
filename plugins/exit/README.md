@@ -1,7 +1,7 @@
 # `@pi-plugins/exit`
 
-A [pi-agent](https://github.com/earendil-works/pi) extension that exits pi when
-you submit `exit` or `quit` as the whole prompt.
+A [pi-agent](https://github.com/earendil-works/pi) extension that exits pi when you
+submit `exit` or `quit` as the whole prompt.
 
 ## Install
 
@@ -27,5 +27,5 @@ exit
 quit
 ```
 
-The extension handles the input locally and requests pi's normal graceful
-shutdown, so the prompt is not sent to the model.
+The extension handles the input locally and requests pi's normal graceful shutdown,
+so the prompt is not sent to the model.

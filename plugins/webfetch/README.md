@@ -17,8 +17,8 @@ pi -e npm:@pi-plugins/webfetch
 
 ## Tool: `web_fetch`
 
-The tool fetches a URL and returns its content as Markdown (the default) or raw
-HTML. Requests are sent with browser-like headers and transient failures are retried.
+The tool fetches a URL and returns its content as Markdown (the default) or raw HTML.
+Requests are sent with browser-like headers and transient failures are retried.
 
 ### Inputs
 
@@ -30,12 +30,12 @@ HTML. Requests are sent with browser-like headers and transient failures are ret
 
 ### Output
 
-Returns the page content as text. With `format: 'markdown'`, HTML pages are
-converted to Markdown; non-HTML responses are returned unchanged. With
-`format: 'html'`, the raw response body is returned.
+Returns the page content as text. With `format: 'markdown'`, HTML pages are converted
+to Markdown; non-HTML responses are returned unchanged. With `format: 'html'`, the
+raw response body is returned.
 
-Long content is truncated from the head to fit the tool's output budget. When
-this happens the text ends with a note such as:
+Long content is truncated from the head to fit the tool's output budget. When this
+happens the text ends with a note such as:
 
 ```
 [Truncated to 500 of 1234 lines]
