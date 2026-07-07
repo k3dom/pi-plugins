@@ -1,3 +1,4 @@
+import * as path from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 import * as NodeServices from '@effect/platform-node/NodeServices'
@@ -63,10 +64,18 @@ export default function subagent(pi: ExtensionAPI) {
           ? modelPattern(ctx.model, pi.getThinkingLevel())
           : undefined)
 
+      // Inherit the parent's active tool set (minus subagent itself) so a
+      // restricted parent (e.g. `pi --tools read`) cannot be escaped by
+      // delegating to a child with default tools.
+      const tools = pi.getActiveTools().filter((name) => name !== 'subagent')
+
       const program = runSubagent({
         prompt: params.prompt,
         model,
-        cwd: params.cwd ?? ctx.cwd,
+        // Resolve relative cwd against the parent session's cwd, not the
+        // process cwd (they can differ for resumed/cross-project sessions).
+        cwd: params.cwd !== undefined ? path.resolve(ctx.cwd, params.cwd) : ctx.cwd,
+        tools,
         onUpdate: (snapshot) => {
           onUpdate?.({
             content: [{ type: 'text', text: snapshot.output || '(running...)' }],

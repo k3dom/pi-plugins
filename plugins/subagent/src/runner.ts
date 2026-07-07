@@ -43,6 +43,8 @@ export interface RunSubagentOptions {
   model?: string | undefined
   /** Working directory for the spawned pi process. */
   cwd?: string | undefined
+  /** Tool allowlist for the child. */
+  tools?: ReadonlyArray<string> | undefined
   /** Called with a fresh snapshot whenever the subagent completes a message. */
   onUpdate?: ((snapshot: SubagentSnapshot) => void) | undefined
 }
@@ -102,15 +104,17 @@ function foldMessage(
   snapshot: SubagentSnapshot,
   message: AssistantMessage,
 ): SubagentSnapshot {
-  let output = snapshot.output
   let toolCalls = snapshot.toolCalls
+  const texts: string[] = []
   for (const part of message.content) {
     if (part.type === 'text' && part.text !== undefined) {
-      output = part.text
+      texts.push(part.text)
     } else if (part.type === 'toolCall') {
       toolCalls += 1
     }
   }
+  const text = texts.join('\n\n').trim()
+  const output = text.length > 0 ? text : snapshot.output
 
   const usage = message.usage
   return {
@@ -178,6 +182,15 @@ export function runSubagent(
         '--exclude-tools',
         'subagent',
       ]
+      // Inherit the parent's active tool set so a restricted parent
+      // (e.g. `--tools read`) cannot be escaped through the child.
+      if (options.tools !== undefined) {
+        if (options.tools.length > 0) {
+          args.push('--tools', options.tools.join(','))
+        } else {
+          args.push('--no-tools')
+        }
+      }
       if (options.model !== undefined) {
         args.push('--model', options.model)
       }
@@ -228,6 +241,22 @@ export function runSubagent(
 
       const exitCode = yield* handle.exitCode
       const stderr = yield* Fiber.join(stderrFiber)
+
+      // A clean exit without a single decoded assistant message means the
+      // child produced no usable output (wrong invocation, polluted stdout,
+      // JSON format drift, ...).
+      if (Number(exitCode) === 0 && finalSnapshot.usage.turns === 0) {
+        const detail = stderr.trim()
+        return {
+          ...finalSnapshot,
+          stopReason: 'error',
+          errorMessage:
+            'Subagent produced no assistant messages (unexpected or empty JSON event stream)' +
+            (detail.length > 0 ? `\nstderr: ${detail}` : ''),
+          exitCode: Number(exitCode),
+          stderr,
+        }
+      }
 
       return { ...finalSnapshot, exitCode: Number(exitCode), stderr }
     }),
