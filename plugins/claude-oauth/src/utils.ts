@@ -1,4 +1,4 @@
-import { Array, Option, pipe, Predicate, Schema } from 'effect'
+import { Array, Option, pipe, Predicate } from 'effect'
 
 const MASK = (1n << 64n) - 1n
 const PRIME64_1 = 11400714785074694791n
@@ -79,13 +79,11 @@ export function xxHash64(input: Uint8Array, seed: bigint): bigint {
   return h64 & MASK
 }
 
-const TextBlock = Schema.Struct({
-  type: Schema.Literal('text'),
-  text: Schema.String,
-})
+type TextBlock = { type: 'text'; text: string }
 
 /** Narrows an unknown content block to an Anthropic `{ type: 'text', text }` block. */
-export const isTextBlock = Schema.is(TextBlock)
+export const isTextBlock = (u: unknown): u is TextBlock =>
+  Predicate.isObject(u) && u['type'] === 'text' && Predicate.isString(u['text'])
 
 /** Concatenated text of the first user message — the seed for the billing header. */
 export function firstUserMessageText(
