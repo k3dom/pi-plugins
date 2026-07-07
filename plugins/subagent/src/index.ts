@@ -11,7 +11,7 @@ import {
 } from '@pi-plugins/shared'
 import { Effect } from 'effect'
 import { Type, type Static } from 'typebox'
-import { isFailure, runSubagent, type SubagentSnapshot } from './runner'
+import { emptySnapshot, runSubagent, type SubagentSnapshot } from './runner'
 import { capToolOutput, formatUsage, modelPattern } from './utils'
 
 const PROMPT_PREVIEW_LINES = 2
@@ -40,8 +40,10 @@ const subagentSchema = Type.Object({
 export type SubagentInput = Static<typeof subagentSchema>
 
 interface SubagentDetails extends SubagentSnapshot {
-  exitCode?: number
-  stderr?: string
+  /** Set on the final result when the run failed. */
+  failed?: boolean | undefined
+  errorMessage?: string | undefined
+  stderr?: string | undefined
 }
 
 export default function subagent(pi: ExtensionAPI) {
@@ -82,37 +84,42 @@ export default function subagent(pi: ExtensionAPI) {
             details: snapshot,
           })
         },
-      }).pipe(Effect.provide(NodeServices.layer))
-
-      const result = await Effect.runPromise(program, { signal })
-
-      if (isFailure(result)) {
-        const reason =
-          result.errorMessage ||
-          result.stderr.trim() ||
-          result.output ||
-          `pi exited with code ${result.exitCode}`
-        return {
+      }).pipe(
+        Effect.map((snapshot) => ({
           content: [
             {
-              type: 'text',
-              text: `Subagent ${result.stopReason ?? 'failed'}: ${capToolOutput(reason)}`,
+              type: 'text' as const,
+              text: snapshot.output ? capToolOutput(snapshot.output) : '(no output)',
             },
           ],
-          details: result,
-          isError: true,
-        }
-      }
+          details: snapshot as SubagentDetails,
+        })),
+        Effect.catch((error) => {
+          const label = error._tag === 'SubagentStopError' ? error.reason : 'failed'
+          const reason =
+            error._tag === 'PlatformError'
+              ? `Failed to run subagent: ${error.message}`
+              : error.message
+          return Effect.succeed({
+            content: [
+              {
+                type: 'text' as const,
+                text: `Subagent ${label}: ${capToolOutput(reason)}`,
+              },
+            ],
+            details: {
+              ...('snapshot' in error ? error.snapshot : emptySnapshot),
+              failed: true,
+              errorMessage: reason,
+              stderr: 'stderr' in error ? error.stderr : undefined,
+            },
+            isError: true,
+          })
+        }),
+        Effect.provide(NodeServices.layer),
+      )
 
-      return {
-        content: [
-          {
-            type: 'text',
-            text: result.output ? capToolOutput(result.output) : '(no output)',
-          },
-        ],
-        details: result,
-      }
+      return await Effect.runPromise(program, { signal })
     },
     renderCall(args, theme) {
       let text =
@@ -143,12 +150,8 @@ export default function subagent(pi: ExtensionAPI) {
       return new Text(text, 0, 0)
     },
     renderResult({ details }, { expanded, isPartial }, theme, context) {
-      const running = isPartial || details.exitCode === undefined
-      const failed =
-        !running &&
-        (details.exitCode !== 0 ||
-          details.stopReason === 'error' ||
-          details.stopReason === 'aborted')
+      const running = isPartial
+      const failed = details.failed === true
 
       if (!running) {
         stopSpinner(context.state)
@@ -167,14 +170,15 @@ export default function subagent(pi: ExtensionAPI) {
       } else if (running) {
         header += ` ${theme.fg('muted', 'starting...')}`
       }
-      if (failed && details.errorMessage) {
-        header += `\n${theme.fg('error', `Error: ${details.errorMessage}`)}`
-      }
-
       const content =
         details.output ||
         (failed ? (details.stderr?.trim() ?? '') : '') ||
         (running ? '(running...)' : '(no output)')
+
+      // Skip the error line when it would repeat the rendered content.
+      if (failed && details.errorMessage && details.errorMessage !== content) {
+        header += `\n${theme.fg('error', `Error: ${details.errorMessage}`)}`
+      }
 
       const text = new Text('', 0, 0)
       text.setText(renderExpandableText({ header, content, expanded, theme }))

@@ -1,6 +1,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { Effect, Fiber, Filter, Schema, Stream } from 'effect'
+import { Data, Effect, Fiber, Filter, Schema, Stream } from 'effect'
+import type { PlatformError } from 'effect/PlatformError'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 
 /** Cap on buffered stderr (in characters) so a pathological child can't exhaust memory. */
@@ -20,33 +21,76 @@ export interface SubagentUsage {
   contextTokens: number
 }
 
-/** Live progress of a running subagent, emitted after every completed message. */
+/**
+ * Progress of a subagent run, emitted after every completed message and
+ * returned as the final value of a successful run.
+ */
 export interface SubagentSnapshot {
-  /** Text of the most recent assistant message. */
   output: string
   toolCalls: number
   usage: SubagentUsage
   model?: string | undefined
-  stopReason?: string | undefined
-  errorMessage?: string | undefined
 }
 
-/** Final outcome of a subagent run. */
-export interface SubagentResult extends SubagentSnapshot {
-  exitCode: number
-  stderr: string
+export const emptySnapshot: SubagentSnapshot = {
+  output: '',
+  toolCalls: 0,
+  usage: {
+    turns: 0,
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+    contextTokens: 0,
+  },
 }
 
-export interface RunSubagentOptions {
-  prompt: string
-  /** Optional model override, passed to `pi --model`. */
-  model?: string | undefined
-  /** Working directory for the spawned pi process. */
-  cwd?: string | undefined
-  /** Tool allowlist for the child. */
-  tools?: ReadonlyArray<string> | undefined
-  /** Called with a fresh snapshot whenever the subagent completes a message. */
-  onUpdate?: ((snapshot: SubagentSnapshot) => void) | undefined
+/**
+ * The subagent stopped without completing its task: the child reported an
+ * `error` or `aborted` stop reason on its final assistant message.
+ */
+export class SubagentStopError extends Data.TaggedError('SubagentStopError')<{
+  readonly reason: 'error' | 'aborted'
+  /** Error detail reported by the child, if any. */
+  readonly errorMessage?: string | undefined
+  readonly stderr: string
+  /** Progress made up to the failure. */
+  readonly snapshot: SubagentSnapshot
+}> {
+  override readonly message: string =
+    this.errorMessage ||
+    this.stderr.trim() ||
+    this.snapshot.output ||
+    `run stopped (${this.reason})`
+}
+
+/** The pi child process exited with a nonzero exit code. */
+export class SubagentExitError extends Data.TaggedError('SubagentExitError')<{
+  readonly exitCode: number
+  readonly stderr: string
+  /** Progress made up to the failure. */
+  readonly snapshot: SubagentSnapshot
+}> {
+  override readonly message: string =
+    this.stderr.trim() ||
+    this.snapshot.output ||
+    `pi exited with code ${this.exitCode}`
+}
+
+/**
+ * The child exited cleanly but emitted no assistant messages, meaning it
+ * produced no usable output (wrong invocation, polluted stdout, JSON format
+ * drift, ...).
+ */
+export class SubagentNoOutputError extends Data.TaggedError(
+  'SubagentNoOutputError',
+)<{
+  readonly stderr: string
+}> {
+  override readonly message: string =
+    'Subagent produced no assistant messages (unexpected or empty JSON event stream)' +
+    (this.stderr.trim() ? `\nstderr: ${this.stderr.trim()}` : '')
 }
 
 /**
@@ -85,25 +129,18 @@ const AssistantMessageEnd = Schema.fromJsonString(
 
 type AssistantMessage = (typeof AssistantMessageEnd)['Type']['message']
 
-const initialSnapshot: SubagentSnapshot = {
-  output: '',
-  toolCalls: 0,
-  usage: {
-    turns: 0,
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    cost: 0,
-    contextTokens: 0,
-  },
+/** Fold state: the public snapshot plus the child's last reported stop info. */
+interface RunState {
+  snapshot: SubagentSnapshot
+  stopReason?: string | undefined
+  errorMessage?: string | undefined
 }
 
-/** Folds one completed assistant message into the snapshot. */
-function foldMessage(
-  snapshot: SubagentSnapshot,
-  message: AssistantMessage,
-): SubagentSnapshot {
+const initialState: RunState = { snapshot: emptySnapshot }
+
+/** Folds one completed assistant message into the run state. */
+function foldMessage(state: RunState, message: AssistantMessage): RunState {
+  const { snapshot } = state
   let toolCalls = snapshot.toolCalls
   const texts: string[] = []
   for (const part of message.content) {
@@ -118,20 +155,22 @@ function foldMessage(
 
   const usage = message.usage
   return {
-    output,
-    toolCalls,
-    usage: {
-      turns: snapshot.usage.turns + 1,
-      input: snapshot.usage.input + (usage?.input ?? 0),
-      output: snapshot.usage.output + (usage?.output ?? 0),
-      cacheRead: snapshot.usage.cacheRead + (usage?.cacheRead ?? 0),
-      cacheWrite: snapshot.usage.cacheWrite + (usage?.cacheWrite ?? 0),
-      cost: snapshot.usage.cost + (usage?.cost?.total ?? 0),
-      contextTokens: usage?.totalTokens ?? snapshot.usage.contextTokens,
+    snapshot: {
+      output,
+      toolCalls,
+      usage: {
+        turns: snapshot.usage.turns + 1,
+        input: snapshot.usage.input + (usage?.input ?? 0),
+        output: snapshot.usage.output + (usage?.output ?? 0),
+        cacheRead: snapshot.usage.cacheRead + (usage?.cacheRead ?? 0),
+        cacheWrite: snapshot.usage.cacheWrite + (usage?.cacheWrite ?? 0),
+        cost: snapshot.usage.cost + (usage?.cost?.total ?? 0),
+        contextTokens: usage?.totalTokens ?? snapshot.usage.contextTokens,
+      },
+      model: message.model ?? snapshot.model,
     },
-    model: message.model ?? snapshot.model,
-    stopReason: message.stopReason ?? snapshot.stopReason,
-    errorMessage: message.errorMessage ?? snapshot.errorMessage,
+    stopReason: message.stopReason ?? state.stopReason,
+    errorMessage: message.errorMessage ?? state.errorMessage,
   }
 }
 
@@ -161,15 +200,23 @@ function resolvePiInvocation(args: ReadonlyArray<string>): {
 
 /**
  * Runs one headless pi instance for the given prompt and folds its JSONL
- * event stream into a `SubagentResult`.
- *
- * The prompt is piped via stdin to avoid argv length limits. Interruption
- * kills the child via the enclosing scope, and spawn/stream failures are
- * folded into a failed result instead of an error channel.
+ * event stream into a `SubagentSnapshot`.
  */
-export function runSubagent(
-  options: RunSubagentOptions,
-): Effect.Effect<SubagentResult, never, ChildProcessSpawner.ChildProcessSpawner> {
+export function runSubagent(options: {
+  prompt: string
+  /** Optional model override, passed to `pi --model`. */
+  model?: string | undefined
+  /** Working directory for the spawned pi process. */
+  cwd?: string | undefined
+  /** Tool allowlist for the child. */
+  tools?: ReadonlyArray<string> | undefined
+  /** Called with a fresh snapshot whenever the subagent completes a message. */
+  onUpdate?: ((snapshot: SubagentSnapshot) => void) | undefined
+}): Effect.Effect<
+  SubagentSnapshot,
+  SubagentStopError | SubagentExitError | SubagentNoOutputError | PlatformError,
+  ChildProcessSpawner.ChildProcessSpawner
+> {
   return Effect.scoped(
     Effect.gen(function* () {
       // `--exclude-tools subagent` prevents children from recursively
@@ -205,7 +252,7 @@ export function runSubagent(
         },
       )
 
-      options.onUpdate?.(initialSnapshot)
+      options.onUpdate?.(emptySnapshot)
 
       const stderrFiber = yield* Effect.forkScoped(
         handle.stderr.pipe(
@@ -220,7 +267,7 @@ export function runSubagent(
         ),
       )
 
-      const finalSnapshot = yield* handle.stdout.pipe(
+      const state = yield* handle.stdout.pipe(
         Stream.decodeText,
         Stream.splitLines,
         Stream.filterMap(
@@ -229,55 +276,36 @@ export function runSubagent(
           ),
         ),
         Stream.runFoldEffect(
-          () => initialSnapshot,
-          (snapshot, event) =>
+          () => initialState,
+          (previous, event) =>
             Effect.sync(() => {
-              const next = foldMessage(snapshot, event.message)
-              options.onUpdate?.(next)
+              const next = foldMessage(previous, event.message)
+              options.onUpdate?.(next.snapshot)
               return next
             }),
         ),
       )
 
-      const exitCode = yield* handle.exitCode
+      const exitCode = Number(yield* handle.exitCode)
       const stderr = yield* Fiber.join(stderrFiber)
+      const { snapshot } = state
 
-      // A clean exit without a single decoded assistant message means the
-      // child produced no usable output (wrong invocation, polluted stdout,
-      // JSON format drift, ...).
-      if (Number(exitCode) === 0 && finalSnapshot.usage.turns === 0) {
-        const detail = stderr.trim()
-        return {
-          ...finalSnapshot,
-          stopReason: 'error',
-          errorMessage:
-            'Subagent produced no assistant messages (unexpected or empty JSON event stream)' +
-            (detail.length > 0 ? `\nstderr: ${detail}` : ''),
-          exitCode: Number(exitCode),
+      if (state.stopReason === 'error' || state.stopReason === 'aborted') {
+        return yield* new SubagentStopError({
+          reason: state.stopReason,
+          errorMessage: state.errorMessage,
           stderr,
-        }
+          snapshot,
+        })
+      }
+      if (exitCode !== 0) {
+        return yield* new SubagentExitError({ exitCode, stderr, snapshot })
+      }
+      if (snapshot.usage.turns === 0) {
+        return yield* new SubagentNoOutputError({ stderr })
       }
 
-      return { ...finalSnapshot, exitCode: Number(exitCode), stderr }
+      return snapshot
     }),
-  ).pipe(
-    Effect.catch((error) =>
-      Effect.succeed<SubagentResult>({
-        ...initialSnapshot,
-        stopReason: 'error',
-        errorMessage: `Failed to run subagent: ${error.message}`,
-        exitCode: 1,
-        stderr: '',
-      }),
-    ),
-  )
-}
-
-/** Whether a finished run should be reported to the model as a failure. */
-export function isFailure(result: SubagentResult): boolean {
-  return (
-    result.exitCode !== 0 ||
-    result.stopReason === 'error' ||
-    result.stopReason === 'aborted'
   )
 }
