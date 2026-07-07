@@ -24,17 +24,30 @@ export function formatTokens(count: number): string {
   return `${(count / 1000000).toFixed(1)}M`
 }
 
-/** Formats usage stats as a compact one-line summary (turns, tokens, cost, model). */
-export function formatUsage(usage: SubagentUsage, model?: string): string {
+/** Formats usage stats as a compact one-line summary (turns, tools, tokens, cost, model). */
+export function formatUsage(
+  usage: SubagentUsage,
+  model?: string,
+  toolCalls?: number,
+): string {
   const parts: string[] = []
   if (usage.turns > 0) {
     parts.push(`${usage.turns} turn${usage.turns > 1 ? 's' : ''}`)
+  }
+  if (toolCalls !== undefined && toolCalls > 0) {
+    parts.push(`${toolCalls} tool${toolCalls > 1 ? 's' : ''}`)
   }
   if (usage.input > 0) {
     parts.push(`↑${formatTokens(usage.input)}`)
   }
   if (usage.output > 0) {
     parts.push(`↓${formatTokens(usage.output)}`)
+  }
+  if (usage.cacheRead > 0) {
+    parts.push(`R${formatTokens(usage.cacheRead)}`)
+  }
+  if (usage.cacheWrite > 0) {
+    parts.push(`W${formatTokens(usage.cacheWrite)}`)
   }
   if (usage.cost > 0) {
     parts.push(`$${usage.cost.toFixed(4)}`)
@@ -43,6 +56,32 @@ export function formatUsage(usage: SubagentUsage, model?: string): string {
     parts.push(model)
   }
   return parts.join(' ')
+}
+
+/**
+ * Wraps a prompt into at most `maxLines` preview lines of `width` characters,
+ * marking the last line with `...` when the prompt was cut off.
+ */
+export function promptPreview(
+  prompt: string,
+  maxLines: number,
+  width: number,
+): string[] {
+  const lines: string[] = []
+  outer: for (const line of prompt.split('\n')) {
+    for (let i = 0; i === 0 || i < line.length; i += width) {
+      lines.push(line.slice(i, i + width))
+      if (lines.length > maxLines) {
+        break outer
+      }
+    }
+  }
+  if (lines.length <= maxLines) {
+    return lines
+  }
+  const preview = lines.slice(0, maxLines)
+  preview[maxLines - 1] += '...'
+  return preview
 }
 
 /** Builds a `pi --model` pattern (`provider/id:<thinking>`) pinning model and thinking level. */

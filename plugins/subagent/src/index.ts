@@ -10,7 +10,10 @@ import {
 import { Effect } from 'effect'
 import { Type, type Static } from 'typebox'
 import { isFailure, runSubagent, type SubagentSnapshot } from './runner'
-import { capToolOutput, formatUsage, modelPattern } from './utils'
+import { capToolOutput, formatUsage, modelPattern, promptPreview } from './utils'
+
+const PROMPT_PREVIEW_LINES = 2
+const PROMPT_PREVIEW_WIDTH = 80
 
 const subagentSchema = Type.Object({
   description: Type.String({
@@ -118,10 +121,13 @@ export default function subagent(pi: ExtensionAPI) {
       }
 
       if (args.prompt !== undefined) {
-        const firstLine = args.prompt.split('\n', 1)[0] ?? ''
-        const preview =
-          firstLine.length > 80 ? `${firstLine.slice(0, 80)}...` : firstLine
-        text += `\n  ${theme.fg('dim', preview)}`
+        for (const line of promptPreview(
+          args.prompt,
+          PROMPT_PREVIEW_LINES,
+          PROMPT_PREVIEW_WIDTH,
+        )) {
+          text += `\n${theme.fg('dim', line)}`
+        }
       }
 
       return new Text(text, 0, 0)
@@ -144,10 +150,12 @@ export default function subagent(pi: ExtensionAPI) {
           ? theme.fg('error', '✗')
           : theme.fg('success', '✓')
 
-      let header = `${icon} ${theme.fg('accent', context.args.description ?? 'subagent')}`
-      const usage = formatUsage(details.usage, details.model)
+      const usage = formatUsage(details.usage, details.model, details.toolCalls)
+      let header = icon
       if (usage) {
-        header += ` ${theme.fg('muted', `(${usage})`)}`
+        header += ` ${theme.fg('muted', usage)}`
+      } else if (running) {
+        header += ` ${theme.fg('muted', 'starting...')}`
       }
       if (failed && details.errorMessage) {
         header += `\n${theme.fg('error', `Error: ${details.errorMessage}`)}`
