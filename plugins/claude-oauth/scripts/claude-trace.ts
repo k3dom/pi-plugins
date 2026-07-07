@@ -14,6 +14,14 @@
  * it at a custom base URL suppresses them, so we transparently intercept
  * `api.anthropic.com` and blind-tunnel everything else.
  *
+ * Entrypoint caveat: this drives `claude -p`, which runs under the `sdk-cli`
+ * entrypoint, whereas the plugin emulates `local-agent` (see src/request.ts).
+ * Fields that vary by entrypoint — the system identity marker and the beta set —
+ * therefore differ and are reported as `⊘` (skipped), not drift. The version
+ * pins, the `cch` seed and the billing fingerprint are entrypoint-independent and
+ * validate normally. The fingerprint is checked against the RAW prompt, since
+ * `claude -p` wraps it in a <system-reminder> project-context block before sending.
+ *
  * Requirements: Node 24+ (runs `.ts` directly), `openssl` and `claude` on PATH,
  * and a Claude Code that is logged in via OAuth.
  *
@@ -21,7 +29,7 @@
  *   node scripts/claude-trace.ts [options]
  *
  * Options:
- *   --message <text>   Prompt to send (default: hi)
+ *   --message <text>   Prompt to send (default exercises fingerprint indices 4/7/20)
  *   --command <cmd>    Claude binary (default: claude)
  *   --port <n>         Proxy port (default: 8118; 0 = random)
  *   --timeout <ms>     Overall timeout (default: 120000)
@@ -51,6 +59,13 @@ const BILLING_SYSTEM_MARKER = `"system":[{"type":"text","text":"${BILLING_PREFIX
 const CCH_SEED = 0x4d659218e32a3268n
 const FINGERPRINT_SALT = '59cf53e54c78'
 const FINGERPRINT_INDICES = [4, 7, 20] as const
+
+// The plugin emulates the `local-agent` entrypoint (external Agent SDK consumer;
+// see src/request.ts). Driving `claude -p` instead exercises `sdk-cli`, so fields
+// that vary by entrypoint — the system identity marker and the beta set — can't be
+// validated from this capture and are reported as skipped rather than as drift.
+const PLUGIN_ENTRYPOINT = 'local-agent'
+const ENTRYPOINT_DEPENDENT_VALUE_KEYS = new Set(['PI_OAUTH_SYSTEM_MARKER'])
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 // The captured version/header/body constants the plugin pins all live here, so
@@ -151,7 +166,9 @@ const HELP = readFileSync(fileURLToPath(import.meta.url), 'utf8')
 
 function parseArgs(argv: readonly string[]): Options | 'help' {
   const opts: Options = {
-    message: 'hi',
+    // >20 chars so the billing-fingerprint indices (4, 7, 20) hit real characters
+    // instead of all falling back to '0'; otherwise that check never exercises them.
+    message: 'Reply with exactly: ok',
     command: 'claude',
     port: 8118,
     timeoutMs: 120_000,
@@ -640,7 +657,22 @@ interface Verification {
   detail: string
 }
 
-function verify(request: CapturedRequest, extracted: Extracted): Verification[] {
+// `claude -p` wraps the prompt as `<system-reminder>…</system-reminder>\n\n{prompt}`
+// (project-context injection). The billing fingerprint hashes the raw {prompt}, so
+// strip a trailing reminder wrapper when we only have the context-wrapped message.
+function rawUserPrompt(message: string): string {
+  const marker = '</system-reminder>'
+  const last = message.lastIndexOf(marker)
+  return last < 0
+    ? message
+    : message.slice(last + marker.length).replace(/^\s+/u, '')
+}
+
+function verify(
+  request: CapturedRequest,
+  extracted: Extracted,
+  rawUserMessage: string,
+): Verification[] {
   const checks: Verification[] = []
 
   // xxh64 sanity: empty-input vector.
@@ -668,10 +700,10 @@ function verify(request: CapturedRequest, extracted: Extracted): Verification[] 
     }
   }
 
-  // billing fingerprint salt + indices + slice length.
+  // billing fingerprint salt + indices + slice length. Claude fingerprints the RAW
+  // user prompt, not the context-wrapped message it transmits, so hash that.
   if (extracted.billing) {
-    const msg = extracted.firstUserMessage
-    const k = FINGERPRINT_INDICES.map((i) => msg[i] ?? '0').join('')
+    const k = FINGERPRINT_INDICES.map((i) => rawUserMessage[i] ?? '0').join('')
     const suffix = createHash('sha256')
       .update(`${FINGERPRINT_SALT}${k}${extracted.billing.version}`)
       .digest('hex')
@@ -679,7 +711,7 @@ function verify(request: CapturedRequest, extracted: Extracted): Verification[] 
     checks.push({
       label: 'billing fingerprint salt/indices',
       ok: suffix === extracted.billing.suffix,
-      detail: `computed=${suffix} observed=${extracted.billing.suffix}`,
+      detail: `computed=${suffix} observed=${extracted.billing.suffix} (k=${JSON.stringify(k)})`,
     })
   }
 
@@ -713,7 +745,12 @@ const YELLOW = '\u001b[33m'
 const DIM = '\u001b[2m'
 const RESET = '\u001b[0m'
 
-function report(capture: Capture, extracted: Extracted, source: string): boolean {
+function report(
+  capture: Capture,
+  extracted: Extracted,
+  source: string,
+  rawUserMessage: string,
+): boolean {
   let allGood = true
   const model = requestModel(capture.request)
   console.log(`\n${DIM}captured POST /v1/messages${RESET}`)
@@ -725,32 +762,63 @@ function report(capture: Capture, extracted: Extracted, source: string): boolean
     )
   }
 
+  // `claude -p` reports the `sdk-cli` entrypoint; the plugin emulates `local-agent`.
+  // When they differ, entrypoint-dependent fields can't be validated from this
+  // capture, so mark them ⊘ and keep them out of the pass/fail verdict.
+  const capturedEntrypoint = extracted.billing?.entrypoint
+  const entrypointMismatch =
+    capturedEntrypoint !== undefined && capturedEntrypoint !== PLUGIN_ENTRYPOINT
+  if (entrypointMismatch) {
+    console.log(
+      `\n  ${YELLOW}note:${RESET} captured entrypoint ${DIM}${capturedEntrypoint}${RESET} ≠ plugin entrypoint ${DIM}${PLUGIN_ENTRYPOINT}${RESET} ${DIM}(driving \`claude -p\`).${RESET}\n` +
+        `  ${DIM}Entrypoint-dependent fields (system marker, beta set) can't be validated this way;\n` +
+        `  they are marked ${RESET}${YELLOW}⊘${RESET}${DIM} and excluded from the verdict rather than counted as drift.${RESET}`,
+    )
+  }
+
   console.log('\nconstants (captured vs current):')
   for (const [name, value] of Object.entries(extracted.values)) {
     const current = currentConstant(source, name)
     const same = current === value
-    if (!same) {
+    const skipped =
+      !same && entrypointMismatch && ENTRYPOINT_DEPENDENT_VALUE_KEYS.has(name)
+    if (!same && !skipped) {
       allGood = false
     }
-    const mark = same ? `${GREEN}=${RESET}` : `${YELLOW}≠${RESET}`
+    const mark = same
+      ? `${GREEN}=${RESET}`
+      : skipped
+        ? `${YELLOW}⊘${RESET}`
+        : `${YELLOW}≠${RESET}`
     const display = name === 'PI_OAUTH_SYSTEM_MARKER' ? JSON.stringify(value) : value
     const currentDisplay =
       current === undefined
         ? `${DIM}(not found)${RESET}`
         : same
           ? `${DIM}unchanged${RESET}`
-          : `${DIM}was ${name === 'PI_OAUTH_SYSTEM_MARKER' ? JSON.stringify(current) : current}${RESET}`
+          : skipped
+            ? `${DIM}entrypoint-dependent — not validated${RESET}`
+            : `${DIM}was ${name === 'PI_OAUTH_SYSTEM_MARKER' ? JSON.stringify(current) : current}${RESET}`
     console.log(`  ${mark} ${name}: ${display}  ${currentDisplay}`)
   }
 
   const currentBetaList = currentBetas(source)
   const betasSame =
     JSON.stringify(currentBetaList) === JSON.stringify(extracted.betas)
-  if (!betasSame) {
+  // The beta set varies by entrypoint (e.g. sdk-cli drops fine-grained-tool-streaming)
+  // and by model (e.g. a 1M-context model adds context-1m), so a `claude -p` capture
+  // can't validate the plugin's local-agent set — skip the verdict, still show the diff.
+  const betasSkipped = !betasSame && entrypointMismatch
+  if (!betasSame && !betasSkipped) {
     allGood = false
   }
+  const betasMark = betasSame
+    ? `${GREEN}=${RESET}`
+    : betasSkipped
+      ? `${YELLOW}⊘${RESET}`
+      : `${YELLOW}≠${RESET}`
   console.log(
-    `  ${betasSame ? `${GREEN}=${RESET}` : `${YELLOW}≠${RESET}`} CLAUDE_CODE_AGENT_BETAS (${extracted.betas.length}):`,
+    `  ${betasMark} CLAUDE_CODE_AGENT_BETAS (${extracted.betas.length})${betasSkipped ? ` ${DIM}entrypoint/model-dependent — not validated${RESET}` : ''}:`,
   )
   for (const beta of extracted.betas) {
     const known = currentBetaList.includes(beta)
@@ -769,7 +837,7 @@ function report(capture: Capture, extracted: Extracted, source: string): boolean
   }
 
   console.log('\nverification (against captured bytes):')
-  for (const check of verify(capture.request, extracted)) {
+  for (const check of verify(capture.request, extracted, rawUserMessage)) {
     if (!check.ok) {
       allGood = false
     }
@@ -904,7 +972,12 @@ async function run(opts: Options): Promise<void> {
 
     const source = readFileSync(CONSTANTS_FILE, 'utf8')
     const extracted = extract(capture.request)
-    const allGood = report(capture, extracted, source)
+    // Claude fingerprints the raw prompt. When we spawn claude we know it exactly;
+    // in --manual mode recover it from the captured (context-wrapped) user message.
+    const rawUserMessage = opts.manual
+      ? rawUserPrompt(extracted.firstUserMessage)
+      : opts.message
+    const allGood = report(capture, extracted, source, rawUserMessage)
 
     if (opts.write) {
       writeBack(extracted)
