@@ -1,12 +1,12 @@
 # `@pi-plugins/fast-mode`
 
 A [pi-agent](https://github.com/earendil-works/pi) extension that requests a
-provider's fast (priority) service tier for configured models — faster
-inference at a higher token cost.
+provider's fast (priority) service tier for configured models — faster inference at a
+higher token cost.
 
 Fast mode is a per-model opt-in: you decide which `provider/model-id` pairs it
-applies to, and a single session toggle turns it on and off. Requests for any
-other model are left untouched.
+applies to, and a single session toggle turns it on and off. Requests for any other
+model are left untouched.
 
 ## Supported providers
 
@@ -42,8 +42,8 @@ Start a session with fast mode already enabled:
 pi --fast
 ```
 
-While fast mode is on and the current model is configured for it, a `fast`
-indicator is shown in the status line.
+While fast mode is on and the current model is configured for it, a `fast` indicator
+is shown in the status line.
 
 ## Configuration
 
@@ -63,16 +63,16 @@ Optional config file at `<agent-dir>/extensions/fast-mode.json` (typically
 }
 ```
 
-- `enabled`: fast-mode state at session start (`/fast` overrides it for the
-  session; the toggle is not written back to the file).
-- `models`: the `provider/model-id` keys fast mode applies to. The defaults
-  above are used when the file is absent. Models whose API has no fast-mode
-  support are ignored.
+- `enabled`: fast-mode state at session start (`/fast` overrides it for the session;
+  the toggle is not written back to the file).
+- `models`: the `provider/model-id` keys fast mode applies to. The defaults above are
+  used when the file is absent. Models whose API has no fast-mode support are
+  ignored.
 - `showStatus`: show the `fast` status-line indicator while active.
 
 ## Notes
 
-- The priority service tier bills at a higher rate than the default tier —
-  check your provider's pricing before leaving it enabled.
-- If another extension already set a `service_tier` on the payload, this
-  extension leaves it alone.
+- The priority service tier bills at a higher rate than the default tier — check your
+  provider's pricing before leaving it enabled.
+- If another extension already set a `service_tier` on the payload, this extension
+  leaves it alone.

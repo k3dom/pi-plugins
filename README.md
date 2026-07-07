@@ -1,11 +1,12 @@
 # pi-plugins
 
-High-quality, single-purpose plugins for the [pi-agent](https://github.com/earendil-works/pi)
-harness, built on [Effect-TS](https://effect.website) primitives.
+High-quality, single-purpose plugins for the
+[pi-agent](https://github.com/earendil-works/pi) harness, built on
+[Effect-TS](https://effect.website) primitives.
 
 Each plugin does one thing well: clear inputs, predictable outputs, and an
-implementation that leans on Effect for typed errors, resource safety, and
-composable concurrency.
+implementation that leans on Effect for typed errors, resource safety, and composable
+concurrency.
 
 ## Packages
 
@@ -40,8 +41,8 @@ Then ask pi to use the tool it registers — for example, to fetch a URL.
 
 ## Nix
 
-This repo contains a Nix flake. It builds each plugin as a package and ships a
-Home Manager module for declarative installs.
+This repo contains a Nix flake. It builds each plugin as a package and ships a Home
+Manager module for declarative installs.
 
 ### Build a plugin
 
@@ -55,9 +56,9 @@ nix build github:k3dom/pi-plugins
 
 ### Home Manager
 
-Add the flake as an input and import the module. Each plugin you enable is
-symlinked into `~/.pi/agent/extensions/<name>` for pi-agent to discover — no
-manual `pi install` step needed.
+Add the flake as an input and import the module. Each plugin you enable is symlinked
+into `~/.pi/agent/extensions/<name>` for pi-agent to discover — no manual
+`pi install` step needed.
 
 ```nix
 {
