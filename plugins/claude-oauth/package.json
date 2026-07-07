@@ -1,0 +1,70 @@
+{
+  "name": "@pi-plugins/claude-oauth",
+  "version": "0.1.0",
+  "description": "Make pi's Anthropic OAuth requests match the current Claude Code client so OAuth login works correctly.",
+  "keywords": [
+    "anthropic",
+    "claude",
+    "claude-code",
+    "oauth",
+    "pi",
+    "pi-agent",
+    "pi-extension",
+    "pi-package"
+  ],
+  "homepage": "https://github.com/k3dom/pi-plugins/tree/main/plugins/claude-oauth#readme",
+  "bugs": {
+    "url": "https://github.com/k3dom/pi-plugins/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/k3dom/pi-plugins.git",
+    "directory": "plugins/claude-oauth"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepack": "pnpm run build",
+    "build": "tsdown",
+    "capture": "node scripts/claude-trace.ts",
+    "check": "pnpm run lint && pnpm run check-types && pnpm run format:check",
+    "check-types": "tsc -b",
+    "lint": "oxlint",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
+  },
+  "dependencies": {
+    "effect": "4.0.0-beta.93"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.80.3",
+    "@pi-plugins/fmt": "workspace:*",
+    "@pi-plugins/lint": "workspace:*",
+    "@pi-plugins/tsconfig": "workspace:*",
+    "@types/node": "26.1.0",
+    "oxfmt": "0.57.0",
+    "oxlint": "1.72.0",
+    "tsdown": "0.22.3",
+    "typescript": "6.0.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./dist/index.mjs"
+    ]
+  }
+}

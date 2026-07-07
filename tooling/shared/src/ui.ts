@@ -67,7 +67,9 @@ export function renderExpandableText({
 
   if (truncation) {
     const notice = formatTruncationNotice(truncation)
-    if (notice) text += `\n${theme.fg('warning', notice)}`
+    if (notice) {
+      text += `\n${theme.fg('warning', notice)}`
+    }
   }
 
   return text
