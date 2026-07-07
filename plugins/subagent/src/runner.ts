@@ -1,8 +1,13 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { Effect, Fiber, Stream } from 'effect'
-import type { PlatformError } from 'effect/PlatformError'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+
+/** Cap on buffered stderr (in characters) so a pathological child can't exhaust memory. */
+const STDERR_CAP = 50 * 1024
+
+/** Grace period between SIGTERM and SIGKILL when terminating the child. */
+const FORCE_KILL_AFTER = '5 seconds'
 
 /** Aggregated token/cost statistics across all turns of a subagent run. */
 export interface SubagentUsage {
@@ -158,31 +163,41 @@ function processEventLine(line: string, snapshot: SubagentSnapshot): boolean {
  * Runs one headless pi instance (`pi --mode json -p --no-session`) for the
  * given prompt and folds its JSONL event stream into a `SubagentResult`.
  *
+ * The prompt is piped via stdin (pi merges piped stdin into the initial
+ * prompt in print mode), avoiding OS argv length limits and keeping it out
+ * of process listings.
+ *
  * The spawned process lives in an Effect scope, so interruption (e.g. the
- * tool-call `AbortSignal`) terminates it automatically.
+ * tool-call `AbortSignal`) terminates it automatically — SIGTERM first,
+ * escalating to SIGKILL after a grace period. Spawn and stream failures are
+ * mapped into a failed `SubagentResult` instead of an error channel.
  */
 export function runSubagent(
   options: RunSubagentOptions,
-): Effect.Effect<
-  SubagentResult,
-  PlatformError,
-  ChildProcessSpawner.ChildProcessSpawner
-> {
+): Effect.Effect<SubagentResult, never, ChildProcessSpawner.ChildProcessSpawner> {
   return Effect.scoped(
     Effect.gen(function* () {
-      const args = ['--mode', 'json', '-p', '--no-session']
+      // `--exclude-tools subagent` prevents children from recursively
+      // spawning their own subagents.
+      const args = [
+        '--mode',
+        'json',
+        '-p',
+        '--no-session',
+        '--exclude-tools',
+        'subagent',
+      ]
       if (options.model !== undefined) {
         args.push('--model', options.model)
       }
-      args.push(options.prompt)
-
       const invocation = resolvePiInvocation(args)
       const handle = yield* ChildProcess.make(
         invocation.command,
         [...invocation.args],
         {
           cwd: options.cwd,
-          stdin: 'ignore',
+          stdin: Stream.make(new TextEncoder().encode(options.prompt)),
+          forceKillAfter: FORCE_KILL_AFTER,
         },
       )
 
@@ -190,7 +205,16 @@ export function runSubagent(
       options.onUpdate?.({ ...snapshot, usage: { ...snapshot.usage } })
 
       const stderrFiber = yield* Effect.forkScoped(
-        Stream.mkString(Stream.decodeText(handle.stderr)),
+        handle.stderr.pipe(
+          Stream.decodeText,
+          Stream.runFold(
+            () => '',
+            (acc, chunk) =>
+              acc.length >= STDERR_CAP
+                ? acc
+                : acc + chunk.slice(0, STDERR_CAP - acc.length),
+          ),
+        ),
       )
 
       yield* handle.stdout.pipe(
@@ -210,6 +234,16 @@ export function runSubagent(
 
       return { ...snapshot, exitCode: Number(exitCode), stderr }
     }),
+  ).pipe(
+    Effect.catch((error) =>
+      Effect.succeed<SubagentResult>({
+        ...emptySnapshot(),
+        stopReason: 'error',
+        errorMessage: `Failed to run subagent: ${error.message}`,
+        exitCode: 1,
+        stderr: '',
+      }),
+    ),
   )
 }
 

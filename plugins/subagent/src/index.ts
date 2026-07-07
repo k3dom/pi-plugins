@@ -1,15 +1,16 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 import * as NodeServices from '@effect/platform-node/NodeServices'
-import { renderExpandableText } from '@pi-plugins/shared'
+import {
+  renderExpandableText,
+  spinnerFrame,
+  stopSpinner,
+  type SpinnerState,
+} from '@pi-plugins/shared'
 import { Effect } from 'effect'
 import { Type, type Static } from 'typebox'
-import {
-  isFailure,
-  runSubagent,
-  type SubagentSnapshot,
-  type SubagentUsage,
-} from './runner'
+import { isFailure, runSubagent, type SubagentSnapshot } from './runner'
+import { capToolOutput, formatUsage, modelPattern } from './utils'
 
 const subagentSchema = Type.Object({
   description: Type.String({
@@ -20,7 +21,8 @@ const subagentSchema = Type.Object({
   }),
   model: Type.Optional(
     Type.String({
-      description: 'Optional model override for this agent',
+      description:
+        'Optional model override for this agent (defaults to the current model and thinking level)',
     }),
   ),
   cwd: Type.Optional(
@@ -37,75 +39,6 @@ interface SubagentDetails extends SubagentSnapshot {
   stderr?: string
 }
 
-/** Row-local renderer state driving the running-spinner animation. */
-interface SpinnerState {
-  frame?: number
-  timer?: ReturnType<typeof setTimeout>
-}
-
-/** Same braille spinner pi's own "Working..." loader uses. */
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-const SPINNER_INTERVAL_MS = 80
-
-/**
- * Returns the current spinner frame and schedules the next animation tick.
- *
- * Each tick re-renders the tool row via `invalidate()`, which calls back into
- * `renderResult` and schedules the next tick — so the animation stops by
- * itself as soon as the row is no longer rendered.
- */
-function spinnerFrame(state: SpinnerState, invalidate: () => void): string {
-  if (state.timer === undefined) {
-    state.timer = setTimeout(() => {
-      state.timer = undefined
-      state.frame = ((state.frame ?? 0) + 1) % SPINNER_FRAMES.length
-      invalidate()
-    }, SPINNER_INTERVAL_MS)
-    state.timer.unref?.()
-  }
-  return SPINNER_FRAMES[(state.frame ?? 0) % SPINNER_FRAMES.length] ?? ''
-}
-
-function stopSpinner(state: SpinnerState): void {
-  if (state.timer !== undefined) {
-    clearTimeout(state.timer)
-    state.timer = undefined
-  }
-}
-
-function formatTokens(count: number): string {
-  if (count < 1000) {
-    return count.toString()
-  }
-  if (count < 10000) {
-    return `${(count / 1000).toFixed(1)}k`
-  }
-  if (count < 1000000) {
-    return `${Math.round(count / 1000)}k`
-  }
-  return `${(count / 1000000).toFixed(1)}M`
-}
-
-function formatUsage(usage: SubagentUsage, model?: string): string {
-  const parts: string[] = []
-  if (usage.turns > 0) {
-    parts.push(`${usage.turns} turn${usage.turns > 1 ? 's' : ''}`)
-  }
-  if (usage.input > 0) {
-    parts.push(`↑${formatTokens(usage.input)}`)
-  }
-  if (usage.output > 0) {
-    parts.push(`↓${formatTokens(usage.output)}`)
-  }
-  if (usage.cost > 0) {
-    parts.push(`$${usage.cost.toFixed(4)}`)
-  }
-  if (model !== undefined) {
-    parts.push(model)
-  }
-  return parts.join(' ')
-}
-
 export default function subagent(pi: ExtensionAPI) {
   pi.registerTool<typeof subagentSchema, SubagentDetails, SpinnerState>({
     name: 'subagent',
@@ -119,9 +52,17 @@ export default function subagent(pi: ExtensionAPI) {
       'Delegate self-contained tasks to subagents (isolated headless pi instances).',
     parameters: subagentSchema,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      // Inherit the parent's model and thinking level unless overridden, so an
+      // omitted `model` param behaves like "same model", not "child default".
+      const model =
+        params.model ??
+        (ctx.model !== undefined
+          ? modelPattern(ctx.model, pi.getThinkingLevel())
+          : undefined)
+
       const program = runSubagent({
         prompt: params.prompt,
-        model: params.model,
+        model,
         cwd: params.cwd ?? ctx.cwd,
         onUpdate: (snapshot) => {
           onUpdate?.({
@@ -143,7 +84,7 @@ export default function subagent(pi: ExtensionAPI) {
           content: [
             {
               type: 'text',
-              text: `Subagent ${result.stopReason ?? 'failed'}: ${reason}`,
+              text: `Subagent ${result.stopReason ?? 'failed'}: ${capToolOutput(reason)}`,
             },
           ],
           details: result,
@@ -152,7 +93,12 @@ export default function subagent(pi: ExtensionAPI) {
       }
 
       return {
-        content: [{ type: 'text', text: result.output || '(no output)' }],
+        content: [
+          {
+            type: 'text',
+            text: result.output ? capToolOutput(result.output) : '(no output)',
+          },
+        ],
         details: result,
       }
     },
