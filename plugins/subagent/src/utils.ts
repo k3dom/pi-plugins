@@ -58,32 +58,6 @@ export function formatUsage(
   return parts.join(' ')
 }
 
-/**
- * Wraps a prompt into at most `maxLines` preview lines of `width` characters,
- * marking the last line with `...` when the prompt was cut off.
- */
-export function promptPreview(
-  prompt: string,
-  maxLines: number,
-  width: number,
-): string[] {
-  const lines: string[] = []
-  outer: for (const line of prompt.split('\n')) {
-    for (let i = 0; i === 0 || i < line.length; i += width) {
-      lines.push(line.slice(i, i + width))
-      if (lines.length > maxLines) {
-        break outer
-      }
-    }
-  }
-  if (lines.length <= maxLines) {
-    return lines
-  }
-  const preview = lines.slice(0, maxLines)
-  preview[maxLines - 1] += '...'
-  return preview
-}
-
 /** Builds a `pi --model` pattern (`provider/id:<thinking>`) pinning model and thinking level. */
 export function modelPattern(
   model: { provider: string; id: string },

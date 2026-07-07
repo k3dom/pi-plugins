@@ -2,6 +2,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import {
+  previewLines,
   renderExpandableText,
   spinnerFrame,
   stopSpinner,
@@ -10,7 +11,7 @@ import {
 import { Effect } from 'effect'
 import { Type, type Static } from 'typebox'
 import { isFailure, runSubagent, type SubagentSnapshot } from './runner'
-import { capToolOutput, formatUsage, modelPattern, promptPreview } from './utils'
+import { capToolOutput, formatUsage, modelPattern } from './utils'
 
 const PROMPT_PREVIEW_LINES = 2
 const PROMPT_PREVIEW_WIDTH = 80
@@ -121,7 +122,7 @@ export default function subagent(pi: ExtensionAPI) {
       }
 
       if (args.prompt !== undefined) {
-        for (const line of promptPreview(
+        for (const line of previewLines(
           args.prompt,
           PROMPT_PREVIEW_LINES,
           PROMPT_PREVIEW_WIDTH,

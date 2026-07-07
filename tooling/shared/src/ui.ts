@@ -47,6 +47,32 @@ export function stopSpinner(state: SpinnerState): void {
   }
 }
 
+/**
+ * Wraps text into at most `maxLines` preview lines of `width` characters,
+ * marking the last line with `...` when the text was cut off.
+ */
+export function previewLines(
+  text: string,
+  maxLines: number,
+  width: number,
+): string[] {
+  const lines: string[] = []
+  outer: for (const line of text.split('\n')) {
+    for (let i = 0; i === 0 || i < line.length; i += width) {
+      lines.push(line.slice(i, i + width))
+      if (lines.length > maxLines) {
+        break outer
+      }
+    }
+  }
+  if (lines.length <= maxLines) {
+    return lines
+  }
+  const preview = lines.slice(0, maxLines)
+  preview[maxLines - 1] += '...'
+  return preview
+}
+
 /** Joins all text blocks of a tool result into one string, stripping carriage returns. */
 export function getTextOutput(
   result: Pick<AgentToolResult<unknown>, 'content'>,
