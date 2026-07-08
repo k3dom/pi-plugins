@@ -5,20 +5,19 @@ description:
 argument-hint: '[PR | branch | path]'
 ---
 
-You are reviewing the quality of the changed code, not hunting for bugs. Review it
+You are reviewing the quality of the changed code, not hunting for bugs — review it
 for reuse, simplification, efficiency, and altitude issues and report what you find.
-This review is read-only: do NOT edit any files — just surface the opportunities so a
-human can decide what to act on. Do not look for correctness bugs.
+This review is read-only: do NOT edit any files, just surface the opportunities for a
+human to act on.
 
 ## Phase 0 — Gather the diff
 
 Run `git diff @{upstream}...HEAD` (or `git diff main...HEAD` / `git diff HEAD~1` if
 there's no upstream) to get the unified diff under review. If there are uncommitted
 changes, or the range diff is empty, also run `git diff HEAD` and include the
-working-tree changes in scope — the review often runs before the commit. If a PR
-number, branch name, or file path was passed as an argument, review that target
-instead — the argument passed to this command (empty if none) is: $ARGUMENTS. Treat
-this diff as the review scope.
+working-tree changes in scope. If a PR number, branch name, or file path was passed
+as an argument, review that target instead — the argument passed to this command
+(empty if none) is: $ARGUMENTS.
 
 ## Phase 1 — Review (4 cleanup agents in parallel)
 
@@ -43,10 +42,9 @@ that does the same job.
 
 Flag wasted work the diff introduces: redundant computation or repeated I/O,
 independent operations run sequentially, blocking work added to startup or hot paths.
-Also flag long-lived objects built from closures or captured environments — they keep
-the entire enclosing scope alive for the object's lifetime (a memory leak when that
-scope holds large values); prefer a class/struct that copies only the fields it
-needs. Name the cheaper alternative.
+Also flag long-lived objects built from closures or captured environments — they pin
+the whole enclosing scope for their lifetime; prefer a class/struct that copies only
+the fields it needs. Name the cheaper alternative.
 
 ### Altitude
 
@@ -69,4 +67,4 @@ duplicated, wasted, or harder to maintain), `suggestion` (the simpler or cheaper
 that does the same job), and `category` — a short kebab-case slug for the angle that
 produced it (`reuse`, `simplification`, `efficiency`, or `altitude`). If nothing is
 worth changing, report an empty `findings` list and confirm the code is already
-clean. Do not make the changes yourself — leave that decision to the human.
+clean.
