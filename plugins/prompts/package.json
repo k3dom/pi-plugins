@@ -1,0 +1,39 @@
+{
+  "name": "@pi-plugins/prompts",
+  "version": "0.1.0",
+  "description": "Prompt templates for pi-agent: /simplify and /code-review.",
+  "keywords": [
+    "code-review",
+    "pi",
+    "pi-agent",
+    "pi-package",
+    "pi-prompt",
+    "prompt-template",
+    "prompts",
+    "refactor",
+    "simplify"
+  ],
+  "homepage": "https://github.com/k3dom/pi-plugins/tree/main/plugins/prompts#readme",
+  "bugs": {
+    "url": "https://github.com/k3dom/pi-plugins/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/k3dom/pi-plugins.git",
+    "directory": "plugins/prompts"
+  },
+  "files": [
+    "prompts",
+    "README.md"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "prompts": [
+      "./prompts"
+    ]
+  }
+}
