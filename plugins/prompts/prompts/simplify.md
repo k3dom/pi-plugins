@@ -71,5 +71,5 @@ most-impactful first. Each entry has:
 - `category` — short kebab-case slug for the angle that produced it (`reuse`,
   `simplification`, `efficiency`, or `altitude`)
 
-If nothing is worth changing, report an empty `findings` list and confirm the code
-is already clean — do not manufacture findings to have something to say.
+If nothing is worth changing, report an empty `findings` list and confirm the code is
+already clean — do not manufacture findings to have something to say.

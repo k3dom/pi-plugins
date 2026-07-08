@@ -10,14 +10,14 @@ concurrency.
 
 ## Packages
 
-| Package                                | Description                                                                                                 | Tools / commands            |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------- | --------------------------- |
-| [`webfetch`](plugins/webfetch)         | Fetches content over HTTP(S) and returns them as Markdown or raw HTML.                                      | `web_fetch`                 |
-| [`subagent`](plugins/subagent)         | Delegates a task to a fresh, headless pi instance with an isolated context window.                          | `subagent`                  |
-| [`fast-mode`](plugins/fast-mode)       | Toggles fast, priority inference for configured models on supported providers.                              | `/fast`, `--fast`           |
-| [`claude-oauth`](plugins/claude-oauth) | Makes pi's Anthropic OAuth requests match the current Claude Code client so OAuth login works correctly.    | —                           |
-| [`exit`](plugins/exit)                 | Exits pi when `exit` or `quit` is submitted as the whole prompt.                                            | —                           |
-| [`prompts`](plugins/prompts)           | A collection of prompt templates, invoked as slash commands. | `/simplify`, `/code-review` |
+| Package                                | Description                                                                                              | Tools / commands            |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------- |
+| [`webfetch`](plugins/webfetch)         | Fetches content over HTTP(S) and returns them as Markdown or raw HTML.                                   | `web_fetch`                 |
+| [`subagent`](plugins/subagent)         | Delegates a task to a fresh, headless pi instance with an isolated context window.                       | `subagent`                  |
+| [`fast-mode`](plugins/fast-mode)       | Toggles fast, priority inference for configured models on supported providers.                           | `/fast`, `--fast`           |
+| [`claude-oauth`](plugins/claude-oauth) | Makes pi's Anthropic OAuth requests match the current Claude Code client so OAuth login works correctly. | —                           |
+| [`exit`](plugins/exit)                 | Exits pi when `exit` or `quit` is submitted as the whole prompt.                                         | —                           |
+| [`prompts`](plugins/prompts)           | A collection of prompt templates, invoked as slash commands.                                             | `/simplify`, `/code-review` |
 
 ## Usage
 
