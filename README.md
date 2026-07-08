@@ -17,7 +17,7 @@ concurrency.
 | [`fast-mode`](plugins/fast-mode)       | Toggles fast, priority inference for configured models on supported providers.                              | `/fast`, `--fast`           |
 | [`claude-oauth`](plugins/claude-oauth) | Makes pi's Anthropic OAuth requests match the current Claude Code client so OAuth login works correctly.    | —                           |
 | [`exit`](plugins/exit)                 | Exits pi when `exit` or `quit` is submitted as the whole prompt.                                            | —                           |
-| [`prompts`](plugins/prompts)           | Read-only diff-review prompt templates: cleanup/quality opportunities and high-recall correctness findings. | `/simplify`, `/code-review` |
+| [`prompts`](plugins/prompts)           | A collection of prompt templates, invoked as slash commands. | `/simplify`, `/code-review` |
 
 ## Usage
 

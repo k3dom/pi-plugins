@@ -1,6 +1,6 @@
 # `@pi-plugins/prompts`
 
-Read-only diff-review prompt templates for
+A collection of prompt templates for
 [pi-agent](https://github.com/earendil-works/pi), invoked as `/<name>` slash
 commands.
 
