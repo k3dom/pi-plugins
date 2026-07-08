@@ -62,9 +62,14 @@ that you judge to be a false positive. Do NOT edit any files.
 ## Output
 
 Report the surviving findings as your final message: a `findings` list ranked
-most-impactful first. Each entry has `file`, `line`, `summary`, `cost` (what is
-duplicated, wasted, or harder to maintain), `suggestion` (the simpler or cheaper form
-that does the same job), and `category` — a short kebab-case slug for the angle that
-produced it (`reuse`, `simplification`, `efficiency`, or `altitude`). If nothing is
-worth changing, report an empty `findings` list and confirm the code is already
-clean.
+most-impactful first. Each entry has:
+
+- `file`, `line`
+- `summary` — one matter-of-fact sentence; don't inflate the issue
+- `cost` — what is concretely duplicated, wasted, or harder to maintain
+- `suggestion` — the simpler or cheaper form that does the same job
+- `category` — short kebab-case slug for the angle that produced it (`reuse`,
+  `simplification`, `efficiency`, or `altitude`)
+
+If nothing is worth changing, report an empty `findings` list and confirm the code
+is already clean — do not manufacture findings to have something to say.
