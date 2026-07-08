@@ -11,7 +11,12 @@ import {
 } from '@pi-plugins/shared'
 import { Effect } from 'effect'
 import { Type, type Static } from 'typebox'
-import { emptySnapshot, runSubagent, type SubagentSnapshot } from './runner'
+import {
+  emptySnapshot,
+  runSubagent,
+  type SubagentSnapshot,
+  type SubagentUsage,
+} from './runner'
 import { capToolOutput, formatUsage, modelPattern } from './utils'
 
 const PROMPT_PREVIEW_LINES = 2
@@ -47,6 +52,31 @@ interface SubagentDetails extends SubagentSnapshot {
 }
 
 export default function subagent(pi: ExtensionAPI) {
+  // Usage from finished subagent runs that has not yet been folded back into
+  // the parent session's totals.
+  const pending: SubagentUsage[] = []
+
+  // Fold subagent usage back into the parent session so the footer's
+  // cumulative token/cost stats include delegated work.
+  pi.on('message_end', ({ message }) => {
+    if (
+      message.role !== 'assistant' ||
+      message.usage.totalTokens <= 0 ||
+      pending.length === 0
+    ) {
+      return undefined
+    }
+    const usage = { ...message.usage, cost: { ...message.usage.cost } }
+    for (const run of pending.splice(0)) {
+      usage.input += run.input
+      usage.output += run.output
+      usage.cacheRead += run.cacheRead
+      usage.cacheWrite += run.cacheWrite
+      usage.cost.total += run.cost
+    }
+    return { message: { ...message, usage } }
+  })
+
   pi.registerTool<typeof subagentSchema, SubagentDetails, SpinnerState>({
     name: 'subagent',
     label: 'Subagent',
@@ -95,6 +125,7 @@ export default function subagent(pi: ExtensionAPI) {
           details: snapshot as SubagentDetails,
         })),
         Effect.catch((error) => {
+          const snapshot = 'snapshot' in error ? error.snapshot : emptySnapshot
           const label = error._tag === 'SubagentStopError' ? error.reason : 'failed'
           const reason =
             error._tag === 'PlatformError'
@@ -108,7 +139,7 @@ export default function subagent(pi: ExtensionAPI) {
               },
             ],
             details: {
-              ...('snapshot' in error ? error.snapshot : emptySnapshot),
+              ...snapshot,
               failed: true,
               errorMessage: reason,
               stderr: 'stderr' in error ? error.stderr : undefined,
@@ -116,6 +147,7 @@ export default function subagent(pi: ExtensionAPI) {
             isError: true,
           })
         }),
+        Effect.tap(({ details }) => Effect.sync(() => pending.push(details.usage))),
         Effect.provide(NodeServices.layer),
       )
 
