@@ -1,11 +1,12 @@
 ---
-description: High-recall correctness review of a diff, ranked by severity
+description: Correctness review of a diff, ranked by severity
 argument-hint: '[PR | branch | path]'
 ---
 
-You are reviewing for **recall** at extra-high effort: catch every real bug. At this
-level, catching real bugs matters more than avoiding false positives — a missed bug
-ships. Err on the side of surfacing.
+You are doing a correctness review of a diff: your job is to catch every real bug
+before it ships. Catching a real bug matters more than avoiding a false positive — a
+missed bug ships, while a false positive just gets dismissed. When in doubt, surface
+it.
 
 ## Phase 0 — Gather the diff
 
@@ -17,11 +18,12 @@ number, branch name, or file path was passed as an argument, review that target
 instead — the argument passed to this command (empty if none) is: $ARGUMENTS. Treat
 this diff as the review scope.
 
-## Phase 1 — Find candidates (5 correctness angles + 3 cleanup angles + 1 altitude angle + 1 conventions angle, up to 8 each)
+## Phase 1 — Find candidates
 
-Run **10 independent finder angles** via the `subagent` tool. Each surfaces **up to 8
-candidate findings**. Do NOT let one angle's conclusions suppress another's — if two
-angles flag the same line for different reasons, record both.
+Run **multiple independent finder sub-agents with different angles** via the
+`subagent` tool. Each surfaces **up to 8 candidate findings**. Do NOT let one angle's
+conclusions suppress another's — if two angles flag the same line for different
+reasons, record both.
 
 ### Angle A — line-by-line diff scan
 
@@ -106,8 +108,7 @@ it return exactly one of:
 
 Keep candidates where the vote is CONFIRMED or PLAUSIBLE.
 
-This is recall mode — a single non-REFUTED vote carries the finding. Do NOT drop on
-uncertainty.
+A single non-REFUTED vote carries the finding. Do NOT drop on uncertainty.
 
 ## Phase 3 — Sweep for gaps
 
@@ -124,7 +125,7 @@ not pad.
 ## Output
 
 Report this review's results as your final message: a `level` (the review effort,
-here recall/extra-high) and a `findings` list of at most 15 entries ranked
+here extra-high) and a `findings` list of at most 15 entries ranked
 most-severe first. Each entry has `file`, `line`, `summary`, `failure_scenario`, and
 `category` — a short kebab-case slug for the angle that produced it (`correctness`,
 `simplification`, `efficiency`, `reuse`, `altitude`, `conventions`, or a more

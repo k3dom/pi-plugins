@@ -22,7 +22,7 @@ this diff as the review scope.
 
 ## Phase 1 — Review (4 cleanup agents in parallel)
 
-Launch **4 independent review agents** via the `subagent` tool, all in a single
+Launch **4 independent review sub-agents** via the `subagent` tool, all in a single
 message so they run concurrently. Pass each agent the diff and one of the four angles
 below. Each returns its findings with `file`, `line`, a one-line `summary`, and the
 concrete cost (what is duplicated, wasted, or harder to maintain).
