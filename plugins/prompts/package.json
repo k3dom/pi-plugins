@@ -1,6 +1,6 @@
 {
   "name": "@pi-plugins/prompts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Prompt templates for pi-agent: /simplify and /code-review.",
   "keywords": [
     "code-review",
