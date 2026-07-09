@@ -52,12 +52,10 @@ interface SubagentDetails extends SubagentSnapshot {
 }
 
 export default function subagent(pi: ExtensionAPI) {
-  // Usage from finished subagent runs that has not yet been folded back into
-  // the parent session's totals.
   const pending: SubagentUsage[] = []
 
-  // Fold subagent usage back into the parent session so the footer's
-  // cumulative token/cost stats include delegated work.
+  // Fold subagent cost back into the parent session so the footer's cumulative
+  // cost includes delegated work.
   pi.on('message_end', ({ message }) => {
     if (
       message.role !== 'assistant' ||
@@ -66,15 +64,14 @@ export default function subagent(pi: ExtensionAPI) {
     ) {
       return undefined
     }
-    const usage = { ...message.usage, cost: { ...message.usage.cost } }
+    const cost = { ...message.usage.cost }
     for (const run of pending.splice(0)) {
-      usage.input += run.input
-      usage.output += run.output
-      usage.cacheRead += run.cacheRead
-      usage.cacheWrite += run.cacheWrite
-      usage.cost.total += run.cost
+      // Only `cost.total` is folded. The per-request token fields (input, output,
+      // cacheRead, cacheWrite) must stay untouched as they are used by pi's auto-compaction heuristics.
+      // Cost is only ever summed for display, so it is safe to fold.
+      cost.total += run.cost
     }
-    return { message: { ...message, usage } }
+    return { message: { ...message, usage: { ...message.usage, cost } } }
   })
 
   pi.registerTool<typeof subagentSchema, SubagentDetails, SpinnerState>({
