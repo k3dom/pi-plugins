@@ -212,6 +212,20 @@ const OPENCODE_OPENAI_COMPLETIONS_LONG_CACHE_RETENTION_UNSUPPORTED_MODELS = new 
 	"opencode-go:kimi-k2.6",
 ]);
 
+// GitHub's "Models with extended capabilities" table lists these Copilot models as supporting
+// the extended 1 million token context window.
+const GITHUB_COPILOT_EXTENDED_CONTEXT_MODELS = new Set([
+	"claude-fable-5",
+	"claude-opus-4.6",
+	"claude-opus-4.7",
+	"claude-opus-4.8",
+	"claude-sonnet-4.6",
+	"claude-sonnet-5",
+	"gpt-5.3-codex",
+	"gpt-5.4",
+	"gpt-5.5",
+]);
+
 // Checked manually against the authenticated GitHub Copilot /models endpoint on 2026-06-15.
 // Keep this to narrow corrections over models.dev metadata instead of snapshotting Copilot's catalog.
 const GITHUB_COPILOT_THINKING_LEVEL_OVERRIDES = {
@@ -1534,38 +1548,50 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			thinkingFormat: "deepseek",
 		};
 		const xiaomiVariants = [
-			{ provider: "xiaomi", baseUrl: "https://api.xiaomimimo.com/v1" },
-			{ provider: "xiaomi-token-plan-cn", baseUrl: "https://token-plan-cn.xiaomimimo.com/v1" },
-			{ provider: "xiaomi-token-plan-ams", baseUrl: "https://token-plan-ams.xiaomimimo.com/v1" },
-			{ provider: "xiaomi-token-plan-sgp", baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1" },
+			{ source: "xiaomi", provider: "xiaomi", baseUrl: "https://api.xiaomimimo.com/v1" },
+			{
+				source: "xiaomi-token-plan-cn",
+				provider: "xiaomi-token-plan-cn",
+				baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+			},
+			{
+				source: "xiaomi-token-plan-ams",
+				provider: "xiaomi-token-plan-ams",
+				baseUrl: "https://token-plan-ams.xiaomimimo.com/v1",
+			},
+			{
+				source: "xiaomi-token-plan-sgp",
+				provider: "xiaomi-token-plan-sgp",
+				baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+			},
 		] as const;
 
-		if (data.xiaomi?.models) {
-			for (const { provider, baseUrl } of xiaomiVariants) {
-				for (const [modelId, model] of Object.entries(data.xiaomi.models)) {
-					const m = model as ModelsDevModel;
-					if (m.tool_call !== true) continue;
-					if (provider.startsWith("xiaomi-token-plan-") && modelId === "mimo-v2-flash") continue;
+		for (const { source, provider, baseUrl } of xiaomiVariants) {
+			const providerModels = data[source]?.models;
+			if (!providerModels) continue;
 
-					models.push({
-						id: modelId,
-						name: m.name || modelId,
-						api: "openai-completions",
-						provider,
-						baseUrl,
-						compat: xiaomiCompat,
-						reasoning: m.reasoning === true,
-						input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
-						cost: {
-							input: m.cost?.input || 0,
-							output: m.cost?.output || 0,
-							cacheRead: m.cost?.cache_read || 0,
-							cacheWrite: m.cost?.cache_write || 0,
-						},
-						contextWindow: m.limit?.context || 4096,
-						maxTokens: m.limit?.output || 4096,
-					});
-				}
+			for (const [modelId, model] of Object.entries(providerModels)) {
+				const m = model as ModelsDevModel;
+				if (m.tool_call !== true) continue;
+
+				models.push({
+					id: modelId,
+					name: m.name || modelId,
+					api: "openai-completions",
+					provider,
+					baseUrl,
+					compat: xiaomiCompat,
+					reasoning: m.reasoning === true,
+					input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
+					cost: {
+						input: m.cost?.input || 0,
+						output: m.cost?.output || 0,
+						cacheRead: m.cost?.cache_read || 0,
+						cacheWrite: m.cost?.cache_write || 0,
+					},
+					contextWindow: m.limit?.context || 4096,
+					maxTokens: m.limit?.output || 4096,
+				});
 			}
 		}
 
@@ -1594,11 +1620,14 @@ async function generateModels() {
 
 	// Temporary overrides until upstream model metadata is corrected.
 	for (const candidate of allModels) {
+		if (candidate.provider === "github-copilot" && GITHUB_COPILOT_EXTENDED_CONTEXT_MODELS.has(candidate.id)) {
+			candidate.contextWindow = 1000000;
+		}
+
 		if (
 			(candidate.provider === "anthropic" ||
 				candidate.provider === "opencode" ||
-				candidate.provider === "opencode-go" ||
-				candidate.provider === "github-copilot") &&
+				candidate.provider === "opencode-go") &&
 			(candidate.id === "claude-opus-4-6" ||
 				candidate.id === "claude-sonnet-4-6" ||
 				candidate.id === "claude-opus-4.6" ||
