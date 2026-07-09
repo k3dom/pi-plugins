@@ -20,4 +20,4 @@ implementation details.
 
 Subtrees are tracked in `.agents/repos/.subtrees` and managed with
 `scripts/add-subtree.sh` (add a new repo) and `scripts/update-subtree.sh` (pull
-latest). They are excluded from the Nix build source in `flake.nix`.
+latest).

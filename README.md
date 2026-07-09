@@ -43,52 +43,11 @@ Then ask pi to use the tool it registers — for example, to fetch a URL.
 
 ## Nix
 
-This repo contains a Nix flake. It builds each plugin as a package and ships a Home
-Manager module for declarative installs.
-
-### Build a plugin
+This repo contains a Nix flake with a development shell for local checks.
 
 ```bash
-# A single plugin
-nix build github:k3dom/pi-plugins#webfetch
-
-# Every plugin at once
-nix build github:k3dom/pi-plugins
-```
-
-### Home Manager
-
-Add the flake as an input and import the module. Each plugin you enable is symlinked
-into `~/.pi/agent/extensions/<name>` for pi-agent to discover — no manual
-`pi install` step needed.
-
-```nix
-{
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    home-manager.url = "github:nix-community/home-manager";
-    pi-plugins = {
-      url = "github:k3dom/pi-plugins";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-  };
-
-  outputs = {nixpkgs, home-manager, pi-plugins, ...}: {
-    homeConfigurations."alice" = home-manager.lib.homeManagerConfiguration {
-      pkgs = nixpkgs.legacyPackages.x86_64-linux;
-      modules = [
-        pi-plugins.homeModules.default
-        {
-          programs.pi-plugins = {
-            fast-mode.enable = true;
-            webfetch.enable = true;
-            # ...enable more plugins here as needed.
-          };
-        }
-      ];
-    };
-  };
-}
+nix develop
+ci
 ```
 
 ## License
