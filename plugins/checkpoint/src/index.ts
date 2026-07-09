@@ -4,7 +4,7 @@ import type {
   SessionEntry,
 } from '@earendil-works/pi-coding-agent'
 import * as NodeServices from '@effect/platform-node/NodeServices'
-import { Effect, Option, pipe, Schema } from 'effect'
+import { Array, Effect, Option, pipe, Schema } from 'effect'
 import { Snapshotter, SnapshotterError } from './snapshot'
 
 /** `customType` of the hidden session entries that carry a snapshot tree hash. */
@@ -17,11 +17,7 @@ const CHOICE_CANCEL = 'Cancel navigation'
 
 /** The tree hash stored on `entry`, if it is one of our checkpoint entries. */
 function checkpointOf(entry: SessionEntry | undefined): string | undefined {
-  if (
-    entry === undefined ||
-    entry.type !== 'custom' ||
-    entry.customType !== CHECKPOINT_TYPE
-  ) {
+  if (entry?.type !== 'custom' || entry.customType !== CHECKPOINT_TYPE) {
     return undefined
   }
 
@@ -39,12 +35,12 @@ function nearestCheckpoint(
 ): string | undefined {
   for (let id = fromId; id !== null; ) {
     const entry = session.getEntry(id)
-    if (entry === undefined) {
+    if (!entry) {
       return undefined
     }
 
     const tree = checkpointOf(entry)
-    if (tree !== undefined) {
+    if (tree) {
       return tree
     }
 
@@ -61,16 +57,15 @@ function restoreTree(
   session: ExtensionContext['sessionManager'],
   targetId: string,
 ): string | undefined {
-  for (const entry of session.getEntries()) {
-    if (entry.parentId === targetId) {
-      const tree = checkpointOf(entry)
-      if (tree !== undefined) {
-        return tree
-      }
-    }
-  }
-
-  return nearestCheckpoint(session, targetId)
+  return pipe(
+    session.getEntries(),
+    Array.findFirst((entry) =>
+      entry.parentId === targetId
+        ? Option.fromUndefinedOr(checkpointOf(entry))
+        : Option.none(),
+    ),
+    Option.getOrElse(() => nearestCheckpoint(session, targetId)),
+  )
 }
 
 export default function checkpoint(pi: ExtensionAPI) {
@@ -85,7 +80,7 @@ export default function checkpoint(pi: ExtensionAPI) {
           Effect.sync(() => {
             const expected =
               error instanceof SnapshotterError && error.kind === 'NotAWorktree'
-            if (!expected && ctx.hasUI) {
+            if (ctx.hasUI && !expected) {
               ctx.ui.notify(`Checkpoints disabled: ${error.message}`, 'warning')
             }
             return undefined
@@ -96,14 +91,14 @@ export default function checkpoint(pi: ExtensionAPI) {
   })
 
   pi.on('turn_start', async (_event, ctx) => {
-    if (snapshotter === undefined) {
+    if (!snapshotter) {
       return
     }
     // Current worktree state as a tree hash, or undefined when tracking fails.
     const tree = await Effect.runPromise(
       snapshotter.track().pipe(Effect.orElseSucceed(() => undefined)),
     )
-    if (tree === undefined) {
+    if (!tree) {
       return
     }
     const session = ctx.sessionManager
@@ -115,19 +110,19 @@ export default function checkpoint(pi: ExtensionAPI) {
   })
 
   pi.on('session_before_tree', async (event, ctx) => {
-    if (snapshotter === undefined || !ctx.hasUI) {
+    if (!snapshotter || !ctx.hasUI) {
       return undefined
     }
     const session = ctx.sessionManager
     const target = restoreTree(session, event.preparation.targetId)
-    if (target === undefined) {
+    if (!target) {
       return undefined
     }
 
     const current = await Effect.runPromise(
       snapshotter.track().pipe(Effect.orElseSucceed(() => undefined)),
     )
-    if (current === undefined || current === target) {
+    if (!current || current === target) {
       return undefined
     }
 
@@ -135,11 +130,8 @@ export default function checkpoint(pi: ExtensionAPI) {
       'Files changed since that point in the conversation. What should be restored?',
       [CHOICE_CONVERSATION, CHOICE_RESTORE, CHOICE_CANCEL],
     )
-    if (choice === CHOICE_CANCEL) {
-      return { cancel: true }
-    }
     if (choice !== CHOICE_RESTORE) {
-      return undefined
+      return choice === CHOICE_CANCEL ? { cancel: true } : undefined
     }
 
     // Preserve the abandoned state on the old branch so that navigating back
