@@ -27,10 +27,10 @@ export class SnapshotterError extends Schema.TaggedErrorClass<SnapshotterError>(
 ) {}
 
 /**
- * Snapshots a git worktree into a shadow repository (a separate `GIT_DIR`
- * outside the project).
+ * Snapshots the git worktree containing `cwd` into a shadow repository (a
+ * separate `GIT_DIR` outside the project).
  *
- * Construction fails with a `NotAWorktree` error outside git worktrees.
+ * `make` fails with a `NotAWorktree` error outside git worktrees.
  */
 export class Snapshotter extends Context.Service<Snapshotter>()(
   '@pi-plugins/checkpoint/Snapshotter',

@@ -1,30 +1,19 @@
-/**
- * Checkpoint extension: keeps `/tree` navigation and the files on disk in
- * sync.
- *
- * At the start of every agent turn the extension snapshots the worktree into
- * a shadow git repository and records the resulting tree hash as a hidden
- * custom entry in the session. When the user navigates the conversation tree,
- * it looks up the file state belonging to the target entry and — if the files
- * on disk have since diverged — asks whether to restore them as well.
- */
 import type {
   ExtensionAPI,
   ExtensionContext,
   SessionEntry,
 } from '@earendil-works/pi-coding-agent'
 import * as NodeServices from '@effect/platform-node/NodeServices'
-import { Effect, Layer, ManagedRuntime, Option, pipe, Schema } from 'effect'
+import { Effect, Option, pipe, Schema } from 'effect'
 import { Snapshotter, SnapshotterError } from './snapshot'
 
 /** `customType` of the hidden session entries that carry a snapshot tree hash. */
 const CHECKPOINT_TYPE = 'file-checkpoint'
 
+/** User-facing choices when navigating to a point with a different file state. */
 const CHOICE_CONVERSATION = 'Conversation only (keep files as they are)'
 const CHOICE_RESTORE = 'Conversation and files'
 const CHOICE_CANCEL = 'Cancel navigation'
-
-const CheckpointData = Schema.Struct({ tree: Schema.String })
 
 /** The tree hash stored on `entry`, if it is one of our checkpoint entries. */
 function checkpointOf(entry: SessionEntry | undefined): string | undefined {
@@ -37,7 +26,7 @@ function checkpointOf(entry: SessionEntry | undefined): string | undefined {
   }
 
   return pipe(
-    Schema.decodeUnknownOption(CheckpointData)(entry.data),
+    Schema.decodeUnknownOption(Schema.Struct({ tree: Schema.String }))(entry.data),
     Option.map((data) => data.tree),
     Option.getOrUndefined,
   )
@@ -67,11 +56,6 @@ function nearestCheckpoint(
 
 /**
  * The file state associated with navigating to `targetId`.
- *
- * Checkpoints are appended right after the entry that started a turn, so a
- * direct child checkpoint captures the state exactly as of `targetId`.
- * Otherwise the nearest ancestor checkpoint is the best (turn-granular)
- * approximation: at most one turn's tool changes lie between the two.
  */
 function restoreTree(
   session: ExtensionContext['sessionManager'],
@@ -89,56 +73,36 @@ function restoreTree(
   return nearestCheckpoint(session, targetId)
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-/** Runtime providing a `Snapshotter` for the worktree containing `cwd`. */
-const makeRuntime = (cwd: string) =>
-  ManagedRuntime.make(Snapshotter.layer(cwd).pipe(Layer.provide(NodeServices.layer)))
-
 export default function checkpoint(pi: ExtensionAPI) {
-  let runtime: ReturnType<typeof makeRuntime> | undefined
-
-  /** Current worktree state as a tree hash, or undefined when tracking fails. */
-  const currentTree = async (): Promise<string | undefined> => {
-    if (runtime === undefined) {
-      return undefined
-    }
-    return runtime.runPromise(
-      Snapshotter.use((snapshotter) => snapshotter.track()).pipe(
-        Effect.orElseSucceed(() => undefined),
-      ),
-    )
-  }
+  let snapshotter: Snapshotter['Service'] | undefined
 
   pi.on('session_start', async (_event, ctx) => {
-    if (runtime !== undefined) {
-      await runtime.dispose()
-      runtime = undefined
-    }
-
-    // Only active inside git worktrees; snapshotting relies on .gitignore to
-    // keep dependency/build trees out of the shadow repository. Build the
-    // layer eagerly so failures surface here instead of mid-turn.
-    const next = makeRuntime(ctx.cwd)
-    runtime = await Effect.runPromise(
-      next.contextEffect.pipe(
-        Effect.as<ReturnType<typeof makeRuntime> | undefined>(next),
-        Effect.catch((error) => {
-          const expected =
-            error instanceof SnapshotterError && error.kind === 'NotAWorktree'
-          if (!expected && ctx.hasUI) {
-            ctx.ui.notify(`Checkpoints disabled: ${error.message}`, 'warning')
-          }
-          return Effect.as(next.disposeEffect, undefined)
-        }),
+    // Only active inside git worktrees.
+    snapshotter = await Effect.runPromise(
+      Snapshotter.make(ctx.cwd).pipe(
+        Effect.provide(NodeServices.layer),
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            const expected =
+              error instanceof SnapshotterError && error.kind === 'NotAWorktree'
+            if (!expected && ctx.hasUI) {
+              ctx.ui.notify(`Checkpoints disabled: ${error.message}`, 'warning')
+            }
+            return undefined
+          }),
+        ),
       ),
     )
   })
 
   pi.on('turn_start', async (_event, ctx) => {
-    const tree = await currentTree()
+    if (snapshotter === undefined) {
+      return
+    }
+    // Current worktree state as a tree hash, or undefined when tracking fails.
+    const tree = await Effect.runPromise(
+      snapshotter.track().pipe(Effect.orElseSucceed(() => undefined)),
+    )
     if (tree === undefined) {
       return
     }
@@ -151,7 +115,7 @@ export default function checkpoint(pi: ExtensionAPI) {
   })
 
   pi.on('session_before_tree', async (event, ctx) => {
-    if (runtime === undefined) {
+    if (snapshotter === undefined || !ctx.hasUI) {
       return undefined
     }
     const session = ctx.sessionManager
@@ -160,8 +124,10 @@ export default function checkpoint(pi: ExtensionAPI) {
       return undefined
     }
 
-    const current = await currentTree()
-    if (current === undefined || current === target || !ctx.hasUI) {
+    const current = await Effect.runPromise(
+      snapshotter.track().pipe(Effect.orElseSucceed(() => undefined)),
+    )
+    if (current === undefined || current === target) {
       return undefined
     }
 
@@ -182,15 +148,19 @@ export default function checkpoint(pi: ExtensionAPI) {
       pi.appendEntry(CHECKPOINT_TYPE, { tree: current })
     }
 
-    try {
-      await runtime.runPromise(
-        Snapshotter.use((snapshotter) => snapshotter.restore(target)),
-      )
-      ctx.ui.notify('Files restored to the selected point', 'info')
-      return undefined
-    } catch (error) {
-      ctx.ui.notify(`File restore failed: ${errorMessage(error)}`, 'error')
-      return { cancel: true }
-    }
+    return Effect.runPromise(
+      snapshotter.restore(target).pipe(
+        Effect.match({
+          onSuccess: () => {
+            ctx.ui.notify('Files restored to the selected point', 'info')
+            return undefined
+          },
+          onFailure: (error) => {
+            ctx.ui.notify(`File restore failed: ${error.message}`, 'error')
+            return { cancel: true }
+          },
+        }),
+      ),
+    )
   })
 }
