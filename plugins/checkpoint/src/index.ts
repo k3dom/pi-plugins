@@ -16,10 +16,10 @@ import type {
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import { Effect, Option, pipe, Schema } from 'effect'
 import {
-  makeSnapshotter,
   resolveWorktree,
   type SnapshotDeps,
-  type Snapshotter,
+  Snapshotter,
+  type SnapshotterService,
 } from './snapshot'
 
 /** `customType` of the hidden session entries that carry a snapshot tree hash. */
@@ -102,14 +102,14 @@ const run = <A, E>(effect: Effect.Effect<A, E, SnapshotDeps>): Promise<A> =>
   Effect.runPromise(effect.pipe(Effect.provide(NodeServices.layer)))
 
 export default function checkpoint(pi: ExtensionAPI) {
-  let snapshotter: Snapshotter | undefined
+  let snapshotter: SnapshotterService | undefined
 
   /** Current worktree state as a tree hash, or undefined when tracking fails. */
   const currentTree = async (): Promise<string | undefined> => {
     if (snapshotter === undefined) {
       return undefined
     }
-    return run(snapshotter.track.pipe(Effect.orElseSucceed(() => undefined)))
+    return run(snapshotter.track().pipe(Effect.orElseSucceed(() => undefined)))
   }
 
   pi.on('session_start', async (_event, ctx) => {
@@ -117,7 +117,7 @@ export default function checkpoint(pi: ExtensionAPI) {
     // keep dependency/build trees out of the shadow repository.
     snapshotter = await run(
       resolveWorktree(ctx.cwd).pipe(
-        Effect.map(makeSnapshotter),
+        Effect.flatMap((worktree) => Snapshotter.make(worktree)),
         Effect.orElseSucceed(() => undefined),
       ),
     )
