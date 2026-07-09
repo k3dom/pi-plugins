@@ -15,12 +15,7 @@ import type {
 } from '@earendil-works/pi-coding-agent'
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import { Effect, Option, pipe, Schema } from 'effect'
-import {
-  resolveWorktree,
-  type SnapshotDeps,
-  Snapshotter,
-  type SnapshotterService,
-} from './snapshot'
+import { resolveWorktree, Snapshotter } from './snapshot'
 
 /** `customType` of the hidden session entries that carry a snapshot tree hash. */
 const CHECKPOINT_TYPE = 'file-checkpoint'
@@ -98,11 +93,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-const run = <A, E>(effect: Effect.Effect<A, E, SnapshotDeps>): Promise<A> =>
-  Effect.runPromise(effect.pipe(Effect.provide(NodeServices.layer)))
+const run = <A, E>(
+  effect: Effect.Effect<A, E, NodeServices.NodeServices>,
+): Promise<A> => Effect.runPromise(effect.pipe(Effect.provide(NodeServices.layer)))
 
 export default function checkpoint(pi: ExtensionAPI) {
-  let snapshotter: SnapshotterService | undefined
+  let snapshotter: typeof Snapshotter.Service | undefined
 
   /** Current worktree state as a tree hash, or undefined when tracking fails. */
   const currentTree = async (): Promise<string | undefined> => {

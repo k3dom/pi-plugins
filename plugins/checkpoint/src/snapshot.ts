@@ -1,50 +1,36 @@
-import { createHash } from 'node:crypto'
-import * as nodePath from 'node:path'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import {
+  Array,
   Context,
+  Crypto,
   Data,
   Effect,
+  Encoding,
   Fiber,
   FileSystem,
   Layer,
+  Path,
+  pipe,
+  Schema,
   Semaphore,
   Stream,
+  String,
 } from 'effect'
-import type { PlatformError } from 'effect/PlatformError'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 
-export type SnapshotDeps =
-  | ChildProcessSpawner.ChildProcessSpawner
-  | FileSystem.FileSystem
+export class SnapshotterError extends Schema.TaggedErrorClass<SnapshotterError>()(
+  'SnapshotterError',
+  {
+    kind: Schema.Literals(['GitError']),
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
 
-export type SnapshotError = GitError | PlatformError
-
-/** A shadow-repo git invocation exited with a nonzero status. */
-export class GitError extends Data.TaggedError('GitError')<{
-  readonly args: ReadonlyArray<string>
-  readonly exitCode: number
-  readonly stderr: string
-}> {
-  override readonly message: string =
-    `git ${this.args.join(' ')} exited with ${this.exitCode}` +
-    (this.stderr.trim() ? `: ${this.stderr.trim()}` : '')
-}
-
-/** `cwd` is not inside a git worktree. */
 export class NotAGitWorktreeError extends Data.TaggedError('NotAGitWorktreeError')<{
   readonly cwd: string
-}> {}
-
-export interface SnapshotterService {
-  readonly worktree: string
-  /** Stages the worktree and returns the tree hash of the current file state. */
-  readonly track: () => Effect.Effect<string, SnapshotError>
-  /**
-   * Restores the worktree to a previously tracked tree: checks out every file
-   * in the tree and deletes files that exist now but not in the tree.
-   */
-  readonly restore: (tree: string) => Effect.Effect<void, SnapshotError>
+}> {
+  override readonly message: string = `Not a git worktree: ${this.cwd}`
 }
 
 /** Resolves the repository root of `cwd`, failing if it is not inside a git worktree. */
@@ -63,34 +49,33 @@ export const resolveWorktree = Effect.fnUntraced(function* (cwd: string) {
 
 /**
  * Snapshots a git worktree into a shadow repository (a separate `GIT_DIR`
- * outside the project, opencode-style). A snapshot is just a `git write-tree`
- * of the shadow index — no commits, no refs, and the user's real `.git` is
- * never touched. The worktree's `.gitignore` files are respected.
- *
- * Constructed per worktree via {@link Snapshotter.make} (or
- * {@link Snapshotter.layer}); dependencies are resolved at construction time,
- * so the exposed methods are self-contained.
+ * outside the project).
  */
-export class Snapshotter extends Context.Service<Snapshotter, SnapshotterService>()(
+export class Snapshotter extends Context.Service<Snapshotter>()(
   '@pi-plugins/checkpoint/Snapshotter',
   {
     make: Effect.fnUntraced(function* (worktree: string) {
       const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const crypto = yield* Crypto.Crypto
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
 
       // Serializes shadow-index operations; concurrent `git add` would corrupt it.
       const semaphore = yield* Semaphore.make(1)
-      const gitdir = nodePath.join(
+      const digest = yield* crypto.digest(
+        'SHA-256',
+        new TextEncoder().encode(worktree),
+      )
+      const gitdir = path.join(
         getAgentDir(),
         'checkpoints',
-        createHash('sha256').update(worktree).digest('hex').slice(0, 16),
+        Encoding.encodeHex(digest).slice(0, 16),
       )
 
       /**
-       * Runs git against the shadow repository and returns its stdout,
-       * failing with `GitError` on a nonzero exit code.
+       * Runs git against the shadow repository and returns its stdout
        */
-      const git = Effect.fnUntraced(function* (args: ReadonlyArray<string>) {
+      const git = Effect.fnUntraced(function* (args: readonly string[]) {
         const handle = yield* spawner.spawn(
           ChildProcess.make(
             'git',
@@ -120,7 +105,12 @@ export class Snapshotter extends Context.Service<Snapshotter, SnapshotterService
         const stderr = yield* Fiber.join(stderrFiber)
 
         if (exitCode !== 0) {
-          return yield* new GitError({ args, exitCode, stderr })
+          return yield* new SnapshotterError({
+            kind: 'GitError',
+            message:
+              `git ${args.join(' ')} exited with ${exitCode}` +
+              (stderr.trim() ? `: ${stderr.trim()}` : ''),
+          })
         }
 
         return stdout
@@ -130,34 +120,46 @@ export class Snapshotter extends Context.Service<Snapshotter, SnapshotterService
        * Syncs the shadow index with the current worktree state, initializing
        * the shadow repository on first use.
        */
-      const stage = Effect.gen(function* () {
-        if (!(yield* fs.exists(nodePath.join(gitdir, 'HEAD')))) {
+      const stage = Effect.fnUntraced(function* () {
+        if (!(yield* fs.exists(path.join(gitdir, 'HEAD')))) {
           yield* fs.makeDirectory(gitdir, { recursive: true })
           yield* git(['init', '--quiet'])
         }
         yield* git(['add', '--all'])
       })
 
-      const listIndexFiles = Effect.map(git(['ls-files', '-z']), (out) =>
-        out.split('\0').filter((file) => file.length > 0),
-      )
+      /**
+       * Lists the paths currently tracked by the shadow index.
+       */
+      const listIndexFiles = Effect.fnUntraced(function* () {
+        const out = yield* git(['ls-files', '-z'])
+        return pipe(out, String.split('\0'), Array.filter(String.isNonEmpty))
+      })
 
+      /**
+       * Creates a snapshot of the current worktree state.
+       */
       const track = Effect.fn('Snapshotter.track')(function* () {
-        yield* stage
-        return (yield* git(['write-tree'])).trim()
+        yield* stage()
+        return yield* git(['write-tree']).pipe(Effect.map(String.trim))
       }, semaphore.withPermits(1))
 
+      /**
+       * Restores the worktree to the state of a snapshot, deleting files that
+       * were present in the worktree but not in the snapshot.
+       */
       const restore = Effect.fn('Snapshotter.restore')(function* (tree: string) {
-        yield* stage
-        const before = yield* listIndexFiles
+        yield* stage()
+
+        const before = yield* listIndexFiles()
         yield* git(['read-tree', tree])
         yield* git(['checkout-index', '--all', '--force'])
-        // Delete files that exist now but were absent at the snapshot.
-        const after = new Set(yield* listIndexFiles)
+        const after = new Set(yield* listIndexFiles())
+
         yield* Effect.forEach(
           before.filter((file) => !after.has(file)),
-          (file) => Effect.ignore(fs.remove(nodePath.join(worktree, file))),
-          { discard: true },
+          (file) => Effect.ignore(fs.remove(path.join(worktree, file))),
+          { discard: true, concurrency: 'unbounded' },
         )
       }, semaphore.withPermits(1))
 
