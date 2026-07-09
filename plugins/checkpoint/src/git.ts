@@ -41,6 +41,7 @@ export function runGit(
       if (exitCode !== 0) {
         return yield* new GitError({ args, exitCode, stderr })
       }
+
       return stdout
     }),
   )

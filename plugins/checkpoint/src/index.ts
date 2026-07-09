@@ -14,7 +14,7 @@ import type {
   SessionEntry,
 } from '@earendil-works/pi-coding-agent'
 import * as NodeServices from '@effect/platform-node/NodeServices'
-import { Effect, Option, Schema } from 'effect'
+import { Effect, Option, pipe, Schema } from 'effect'
 import {
   makeSnapshotter,
   resolveWorktree,
@@ -30,9 +30,6 @@ const CHOICE_RESTORE = 'Conversation and files'
 const CHOICE_CANCEL = 'Cancel navigation'
 
 const CheckpointData = Schema.Struct({ tree: Schema.String })
-const decodeCheckpoint = Schema.decodeUnknownOption(CheckpointData)
-
-type SessionView = ExtensionContext['sessionManager']
 
 /** The tree hash stored on `entry`, if it is one of our checkpoint entries. */
 function checkpointOf(entry: SessionEntry | undefined): string | undefined {
@@ -43,14 +40,17 @@ function checkpointOf(entry: SessionEntry | undefined): string | undefined {
   ) {
     return undefined
   }
-  return Option.getOrUndefined(
-    Option.map(decodeCheckpoint(entry.data), (data) => data.tree),
+
+  return pipe(
+    Schema.decodeUnknownOption(CheckpointData)(entry.data),
+    Option.map((data) => data.tree),
+    Option.getOrUndefined,
   )
 }
 
 /** Nearest checkpoint at or above `fromId` in the session tree. */
 function nearestCheckpoint(
-  session: SessionView,
+  session: ExtensionContext['sessionManager'],
   fromId: string | null,
 ): string | undefined {
   for (let id = fromId; id !== null; ) {
@@ -58,12 +58,15 @@ function nearestCheckpoint(
     if (entry === undefined) {
       return undefined
     }
+
     const tree = checkpointOf(entry)
     if (tree !== undefined) {
       return tree
     }
+
     id = entry.parentId
   }
+
   return undefined
 }
 
@@ -75,7 +78,10 @@ function nearestCheckpoint(
  * Otherwise the nearest ancestor checkpoint is the best (turn-granular)
  * approximation: at most one turn's tool changes lie between the two.
  */
-function restoreTree(session: SessionView, targetId: string): string | undefined {
+function restoreTree(
+  session: ExtensionContext['sessionManager'],
+  targetId: string,
+): string | undefined {
   for (const entry of session.getEntries()) {
     if (entry.parentId === targetId) {
       const tree = checkpointOf(entry)
@@ -84,6 +90,7 @@ function restoreTree(session: SessionView, targetId: string): string | undefined
       }
     }
   }
+
   return nearestCheckpoint(session, targetId)
 }
 
