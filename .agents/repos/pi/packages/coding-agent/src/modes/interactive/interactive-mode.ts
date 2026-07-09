@@ -115,7 +115,11 @@ import { FooterComponent } from "./components/footer.ts";
 import { formatKeyText, keyDisplayText, keyHint, keyText, rawKeyHint } from "./components/keybinding-hints.ts";
 import { LoginDialogComponent } from "./components/login-dialog.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
-import { type AuthSelectorProvider, OAuthSelectorComponent } from "./components/oauth-selector.ts";
+import {
+	type AuthSelectorProvider,
+	formatAuthSelectorProviderType,
+	OAuthSelectorComponent,
+} from "./components/oauth-selector.ts";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
@@ -253,6 +257,59 @@ export function isApiKeyLoginProvider(
 		return false;
 	}
 	return !oauthProviderIds.has(providerId);
+}
+
+type LoginProviderCompletionOption = {
+	id: string;
+	name: string;
+	authTypes: AuthSelectorProvider["authType"][];
+};
+
+const AUTH_TYPE_ORDER = { oauth: 0, api_key: 1 } satisfies Record<AuthSelectorProvider["authType"], number>;
+
+function createFuzzyAutocompleteItems<T>(
+	items: T[],
+	prefix: string,
+	getSearchText: (item: T) => string,
+	toAutocompleteItem: (item: T) => AutocompleteItem,
+): AutocompleteItem[] | null {
+	const filtered = fuzzyFilter(items, prefix, getSearchText);
+	if (filtered.length === 0) return null;
+	return filtered.map(toAutocompleteItem);
+}
+
+function getLoginProviderCompletionOptions(
+	providerOptions: readonly AuthSelectorProvider[],
+): LoginProviderCompletionOption[] {
+	const byId = new Map<string, LoginProviderCompletionOption>();
+	for (const provider of providerOptions) {
+		const existing = byId.get(provider.id);
+		if (existing) {
+			if (!existing.authTypes.includes(provider.authType)) {
+				existing.authTypes.push(provider.authType);
+				existing.authTypes.sort((a, b) => AUTH_TYPE_ORDER[a] - AUTH_TYPE_ORDER[b]);
+			}
+			continue;
+		}
+		byId.set(provider.id, {
+			id: provider.id,
+			name: provider.name,
+			authTypes: [provider.authType],
+		});
+	}
+	return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function getLoginProviderSearchText(provider: LoginProviderCompletionOption): string {
+	const authTypes = provider.authTypes
+		.map((authType) => `${authType} ${formatAuthSelectorProviderType(authType)}`)
+		.join(" ");
+	return `${provider.id} ${provider.name} ${authTypes}`;
+}
+
+function formatLoginProviderCompletionDescription(provider: LoginProviderCompletionOption): string {
+	const authTypes = provider.authTypes.map(formatAuthSelectorProviderType).join("/");
+	return provider.name === provider.id ? authTypes : `${provider.name} · ${authTypes}`;
 }
 
 /**
@@ -502,6 +559,7 @@ export class InteractiveMode {
 		const slashCommands: SlashCommand[] = BUILTIN_SLASH_COMMANDS.map((command) => ({
 			name: command.name,
 			description: command.description,
+			...(command.argumentHint && { argumentHint: command.argumentHint }),
 		}));
 
 		const modelCommand = slashCommands.find((command) => command.name === "model");
@@ -523,15 +581,22 @@ export class InteractiveMode {
 					label: `${m.provider}/${m.id}`,
 				}));
 
-				// Fuzzy filter by model ID + provider in either order.
-				const filtered = fuzzyFilter(items, prefix, getModelSearchText);
-
-				if (filtered.length === 0) return null;
-
-				return filtered.map((item) => ({
+				return createFuzzyAutocompleteItems(items, prefix, getModelSearchText, (item) => ({
 					value: item.label,
 					label: item.id,
 					description: item.provider,
+				}));
+			};
+		}
+
+		const loginCommand = slashCommands.find((command) => command.name === "login");
+		if (loginCommand) {
+			loginCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
+				const providers = getLoginProviderCompletionOptions(this.getLoginProviderOptions());
+				return createFuzzyAutocompleteItems(providers, prefix, getLoginProviderSearchText, (provider) => ({
+					value: provider.id,
+					label: provider.id,
+					description: formatLoginProviderCompletionDescription(provider),
 				}));
 			};
 		}
@@ -2638,9 +2703,10 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
-			if (text === "/login") {
-				this.showOAuthSelector("login");
+			if (text === "/login" || text.startsWith("/login ")) {
+				const providerRef = text.startsWith("/login ") ? text.slice(7).trim() : undefined;
 				this.editor.setText("");
+				await this.handleLoginCommand(providerRef);
 				return;
 			}
 			if (text === "/logout") {
@@ -4427,19 +4493,17 @@ export class InteractiveMode {
 			const selector = new UserMessageSelectorComponent(
 				userMessages.map((m) => ({ id: m.entryId, text: m.text })),
 				async (entryId) => {
+					done();
 					try {
 						const result = await this.runtimeHost.fork(entryId);
 						if (result.cancelled) {
-							done();
 							this.ui.requestRender();
 							return;
 						}
 
 						this.editor.setText(result.selectedText ?? "");
-						done();
 						this.showStatus("Forked to new session");
 					} catch (error: unknown) {
-						done();
 						this.showError(error instanceof Error ? error.message : String(error));
 					}
 				},
@@ -4717,16 +4781,96 @@ export class InteractiveMode {
 		return options.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
-	private showLoginAuthTypeSelector(): void {
+	private findLoginProviderOptions(providerRef: string): AuthSelectorProvider[] {
+		const normalizedProviderRef = providerRef.trim().toLowerCase();
+		if (!normalizedProviderRef) {
+			return [];
+		}
+
+		return this.getLoginProviderOptions().filter(
+			(provider) =>
+				provider.id.toLowerCase() === normalizedProviderRef ||
+				provider.name.toLowerCase() === normalizedProviderRef,
+		);
+	}
+
+	private async handleLoginCommand(providerRef?: string): Promise<void> {
+		if (!providerRef) {
+			this.showLoginAuthTypeSelector();
+			return;
+		}
+
+		const providerOptions = this.findLoginProviderOptions(providerRef);
+		if (providerOptions.length === 1) {
+			await this.startProviderLogin(providerOptions[0]!);
+			return;
+		}
+
+		if (providerOptions.length > 1) {
+			const providerIds = new Set(providerOptions.map((provider) => provider.id));
+			if (providerIds.size === 1) {
+				this.showLoginAuthTypeSelector(providerOptions);
+				return;
+			}
+		}
+
+		this.showLoginProviderSelector(undefined, providerRef);
+	}
+
+	private async startProviderLogin(providerOption: AuthSelectorProvider): Promise<void> {
+		if (providerOption.authType === "oauth") {
+			await this.showLoginDialog(providerOption.id, providerOption.name);
+		} else if (providerOption.id === BEDROCK_PROVIDER_ID) {
+			this.showBedrockSetupDialog(providerOption.id, providerOption.name);
+		} else {
+			await this.showApiKeyLoginDialog(providerOption.id, providerOption.name);
+		}
+	}
+
+	private showLoginAuthTypeSelector(providerOptions?: AuthSelectorProvider[]): void {
 		const subscriptionLabel = "Use a subscription";
 		const apiKeyLabel = "Use an API key";
+		const availableAuthTypes = providerOptions
+			? new Set(providerOptions.map((provider) => provider.authType))
+			: new Set<AuthSelectorProvider["authType"]>(["oauth", "api_key"]);
+		const options: string[] = [];
+		if (availableAuthTypes.has("oauth")) {
+			options.push(subscriptionLabel);
+		}
+		if (availableAuthTypes.has("api_key")) {
+			options.push(apiKeyLabel);
+		}
+
+		if (options.length === 0) {
+			this.showStatus("No login methods available.");
+			return;
+		}
+
+		if (providerOptions && options.length === 1) {
+			const providerOption = providerOptions[0];
+			if (providerOption) {
+				void this.startProviderLogin(providerOption);
+			}
+			return;
+		}
+
+		const title = providerOptions?.[0]
+			? `Select authentication method for ${providerOptions[0].name}:`
+			: "Select authentication method:";
 		this.showSelector((done) => {
 			const selector = new ExtensionSelectorComponent(
-				"Select authentication method:",
-				[subscriptionLabel, apiKeyLabel],
+				title,
+				options,
 				(option) => {
 					done();
 					const authType = option === subscriptionLabel ? "oauth" : "api_key";
+					if (providerOptions) {
+						const providerOption = providerOptions.find((provider) => provider.authType === authType);
+						if (providerOption) {
+							void this.startProviderLogin(providerOption);
+						}
+						return;
+					}
 					this.showLoginProviderSelector(authType);
 				},
 				() => {
@@ -4738,12 +4882,16 @@ export class InteractiveMode {
 		});
 	}
 
-	private showLoginProviderSelector(authType: "oauth" | "api_key"): void {
+	private showLoginProviderSelector(authType?: AuthSelectorProvider["authType"], initialSearchInput?: string): void {
 		const providerOptions = this.getLoginProviderOptions(authType);
 		if (providerOptions.length === 0) {
-			this.showStatus(
-				authType === "oauth" ? "No subscription providers available." : "No API key providers available.",
-			);
+			const message =
+				authType === "oauth"
+					? "No subscription providers available."
+					: authType === "api_key"
+						? "No API key providers available."
+						: "No login providers available.";
+			this.showStatus(message);
 			return;
 		}
 
@@ -4752,27 +4900,28 @@ export class InteractiveMode {
 				"login",
 				this.session.modelRegistry.authStorage,
 				providerOptions,
-				async (providerId: string) => {
+				async (providerId, selectedAuthType) => {
 					done();
 
-					const providerOption = providerOptions.find((provider) => provider.id === providerId);
+					const providerOption = providerOptions.find(
+						(provider) => provider.id === providerId && provider.authType === selectedAuthType,
+					);
 					if (!providerOption) {
 						return;
 					}
 
-					if (providerOption.authType === "oauth") {
-						await this.showLoginDialog(providerOption.id, providerOption.name);
-					} else if (providerOption.id === BEDROCK_PROVIDER_ID) {
-						this.showBedrockSetupDialog(providerOption.id, providerOption.name);
-					} else {
-						await this.showApiKeyLoginDialog(providerOption.id, providerOption.name);
-					}
+					await this.startProviderLogin(providerOption);
 				},
 				() => {
 					done();
-					this.showLoginAuthTypeSelector();
+					if (authType) {
+						this.showLoginAuthTypeSelector();
+					} else {
+						this.ui.requestRender();
+					}
 				},
 				(providerId) => this.session.modelRegistry.getProviderAuthStatus(providerId),
+				initialSearchInput,
 			);
 			return { component: selector, focus: selector };
 		});

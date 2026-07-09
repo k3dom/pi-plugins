@@ -54,6 +54,7 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"upstream.?connect",
 	"reset before headers",
 	"socket hang up",
+	"socket connection was closed",
 	"timed? out",
 	"timeout",
 	"terminated",
