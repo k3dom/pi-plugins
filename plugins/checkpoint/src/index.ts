@@ -14,8 +14,8 @@ import type {
   SessionEntry,
 } from '@earendil-works/pi-coding-agent'
 import * as NodeServices from '@effect/platform-node/NodeServices'
-import { Effect, Option, pipe, Schema } from 'effect'
-import { resolveWorktree, Snapshotter } from './snapshot'
+import { Effect, Layer, ManagedRuntime, Option, pipe, Schema } from 'effect'
+import { Snapshotter, SnapshotterError } from './snapshot'
 
 /** `customType` of the hidden session entries that carry a snapshot tree hash. */
 const CHECKPOINT_TYPE = 'file-checkpoint'
@@ -93,28 +93,46 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-const run = <A, E>(
-  effect: Effect.Effect<A, E, NodeServices.NodeServices>,
-): Promise<A> => Effect.runPromise(effect.pipe(Effect.provide(NodeServices.layer)))
+/** Runtime providing a `Snapshotter` for the worktree containing `cwd`. */
+const makeRuntime = (cwd: string) =>
+  ManagedRuntime.make(Snapshotter.layer(cwd).pipe(Layer.provide(NodeServices.layer)))
 
 export default function checkpoint(pi: ExtensionAPI) {
-  let snapshotter: typeof Snapshotter.Service | undefined
+  let runtime: ReturnType<typeof makeRuntime> | undefined
 
   /** Current worktree state as a tree hash, or undefined when tracking fails. */
   const currentTree = async (): Promise<string | undefined> => {
-    if (snapshotter === undefined) {
+    if (runtime === undefined) {
       return undefined
     }
-    return run(snapshotter.track().pipe(Effect.orElseSucceed(() => undefined)))
+    return runtime.runPromise(
+      Snapshotter.use((snapshotter) => snapshotter.track()).pipe(
+        Effect.orElseSucceed(() => undefined),
+      ),
+    )
   }
 
   pi.on('session_start', async (_event, ctx) => {
+    if (runtime !== undefined) {
+      await runtime.dispose()
+      runtime = undefined
+    }
+
     // Only active inside git worktrees; snapshotting relies on .gitignore to
-    // keep dependency/build trees out of the shadow repository.
-    snapshotter = await run(
-      resolveWorktree(ctx.cwd).pipe(
-        Effect.flatMap((worktree) => Snapshotter.make(worktree)),
-        Effect.orElseSucceed(() => undefined),
+    // keep dependency/build trees out of the shadow repository. Build the
+    // layer eagerly so failures surface here instead of mid-turn.
+    const next = makeRuntime(ctx.cwd)
+    runtime = await Effect.runPromise(
+      next.contextEffect.pipe(
+        Effect.as<ReturnType<typeof makeRuntime> | undefined>(next),
+        Effect.catch((error) => {
+          const expected =
+            error instanceof SnapshotterError && error.kind === 'NotAWorktree'
+          if (!expected && ctx.hasUI) {
+            ctx.ui.notify(`Checkpoints disabled: ${error.message}`, 'warning')
+          }
+          return Effect.as(next.disposeEffect, undefined)
+        }),
       ),
     )
   })
@@ -133,7 +151,7 @@ export default function checkpoint(pi: ExtensionAPI) {
   })
 
   pi.on('session_before_tree', async (event, ctx) => {
-    if (snapshotter === undefined) {
+    if (runtime === undefined) {
       return undefined
     }
     const session = ctx.sessionManager
@@ -165,7 +183,9 @@ export default function checkpoint(pi: ExtensionAPI) {
     }
 
     try {
-      await run(snapshotter.restore(target))
+      await runtime.runPromise(
+        Snapshotter.use((snapshotter) => snapshotter.restore(target)),
+      )
       ctx.ui.notify('Files restored to the selected point', 'info')
       return undefined
     } catch (error) {

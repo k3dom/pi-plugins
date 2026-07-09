@@ -3,7 +3,6 @@ import {
   Array,
   Context,
   Crypto,
-  Data,
   Effect,
   Encoding,
   Fiber,
@@ -21,44 +20,37 @@ import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 export class SnapshotterError extends Schema.TaggedErrorClass<SnapshotterError>()(
   'SnapshotterError',
   {
-    kind: Schema.Literals(['GitError']),
+    kind: Schema.Literals(['GitError', 'NotAWorktree']),
     message: Schema.String,
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
 
-export class NotAGitWorktreeError extends Data.TaggedError('NotAGitWorktreeError')<{
-  readonly cwd: string
-}> {
-  override readonly message: string = `Not a git worktree: ${this.cwd}`
-}
-
-/** Resolves the repository root of `cwd`, failing if it is not inside a git worktree. */
-export const resolveWorktree = Effect.fnUntraced(function* (cwd: string) {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-  const out = yield* spawner.string(
-    ChildProcess.make('git', ['rev-parse', '--show-toplevel'], { cwd }),
-  )
-  // `rev-parse --show-toplevel` prints nothing to stdout outside a worktree.
-  const worktree = out.trim()
-  if (worktree === '') {
-    return yield* new NotAGitWorktreeError({ cwd })
-  }
-  return worktree
-})
-
 /**
  * Snapshots a git worktree into a shadow repository (a separate `GIT_DIR`
  * outside the project).
+ *
+ * Construction fails with a `NotAWorktree` error outside git worktrees.
  */
 export class Snapshotter extends Context.Service<Snapshotter>()(
   '@pi-plugins/checkpoint/Snapshotter',
   {
-    make: Effect.fnUntraced(function* (worktree: string) {
+    make: Effect.fnUntraced(function* (cwd: string) {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const crypto = yield* Crypto.Crypto
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+
+      // Resolve the canonical repository root by which the shadow `GIT_DIR` is keyed.
+      const worktree = (yield* spawner.string(
+        ChildProcess.make('git', ['rev-parse', '--show-toplevel'], { cwd }),
+      )).trim()
+      if (worktree === '') {
+        return yield* new SnapshotterError({
+          kind: 'NotAWorktree',
+          message: `Not a git worktree: ${cwd}`,
+        })
+      }
 
       // Serializes shadow-index operations; concurrent `git add` would corrupt it.
       const semaphore = yield* Semaphore.make(1)
@@ -116,17 +108,10 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
         return stdout
       }, Effect.scoped)
 
-      /**
-       * Syncs the shadow index with the current worktree state, initializing
-       * the shadow repository on first use.
-       */
-      const stage = Effect.fnUntraced(function* () {
-        if (!(yield* fs.exists(path.join(gitdir, 'HEAD')))) {
-          yield* fs.makeDirectory(gitdir, { recursive: true })
-          yield* git(['init', '--quiet'])
-        }
-        yield* git(['add', '--all'])
-      })
+      if (!(yield* fs.exists(path.join(gitdir, 'HEAD')))) {
+        yield* fs.makeDirectory(gitdir, { recursive: true })
+        yield* git(['init', '--quiet'])
+      }
 
       /**
        * Lists the paths currently tracked by the shadow index.
@@ -140,7 +125,7 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
        * Creates a snapshot of the current worktree state.
        */
       const track = Effect.fn('Snapshotter.track')(function* () {
-        yield* stage()
+        yield* git(['add', '--all'])
         return yield* git(['write-tree']).pipe(Effect.map(String.trim))
       }, semaphore.withPermits(1))
 
@@ -149,8 +134,7 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
        * were present in the worktree but not in the snapshot.
        */
       const restore = Effect.fn('Snapshotter.restore')(function* (tree: string) {
-        yield* stage()
-
+        yield* git(['add', '--all'])
         const before = yield* listIndexFiles()
         yield* git(['read-tree', tree])
         yield* git(['checkout-index', '--all', '--force'])
@@ -163,10 +147,9 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
         )
       }, semaphore.withPermits(1))
 
-      return { worktree, track, restore } as const
+      return { track, restore } as const
     }),
   },
 ) {
-  static readonly layer = (worktree: string) =>
-    Layer.effect(this, this.make(worktree))
+  static readonly layer = (cwd: string) => Layer.effect(this, this.make(cwd))
 }
