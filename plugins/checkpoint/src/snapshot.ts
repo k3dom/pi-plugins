@@ -210,7 +210,27 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
         )
       }, lock.withLock)
 
-      return { track, restore } as const
+      /**
+       * Prunes all stored checkpoint objects and records the current worktree
+       * as a fresh baseline so checkpointing can continue immediately.
+       */
+      const cleanup = Effect.fn('Snapshotter.cleanup')(function* () {
+        const index = path.join(gitdir, 'index')
+        if (yield* fs.exists(index)) {
+          yield* fs.remove(index)
+        }
+        yield* git(
+          shadowGit(['reflog', 'expire', '--expire=now', '--all']),
+          worktree,
+        )
+        yield* git(shadowGit(['gc', '--prune=now', '--quiet']), worktree)
+        yield* git(shadowGit(['add', '--all']), worktree)
+        return yield* git(shadowGit(['write-tree']), worktree).pipe(
+          Effect.map(String.trim),
+        )
+      }, lock.withLock)
+
+      return { track, restore, cleanup } as const
     }),
   },
 ) {

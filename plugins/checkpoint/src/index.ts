@@ -117,6 +117,42 @@ export default function checkpoint(pi: ExtensionAPI) {
   pi.on('turn_start', async (_event, ctx) => recordCheckpoint(ctx))
   pi.on('turn_end', async (_event, ctx) => recordCheckpoint(ctx))
 
+  pi.registerCommand('checkpoint-cleanup', {
+    description: 'Delete stored file checkpoint history for this worktree',
+    handler: async (_args, ctx) => {
+      await ctx.waitForIdle()
+      if (!snapshotter || !ctx.hasUI) {
+        return undefined
+      }
+
+      if (
+        !(await ctx.ui.confirm(
+          'Delete file checkpoints?',
+          'This removes the stored file history for every session in this worktree. Conversation history is not affected.',
+        ))
+      ) {
+        return undefined
+      }
+
+      await Effect.runPromise(
+        snapshotter.cleanup().pipe(
+          Effect.match({
+            onSuccess: (tree) => {
+              const session = ctx.sessionManager
+              if (nearestCheckpoint(session, session.getLeafId()) !== tree) {
+                pi.appendEntry(CHECKPOINT_TYPE, { tree })
+              }
+              ctx.ui.notify('File checkpoint history cleaned up', 'info')
+            },
+            onFailure: (error) => {
+              ctx.ui.notify(`Checkpoint cleanup failed: ${error.message}`, 'error')
+            },
+          }),
+        ),
+      )
+    },
+  })
+
   pi.on('session_before_tree', async (event, ctx) => {
     if (!snapshotter || !ctx.hasUI) {
       return undefined
