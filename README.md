@@ -14,6 +14,7 @@ concurrency.
 | -------------------------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------- |
 | [`webfetch`](plugins/webfetch)         | Fetches content over HTTP(S) and returns them as Markdown or raw HTML.                                   | `web_fetch`                 |
 | [`subagent`](plugins/subagent)         | Delegates a task to a fresh, headless pi instance with an isolated context window.                       | `subagent`                  |
+| [`checkpoint`](plugins/checkpoint)     | Keeps `/tree` conversation navigation and files on disk in sync with lightweight file checkpoints.       | `/checkpoint-cleanup`       |
 | [`fast-mode`](plugins/fast-mode)       | Toggles fast, priority inference for configured models on supported providers.                           | `/fast`, `--fast`           |
 | [`claude-oauth`](plugins/claude-oauth) | Makes pi's Anthropic OAuth requests match the current Claude Code client so OAuth login works correctly. | —                           |
 | [`exit`](plugins/exit)                 | Exits pi when `exit` or `quit` is submitted as the whole prompt.                                         | —                           |
