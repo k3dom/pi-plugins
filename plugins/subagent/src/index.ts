@@ -2,13 +2,7 @@ import * as path from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 import * as NodeServices from '@effect/platform-node/NodeServices'
-import {
-  previewLines,
-  renderExpandableText,
-  spinnerFrame,
-  stopSpinner,
-  type SpinnerState,
-} from '@pi-plugins/shared'
+import { previewLines, renderExpandableText } from '@pi-plugins/shared'
 import { Effect } from 'effect'
 import { Type, type Static } from 'typebox'
 import {
@@ -74,7 +68,7 @@ export default function subagent(pi: ExtensionAPI) {
     return { message: { ...message, usage: { ...message.usage, cost } } }
   })
 
-  pi.registerTool<typeof subagentSchema, SubagentDetails, SpinnerState>({
+  pi.registerTool<typeof subagentSchema, SubagentDetails>({
     name: 'subagent',
     label: 'Subagent',
     description:
@@ -178,16 +172,12 @@ export default function subagent(pi: ExtensionAPI) {
 
       return new Text(text, 0, 0)
     },
-    renderResult({ details }, { expanded, isPartial }, theme, context) {
+    renderResult({ details }, { expanded, isPartial }, theme) {
       const running = isPartial
       const failed = details.failed === true
 
-      if (!running) {
-        stopSpinner(context.state)
-      }
-
       const icon = running
-        ? theme.fg('accent', spinnerFrame(context.state, context.invalidate))
+        ? theme.fg('accent', '●')
         : failed
           ? theme.fg('error', '✗')
           : theme.fg('success', '✓')
