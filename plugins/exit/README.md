@@ -9,10 +9,16 @@ submit `exit` or `quit` as the whole prompt.
 pi install npm:@pi-plugins/exit
 ```
 
-For one-off testing without adding it to settings:
+For a one-off run without adding it to settings:
 
 ```bash
 pi -e npm:@pi-plugins/exit
+```
+
+For local development, load it straight from this directory:
+
+```bash
+pi -e ./plugins/exit
 ```
 
 ## Usage

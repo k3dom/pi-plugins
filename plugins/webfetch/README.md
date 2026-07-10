@@ -9,10 +9,16 @@ A [pi-agent](https://github.com/earendil-works/pi) extension that registers a
 pi install npm:@pi-plugins/webfetch
 ```
 
-For one-off testing without adding it to settings:
+For a one-off run without adding it to settings:
 
 ```bash
 pi -e npm:@pi-plugins/webfetch
+```
+
+For local development, load it straight from this directory:
+
+```bash
+pi -e ./plugins/webfetch
 ```
 
 ## Tool: `web_fetch`

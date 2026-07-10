@@ -10,10 +10,16 @@ Claude subscription (OAuth) works correctly.
 pi install npm:@pi-plugins/claude-oauth
 ```
 
-For one-off testing without adding it to settings:
+For a one-off run without adding it to settings:
 
 ```bash
 pi -e npm:@pi-plugins/claude-oauth
+```
+
+For local development, load it straight from this directory:
+
+```bash
+pi -e ./plugins/claude-oauth
 ```
 
 ## Usage

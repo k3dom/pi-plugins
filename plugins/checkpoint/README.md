@@ -1,7 +1,26 @@
-# @pi-plugins/checkpoint
+# `@pi-plugins/checkpoint`
 
-File checkpoints for [pi-agent](https://github.com/badlogic/pi-mono): keeps `/tree`
-conversation navigation and the files on disk in sync.
+A [pi-agent](https://github.com/earendil-works/pi) extension that keeps `/tree`
+conversation navigation and the files on disk in sync via lightweight file
+checkpoints.
+
+## Install
+
+```bash
+pi install npm:@pi-plugins/checkpoint
+```
+
+For a one-off run without adding it to settings:
+
+```bash
+pi -e npm:@pi-plugins/checkpoint
+```
+
+For local development, load it straight from this directory:
+
+```bash
+pi -e ./plugins/checkpoint
+```
 
 ## How it works
 
@@ -25,15 +44,3 @@ Run `/checkpoint-cleanup` to delete the stored file checkpoint history for the
 current worktree. After confirmation, the plugin records the current files as a fresh
 baseline and continues checkpointing normally. Conversation history is not deleted,
 but older conversation points can no longer restore their files.
-
-## Install
-
-```bash
-pi install npm:@pi-plugins/checkpoint
-```
-
-For one-off testing without adding it to settings:
-
-```bash
-pi -e npm:@pi-plugins/checkpoint
-```
