@@ -20,7 +20,7 @@ import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 export class SnapshotterError extends Schema.TaggedErrorClass<SnapshotterError>()(
   'SnapshotterError',
   {
-    kind: Schema.Literals(['GitError', 'NotAWorktree']),
+    kind: Schema.Literals(['GitError', 'GitTimeout', 'NotAWorktree']),
     message: Schema.String,
     cause: Schema.optional(Schema.Defect()),
   },
@@ -41,11 +41,81 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
       const crypto = yield* Crypto.Crypto
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
 
+      /**
+       * Runs `git args` in `dir` and returns its stdout, failing with a
+       * `GitError` on non-zero exit. Invocations are killed after a timeout
+       * so a hung git process cannot stall the agent's hooks indefinitely.
+       */
+      const git = Effect.fnUntraced(
+        function* (args: readonly string[], dir: string) {
+          const handle = yield* spawner.spawn(
+            ChildProcess.make('git', args, {
+              cwd: dir,
+              forceKillAfter: '5 seconds',
+            }),
+          )
+          const stderrFiber = yield* Effect.forkScoped(
+            Stream.mkString(Stream.decodeText(handle.stderr)),
+          )
+          const stdout = yield* Stream.mkString(Stream.decodeText(handle.stdout))
+          const exitCode = Number(yield* handle.exitCode)
+          const stderr = yield* Fiber.join(stderrFiber)
+
+          if (exitCode !== 0) {
+            return yield* new SnapshotterError({
+              kind: 'GitError',
+              message:
+                `git ${args.join(' ')} exited with ${exitCode}` +
+                (stderr.trim() ? `: ${stderr.trim()}` : ''),
+            })
+          }
+
+          return stdout
+        },
+        (effect, args) =>
+          effect.pipe(
+            Effect.scoped,
+            Effect.timeoutOrElse({
+              duration: '1 minute',
+              orElse: () =>
+                new SnapshotterError({
+                  kind: 'GitTimeout',
+                  message: `git ${args.join(' ')} timed out after 1 minute`,
+                }),
+            }),
+          ),
+      )
+
+      /**
+       * Wraps `args` with the arguments that point git at the shadow
+       * repository and additional safety configuration.
+       */
+      const shadowGit = (args: readonly string[]): readonly string[] => [
+        '-c',
+        'core.autocrlf=false',
+        '-c',
+        'core.quotepath=false',
+        '-c',
+        'core.fsmonitor=false',
+        '--git-dir',
+        gitdir,
+        '--work-tree',
+        worktree,
+        ...args,
+      ]
+
       // Resolve the canonical repository root by which the shadow `GIT_DIR` is keyed.
-      const worktree = (yield* spawner.string(
-        ChildProcess.make('git', ['rev-parse', '--show-toplevel'], { cwd }),
-      )).trim()
-      if (worktree === '') {
+      const worktree = yield* git(['rev-parse', '--show-toplevel'], cwd).pipe(
+        Effect.catchTag('SnapshotterError', (error) =>
+          error.kind === 'GitError'
+            ? new SnapshotterError({
+                kind: 'NotAWorktree',
+                message: `Not a git worktree: ${cwd}`,
+              })
+            : Effect.fail(error),
+        ),
+      )
+      if (pipe(worktree, String.trim, String.isEmpty)) {
         return yield* new SnapshotterError({
           kind: 'NotAWorktree',
           message: `Not a git worktree: ${cwd}`,
@@ -64,60 +134,16 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
         Encoding.encodeHex(digest).slice(0, 16),
       )
 
-      /**
-       * Runs git against the shadow repository and returns its stdout
-       */
-      const git = Effect.fnUntraced(function* (args: readonly string[]) {
-        const handle = yield* spawner.spawn(
-          ChildProcess.make(
-            'git',
-            [
-              // Safety config so snapshots are byte-exact and independent of
-              // user/system git configuration.
-              '-c',
-              'core.autocrlf=false',
-              '-c',
-              'core.quotepath=false',
-              '-c',
-              'core.fsmonitor=false',
-              '--git-dir',
-              gitdir,
-              '--work-tree',
-              worktree,
-              ...args,
-            ],
-            { cwd: worktree },
-          ),
-        )
-        const stderrFiber = yield* Effect.forkScoped(
-          Stream.mkString(Stream.decodeText(handle.stderr)),
-        )
-        const stdout = yield* Stream.mkString(Stream.decodeText(handle.stdout))
-        const exitCode = Number(yield* handle.exitCode)
-        const stderr = yield* Fiber.join(stderrFiber)
-
-        if (exitCode !== 0) {
-          return yield* new SnapshotterError({
-            kind: 'GitError',
-            message:
-              `git ${args.join(' ')} exited with ${exitCode}` +
-              (stderr.trim() ? `: ${stderr.trim()}` : ''),
-          })
-        }
-
-        return stdout
-      }, Effect.scoped)
-
       if (!(yield* fs.exists(path.join(gitdir, 'HEAD')))) {
         yield* fs.makeDirectory(gitdir, { recursive: true })
-        yield* git(['init', '--quiet'])
+        yield* git(shadowGit(['init', '--quiet']), worktree)
       }
 
       /**
        * Lists the paths currently tracked by the shadow index.
        */
       const listIndexFiles = Effect.fnUntraced(function* () {
-        const out = yield* git(['ls-files', '-z'])
+        const out = yield* git(shadowGit(['ls-files', '-z']), worktree)
         return pipe(out, String.split('\0'), Array.filter(String.isNonEmpty))
       })
 
@@ -125,8 +151,10 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
        * Creates a snapshot of the current worktree state.
        */
       const track = Effect.fn('Snapshotter.track')(function* () {
-        yield* git(['add', '--all'])
-        return yield* git(['write-tree']).pipe(Effect.map(String.trim))
+        yield* git(shadowGit(['add', '--all']), worktree)
+        return yield* git(shadowGit(['write-tree']), worktree).pipe(
+          Effect.map(String.trim),
+        )
       }, semaphore.withPermits(1))
 
       /**
@@ -134,10 +162,10 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
        * were present in the worktree but not in the snapshot.
        */
       const restore = Effect.fn('Snapshotter.restore')(function* (tree: string) {
-        yield* git(['add', '--all'])
+        yield* git(shadowGit(['add', '--all']), worktree)
         const before = yield* listIndexFiles()
-        yield* git(['read-tree', tree])
-        yield* git(['checkout-index', '--all', '--force'])
+        yield* git(shadowGit(['read-tree', tree]), worktree)
+        yield* git(shadowGit(['checkout-index', '--all', '--force']), worktree)
         const after = new Set(yield* listIndexFiles())
 
         yield* Effect.forEach(
