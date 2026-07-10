@@ -10,6 +10,10 @@ Snapshots use a shadow git repository (a separate `GIT_DIR` under
 
 - A snapshot is just a `git write-tree` of the shadow index — no commits, no refs,
   and your real `.git` is never touched.
+- Every turn is bracketed by a before/after snapshot pair: navigating to a user
+  message restores the files the prompt originally ran against (including manual
+  edits made between turns), while navigating to the end of a turn restores the files
+  as that turn left them.
 - Your `.gitignore` files are respected, so `node_modules` and build output never
   enter the shadow repository.
 - Tree hashes are persisted as hidden custom entries in the pi session file, so

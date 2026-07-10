@@ -51,7 +51,8 @@ function nearestCheckpoint(
 }
 
 /**
- * The file state associated with navigating to `targetId`.
+ * The file state associated with navigating to `targetId`: a checkpoint
+ * directly below the target, or the nearest ancestor checkpoint.
  */
 function restoreTree(
   session: ExtensionContext['sessionManager'],
@@ -90,7 +91,13 @@ export default function checkpoint(pi: ExtensionAPI) {
     )
   })
 
-  pi.on('turn_start', async (_event, ctx) => {
+  /**
+   * Records the current file state as a checkpoint at the current leaf,
+   * skipping entries when the branch already ends in an identical state.
+   * Running on both `turn_start` and `turn_end` brackets every turn with a
+   * before/after snapshot pair.
+   */
+  const recordCheckpoint = async (ctx: ExtensionContext) => {
     if (!snapshotter) {
       return
     }
@@ -102,12 +109,13 @@ export default function checkpoint(pi: ExtensionAPI) {
       return
     }
     const session = ctx.sessionManager
-    // Only record state changes: skip when the branch already ends in an
-    // identical checkpoint (e.g. turns that did not touch any files).
     if (nearestCheckpoint(session, session.getLeafId()) !== tree) {
       pi.appendEntry(CHECKPOINT_TYPE, { tree })
     }
-  })
+  }
+
+  pi.on('turn_start', async (_event, ctx) => recordCheckpoint(ctx))
+  pi.on('turn_end', async (_event, ctx) => recordCheckpoint(ctx))
 
   pi.on('session_before_tree', async (event, ctx) => {
     if (!snapshotter || !ctx.hasUI) {
