@@ -8,24 +8,30 @@ Fast mode is a per-model opt-in: you decide which `provider/model-id` pairs it
 applies to, and a single session toggle turns it on and off. Requests for any other
 model are left untouched.
 
-## Supported providers
-
-| Provider       | Mechanism                          |
-| -------------- | ---------------------------------- |
-| `openai`       | `service_tier: "priority"` payload |
-| `openai-codex` | `service_tier: "priority"` payload |
-
 ## Install
 
 ```bash
 pi install npm:@pi-plugins/fast-mode
 ```
 
-For one-off testing without adding it to settings:
+For a one-off run without adding it to settings:
 
 ```bash
 pi -e npm:@pi-plugins/fast-mode
 ```
+
+For local development, load it straight from this directory:
+
+```bash
+pi -e ./plugins/fast-mode
+```
+
+## Supported providers
+
+| Provider       | Mechanism                          |
+| -------------- | ---------------------------------- |
+| `openai`       | `service_tier: "priority"` payload |
+| `openai-codex` | `service_tier: "priority"` payload |
 
 ## Usage
 

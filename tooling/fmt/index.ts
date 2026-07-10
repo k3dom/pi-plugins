@@ -5,6 +5,7 @@ export default defineConfig({
   semi: false,
   printWidth: 85,
   proseWrap: 'always',
+  ignorePatterns: ['**/CHANGELOG.md', '.changeset/*.md'],
   sortImports: {
     newlinesBetween: false,
   },
