@@ -163,11 +163,11 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
       }, lock.withLock)
 
       /**
-       * Restores the worktree to the state of a snapshot, deleting files that
-       * were present in the worktree but not in the snapshot.
+       * Applies a snapshot to the worktree: checks out its files and deletes
+       * files tracked in the shadow index but absent from the snapshot.
+       * Assumes the shadow index reflects the current worktree state.
        */
-      const restore = Effect.fn('Snapshotter.restore')(function* (tree: string) {
-        yield* git(shadowGit(['add', '--all']), worktree)
+      const applyTree = Effect.fnUntraced(function* (tree: string) {
         const before = yield* listIndexFiles()
         yield* git(shadowGit(['read-tree', tree]), worktree)
         yield* git(shadowGit(['checkout-index', '--all', '--force']), worktree)
@@ -177,6 +177,36 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
           before.filter((file) => !after.has(file)),
           (file) => Effect.ignore(fs.remove(path.join(worktree, file))),
           { discard: true, concurrency: 'unbounded' },
+        )
+      })
+
+      /**
+       * Restores the worktree to the state of a snapshot, deleting files that
+       * were present in the worktree but not in the snapshot.
+       *
+       * A failed restore is rolled back to the pre-restore state so that a
+       * partial checkout never leaves the worktree in a mixed state.
+       */
+      const restore = Effect.fn('Snapshotter.restore')(function* (tree: string) {
+        // Snapshot the current state as the rollback point.
+        yield* git(shadowGit(['add', '--all']), worktree)
+        const current = yield* git(shadowGit(['write-tree']), worktree).pipe(
+          Effect.map(String.trim),
+        )
+
+        yield* applyTree(tree).pipe(
+          Effect.tapError((error) =>
+            applyTree(current).pipe(
+              Effect.mapError(
+                (rollbackError) =>
+                  new SnapshotterError({
+                    kind: 'GitError',
+                    message: `${error.message} (rollback also failed: ${rollbackError.message})`,
+                    cause: error,
+                  }),
+              ),
+            ),
+          ),
         )
       }, lock.withLock)
 
