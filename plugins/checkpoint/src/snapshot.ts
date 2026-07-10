@@ -11,11 +11,11 @@ import {
   Path,
   pipe,
   Schema,
-  Semaphore,
   Stream,
   String,
 } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+import * as FileLock from './file-lock'
 
 export class SnapshotterError extends Schema.TaggedErrorClass<SnapshotterError>()(
   'SnapshotterError',
@@ -106,6 +106,7 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
 
       // Resolve the canonical repository root by which the shadow `GIT_DIR` is keyed.
       const worktree = yield* git(['rev-parse', '--show-toplevel'], cwd).pipe(
+        Effect.map(String.trim),
         Effect.catchTag('SnapshotterError', (error) =>
           error.kind === 'GitError'
             ? new SnapshotterError({
@@ -115,15 +116,13 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
             : Effect.fail(error),
         ),
       )
-      if (pipe(worktree, String.trim, String.isEmpty)) {
+      if (String.isEmpty(worktree)) {
         return yield* new SnapshotterError({
           kind: 'NotAWorktree',
           message: `Not a git worktree: ${cwd}`,
         })
       }
 
-      // Serializes shadow-index operations; concurrent `git add` would corrupt it.
-      const semaphore = yield* Semaphore.make(1)
       const digest = yield* crypto.digest(
         'SHA-256',
         new TextEncoder().encode(worktree),
@@ -134,10 +133,16 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
         Encoding.encodeHex(digest).slice(0, 16),
       )
 
-      if (!(yield* fs.exists(path.join(gitdir, 'HEAD')))) {
-        yield* fs.makeDirectory(gitdir, { recursive: true })
-        yield* git(shadowGit(['init', '--quiet']), worktree)
-      }
+      yield* fs.makeDirectory(gitdir, { recursive: true })
+      const lock = yield* FileLock.make(path.join(gitdir, 'checkpoint.lock'))
+
+      yield* lock.withLock(
+        Effect.gen(function* () {
+          if (!(yield* fs.exists(path.join(gitdir, 'HEAD')))) {
+            yield* git(shadowGit(['init', '--quiet']), worktree)
+          }
+        }),
+      )
 
       /**
        * Lists the paths currently tracked by the shadow index.
@@ -155,7 +160,7 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
         return yield* git(shadowGit(['write-tree']), worktree).pipe(
           Effect.map(String.trim),
         )
-      }, semaphore.withPermits(1))
+      }, lock.withLock)
 
       /**
        * Restores the worktree to the state of a snapshot, deleting files that
@@ -173,7 +178,7 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
           (file) => Effect.ignore(fs.remove(path.join(worktree, file))),
           { discard: true, concurrency: 'unbounded' },
         )
-      }, semaphore.withPermits(1))
+      }, lock.withLock)
 
       return { track, restore } as const
     }),
