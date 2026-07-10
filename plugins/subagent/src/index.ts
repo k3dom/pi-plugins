@@ -101,7 +101,12 @@ export default function subagent(pi: ExtensionAPI) {
         tools,
         onUpdate: (snapshot) => {
           onUpdate?.({
-            content: [{ type: 'text', text: snapshot.output || '(running...)' }],
+            content: [
+              {
+                type: 'text',
+                text: snapshot.output || snapshot.thinking || '(running...)',
+              },
+            ],
             details: snapshot,
           })
         },
@@ -189,8 +194,11 @@ export default function subagent(pi: ExtensionAPI) {
       } else if (running) {
         header += ` ${theme.fg('muted', 'starting...')}`
       }
+      // Models that emit no interim text (e.g. OpenAI/codex) still stream
+      // thinking summaries; surface those as live status while running.
       const content =
         details.output ||
+        (running ? details.thinking : '') ||
         (failed ? (details.stderr?.trim() ?? '') : '') ||
         (running ? '(running...)' : '(no output)')
 

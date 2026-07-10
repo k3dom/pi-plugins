@@ -27,6 +27,12 @@ export interface SubagentUsage {
  */
 export interface SubagentSnapshot {
   output: string
+  /**
+   * Latest thinking/reasoning summary. Used as a live status fallback for
+   * models that emit no interim text between tool calls (e.g. OpenAI/codex
+   * models, which only produce a text block on their final message).
+   */
+  thinking: string
   toolCalls: number
   usage: SubagentUsage
   model?: string | undefined
@@ -34,6 +40,7 @@ export interface SubagentSnapshot {
 
 export const emptySnapshot: SubagentSnapshot = {
   output: '',
+  thinking: '',
   toolCalls: 0,
   usage: {
     turns: 0,
@@ -106,6 +113,7 @@ const AssistantMessageEnd = Schema.fromJsonString(
         Schema.Struct({
           type: Schema.String,
           text: Schema.optional(Schema.String),
+          thinking: Schema.optional(Schema.String),
         }),
       ),
       usage: Schema.optional(
@@ -143,20 +151,30 @@ function foldMessage(state: RunState, message: AssistantMessage): RunState {
   const { snapshot } = state
   let toolCalls = snapshot.toolCalls
   const texts: string[] = []
+  const thinkingTexts: string[] = []
   for (const part of message.content) {
     if (part.type === 'text' && part.text !== undefined) {
       texts.push(part.text)
+    } else if (part.type === 'thinking' && part.thinking !== undefined) {
+      thinkingTexts.push(part.thinking)
     } else if (part.type === 'toolCall') {
       toolCalls += 1
     }
   }
   const text = texts.join('\n\n').trim()
   const output = text.length > 0 ? text : snapshot.output
+  // Strip empty HTML-comment separators that codex reasoning summaries embed.
+  const thinkingText = thinkingTexts
+    .join('\n\n')
+    .replace(/<!--\s*-->/g, '')
+    .trim()
+  const thinking = thinkingText.length > 0 ? thinkingText : snapshot.thinking
 
   const usage = message.usage
   return {
     snapshot: {
       output,
+      thinking,
       toolCalls,
       usage: {
         turns: snapshot.usage.turns + 1,
