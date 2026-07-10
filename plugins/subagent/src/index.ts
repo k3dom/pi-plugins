@@ -199,8 +199,19 @@ export default function subagent(pi: ExtensionAPI) {
         header += `\n${theme.fg('error', `Error: ${details.errorMessage}`)}`
       }
 
+      // Keep the full output in details for explicit expansion, but bound the
+      // default rendering to pi's standard tool-output limits.
+      const displayContent = expanded ? content : capToolOutput(content)
+
       const text = new Text('', 0, 0)
-      text.setText(renderExpandableText({ header, content, expanded, theme }))
+      text.setText(
+        renderExpandableText({
+          header,
+          content: displayContent,
+          expanded,
+          theme,
+        }),
+      )
       return text
     },
   })
