@@ -2,13 +2,7 @@ import * as path from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 import * as NodeServices from '@effect/platform-node/NodeServices'
-import {
-  previewLines,
-  renderExpandableText,
-  spinnerFrame,
-  stopSpinner,
-  type SpinnerState,
-} from '@pi-plugins/shared'
+import { previewLines, renderExpandableText } from '@pi-plugins/shared'
 import { Effect } from 'effect'
 import { Type, type Static } from 'typebox'
 import {
@@ -52,12 +46,10 @@ interface SubagentDetails extends SubagentSnapshot {
 }
 
 export default function subagent(pi: ExtensionAPI) {
-  // Usage from finished subagent runs that has not yet been folded back into
-  // the parent session's totals.
   const pending: SubagentUsage[] = []
 
-  // Fold subagent usage back into the parent session so the footer's
-  // cumulative token/cost stats include delegated work.
+  // Fold subagent cost back into the parent session so the footer's cumulative
+  // cost includes delegated work.
   pi.on('message_end', ({ message }) => {
     if (
       message.role !== 'assistant' ||
@@ -66,18 +58,17 @@ export default function subagent(pi: ExtensionAPI) {
     ) {
       return undefined
     }
-    const usage = { ...message.usage, cost: { ...message.usage.cost } }
+    const cost = { ...message.usage.cost }
     for (const run of pending.splice(0)) {
-      usage.input += run.input
-      usage.output += run.output
-      usage.cacheRead += run.cacheRead
-      usage.cacheWrite += run.cacheWrite
-      usage.cost.total += run.cost
+      // Only `cost.total` is folded. The per-request token fields (input, output,
+      // cacheRead, cacheWrite) must stay untouched as they are used by pi's auto-compaction heuristics.
+      // Cost is only ever summed for display, so it is safe to fold.
+      cost.total += run.cost
     }
-    return { message: { ...message, usage } }
+    return { message: { ...message, usage: { ...message.usage, cost } } }
   })
 
-  pi.registerTool<typeof subagentSchema, SubagentDetails, SpinnerState>({
+  pi.registerTool<typeof subagentSchema, SubagentDetails>({
     name: 'subagent',
     label: 'Subagent',
     description:
@@ -181,16 +172,12 @@ export default function subagent(pi: ExtensionAPI) {
 
       return new Text(text, 0, 0)
     },
-    renderResult({ details }, { expanded, isPartial }, theme, context) {
+    renderResult({ details }, { expanded, isPartial }, theme) {
       const running = isPartial
       const failed = details.failed === true
 
-      if (!running) {
-        stopSpinner(context.state)
-      }
-
       const icon = running
-        ? theme.fg('accent', spinnerFrame(context.state, context.invalidate))
+        ? theme.fg('accent', '●')
         : failed
           ? theme.fg('error', '✗')
           : theme.fg('success', '✓')
@@ -212,8 +199,19 @@ export default function subagent(pi: ExtensionAPI) {
         header += `\n${theme.fg('error', `Error: ${details.errorMessage}`)}`
       }
 
+      // Keep the full output in details for explicit expansion, but bound the
+      // default rendering to pi's standard tool-output limits.
+      const displayContent = expanded ? content : capToolOutput(content)
+
       const text = new Text('', 0, 0)
-      text.setText(renderExpandableText({ header, content, expanded, theme }))
+      text.setText(
+        renderExpandableText({
+          header,
+          content: displayContent,
+          expanded,
+          theme,
+        }),
+      )
       return text
     },
   })

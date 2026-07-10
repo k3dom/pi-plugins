@@ -1,5 +1,27 @@
 # @pi-plugins/subagent
 
+## 0.1.4
+
+### Patch Changes
+
+- 7554143: Prevent long-running subagent tool rows from destabilizing terminal scrolling by
+  using a static pending indicator instead of an animated spinner. Bound collapsed
+  result rendering to pi's standard tool-output limits while preserving the full output
+  when tool results are expanded with Ctrl+O.
+
+## 0.1.3
+
+### Patch Changes
+
+- fb4d4ce: Fix spurious auto-compaction in parent sessions caused by folding subagent token
+  usage into the next assistant message. pi's silent-overflow heuristic
+  (`isContextOverflow`) compares `usage.input + usage.cacheRead` of the last assistant
+  message against the model's context window; subagents accumulate large cumulative
+  cacheRead across their turns, so sessions that spawned several subagents were
+  compacted at a fraction of the real context usage. Only `cost.total` is folded back
+  into the parent session now — token counts remain per-request accurate, and per-run
+  subagent token stats stay visible on each tool call.
+
 ## 0.1.2
 
 ### Patch Changes

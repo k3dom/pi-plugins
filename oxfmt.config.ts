@@ -8,7 +8,5 @@ export default defineConfig({
     'packages',
     '.agents',
     'flake.lock',
-    '**/CHANGELOG.md',
-    '.changeset/*.md',
   ],
 })
