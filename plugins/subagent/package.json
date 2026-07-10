@@ -1,6 +1,6 @@
 {
   "name": "@pi-plugins/subagent",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Minimal subagent tool extension for pi-agent: delegate a task to a fresh headless pi instance.",
   "keywords": [
     "pi",
