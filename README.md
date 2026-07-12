@@ -19,6 +19,7 @@ concurrency.
 | [`claude-oauth`](plugins/claude-oauth) | Makes pi's Anthropic OAuth requests match the current Claude Code client so OAuth login works correctly. | —                           |
 | [`exit`](plugins/exit)                 | Exits pi when `exit` or `quit` is submitted as the whole prompt.                                         | —                           |
 | [`prompts`](plugins/prompts)           | A collection of prompt templates, invoked as slash commands.                                             | `/simplify`, `/code-review` |
+| [`usage`](plugins/usage)               | Shows subscription usage/rate limits for Claude and OpenAI Codex plans.                                  | `/usage`                    |
 
 ## Usage
 

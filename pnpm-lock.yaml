@@ -210,6 +210,40 @@ importers:
         specifier: 6.0.3
         version: 6.0.3
 
+  plugins/usage:
+    dependencies:
+      effect:
+        specifier: 4.0.0-beta.93
+        version: 4.0.0-beta.93
+    devDependencies:
+      '@earendil-works/pi-coding-agent':
+        specifier: 0.80.3
+        version: 0.80.3(ws@8.21.0)(zod@4.4.3)
+      '@pi-plugins/fmt':
+        specifier: workspace:*
+        version: link:../../tooling/fmt
+      '@pi-plugins/lint':
+        specifier: workspace:*
+        version: link:../../tooling/lint
+      '@pi-plugins/tsconfig':
+        specifier: workspace:*
+        version: link:../../tooling/tsconfig
+      '@types/node':
+        specifier: 26.1.0
+        version: 26.1.0
+      oxfmt:
+        specifier: 0.57.0
+        version: 0.57.0
+      oxlint:
+        specifier: 1.72.0
+        version: 1.72.0
+      tsdown:
+        specifier: 0.22.3
+        version: 0.22.3(typescript@6.0.3)
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+
   plugins/webfetch:
     dependencies:
       defuddle:
