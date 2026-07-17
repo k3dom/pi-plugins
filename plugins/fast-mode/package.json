@@ -1,6 +1,6 @@
 {
   "name": "@pi-plugins/fast-mode",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Fast service-tier extension for pi-agent.",
   "keywords": [
     "fast",
