@@ -1,4 +1,7 @@
-import type { ModelRegistry } from '@earendil-works/pi-coding-agent'
+import {
+  type ModelRegistry,
+  readStoredCredential,
+} from '@earendil-works/pi-coding-agent'
 import {
   Array,
   Context,
@@ -109,15 +112,14 @@ export class UsageService extends Context.Service<UsageService>()(
           OpenAI: () => 'openai-codex',
         })
 
-        const storage = registry.authStorage
-        if (storage.get(providerId)?.type !== 'oauth') {
+        if (readStoredCredential(providerId)?.type !== 'oauth') {
           return yield* new UsageServiceError({
             kind: 'CredentialsMissing',
             message: `no subscription (OAuth) credentials found — ${LOGIN_HINT}`,
           })
         }
         const accessToken = yield* Effect.tryPromise({
-          try: () => storage.getApiKey(providerId),
+          try: () => registry.getApiKeyForProvider(providerId),
           catch: (cause) =>
             new UsageServiceError({
               kind: 'TokenRefreshFailed',
@@ -136,8 +138,8 @@ export class UsageService extends Context.Service<UsageService>()(
           Anthropic: () =>
             Effect.succeed(UsageCredentials.Anthropic({ accessToken })),
           OpenAI: Effect.fnUntraced(function* () {
-            // Re-read after getApiKey, which may have refreshed the stored credential.
-            const credential = storage.get(providerId)
+            // Re-read after auth resolution, which may have refreshed the stored credential.
+            const credential = readStoredCredential(providerId)
             const storedAccountId =
               credential?.type === 'oauth' &&
               typeof credential['accountId'] === 'string'

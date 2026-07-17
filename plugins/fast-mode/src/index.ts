@@ -30,7 +30,6 @@ const FastModeConfig = Schema.Struct({
       Effect.succeed([
         'openai/gpt-5.4',
         'openai/gpt-5.5',
-        'openai/gpt-5.6',
         'openai/gpt-5.6-sol',
         'openai/gpt-5.6-terra',
         'openai/gpt-5.6-luna',

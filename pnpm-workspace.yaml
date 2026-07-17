@@ -6,3 +6,8 @@ allowBuilds:
   koffi: false
   msgpackr-extract: false
   protobufjs: false
+minimumReleaseAgeExclude:
+  - '@earendil-works/pi-agent-core@0.80.10'
+  - '@earendil-works/pi-ai@0.80.10'
+  - '@earendil-works/pi-coding-agent@0.80.10'
+  - '@earendil-works/pi-tui@0.80.10'
