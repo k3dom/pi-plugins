@@ -135,8 +135,16 @@ export default function fastMode(pi: ExtensionAPI) {
               get sessionManager() {
                 return ctx.sessionManager
               },
-              get modelRegistry() {
-                return ctx.modelRegistry
+              get modelRuntime() {
+                return {
+                  isUsingOAuth: (provider: string) => {
+                    const model = ctx.model
+                    return (
+                      model?.provider === provider &&
+                      ctx.modelRegistry.isUsingOAuth(model)
+                    )
+                  },
+                }
               },
               getContextUsage: () => ctx.getContextUsage(),
             } as unknown as ConstructorParameters<typeof FooterComponent>[0]
