@@ -48,8 +48,8 @@ Start a session with fast mode already enabled:
 pi --fast
 ```
 
-While fast mode is on and the current model is configured for it, a `fast` indicator
-is shown in the status line.
+While fast mode is on and the current model is configured for it, a dim `[fast mode]`
+indicator is shown right above the editor.
 
 ## Configuration
 
@@ -80,7 +80,7 @@ Optional config file at `<agent-dir>/extensions/fast-mode.json` (typically
 - `models`: the `provider/model-id` keys fast mode applies to. The defaults above are
   used when the file is absent. Models whose API has no fast-mode support are
   ignored.
-- `showStatus`: show the `fast` status-line indicator while active.
+- `showStatus`: show the `[fast mode]` indicator above the editor while active.
 
 ## Notes
 

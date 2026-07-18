@@ -1,8 +1,4 @@
-import {
-  FooterComponent,
-  type ExtensionAPI,
-  type ExtensionContext,
-} from '@earendil-works/pi-coding-agent'
+import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import { loadExtensionConfig } from '@pi-plugins/shared'
 import {
@@ -19,8 +15,9 @@ import {
 
 const EXTENSION_ID = 'fast-mode'
 const COMMAND_ARGS = ['on', 'off', 'status'] as const
-/** Appended after the effort level on the footer's model line while active. */
-const FAST_SUFFIX = ' • fast'
+/** Widget shown above the editor while fast mode is active. */
+const WIDGET_KEY = EXTENSION_ID
+const WIDGET_LABEL = '[fast mode]'
 
 const FastModeConfig = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -41,7 +38,7 @@ const FastModeConfig = Schema.Struct({
       ]),
     ),
   ),
-  /** Show a `fast` indicator in the status line while active. */
+  /** Show a `fast mode` indicator above the editor while active. */
   showStatus: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 })
 type FastModeConfig = typeof FastModeConfig.Type
@@ -86,7 +83,6 @@ function applyOpenAIPriorityTier(
 export default function fastMode(pi: ExtensionAPI) {
   let config = Schema.decodeUnknownSync(FastModeConfig)({})
   let enabled = false
-  let footerInstalled = false
 
   function checkEligibility(model: ExtensionContext['model']): Eligibility {
     if (!model) {
@@ -111,63 +107,19 @@ export default function fastMode(pi: ExtensionAPI) {
   }
 
   function updateStatus(ctx: ExtensionContext): void {
-    if (!ctx.hasUI || !config.showStatus) {
+    if (!ctx.hasUI) {
       return
     }
 
     const active =
-      enabled && Eligibility.$is('Eligible')(checkEligibility(ctx.model))
-    if (active === footerInstalled) {
-      return
-    }
-    footerInstalled = active
+      config.showStatus &&
+      enabled &&
+      Eligibility.$is('Eligible')(checkEligibility(ctx.model))
 
-    // Reuse pi's built-in footer via a live view over `ctx`, then append a dim
-    // `• fast` after the effort level on the model line. Rendering the inner
-    // footer a suffix-width narrower keeps that line right-aligned once we add it.
-    ctx.ui.setFooter(
-      active
-        ? (tui, theme, footerData) => {
-            const session = {
-              get state() {
-                return { model: ctx.model, thinkingLevel: pi.getThinkingLevel() }
-              },
-              get sessionManager() {
-                return ctx.sessionManager
-              },
-              get modelRuntime() {
-                return {
-                  isUsingOAuth: (provider: string) => {
-                    const model = ctx.model
-                    return (
-                      model?.provider === provider &&
-                      ctx.modelRegistry.isUsingOAuth(model)
-                    )
-                  },
-                }
-              },
-              getContextUsage: () => ctx.getContextUsage(),
-            } as unknown as ConstructorParameters<typeof FooterComponent>[0]
-
-            const inner = new FooterComponent(session, footerData)
-            const unsubscribe = footerData.onBranchChange(() => tui.requestRender())
-
-            return {
-              invalidate: () => inner.invalidate(),
-              dispose: () => {
-                unsubscribe()
-                inner.dispose()
-              },
-              render: (width) => {
-                const lines = inner.render(Math.max(width - FAST_SUFFIX.length, 0))
-                if (width > FAST_SUFFIX.length && lines.length > 1) {
-                  lines[1] += theme.fg('dim', FAST_SUFFIX)
-                }
-                return lines
-              },
-            }
-          }
-        : undefined,
+    // Show a dim indicator right above the editor while active.
+    ctx.ui.setWidget(
+      WIDGET_KEY,
+      active ? [ctx.ui.theme.fg('dim', WIDGET_LABEL)] : undefined,
     )
   }
 
