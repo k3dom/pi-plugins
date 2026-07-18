@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import * as NodeServices from '@effect/platform-node/NodeServices'
-import { loadExtensionConfig } from '@pi-plugins/shared'
+import { loadExtensionConfig, setStatuslineSegment } from '@pi-plugins/shared'
 import {
   Array,
   Data,
@@ -15,9 +15,9 @@ import {
 
 const EXTENSION_ID = 'fast-mode'
 const COMMAND_ARGS = ['on', 'off', 'status'] as const
-/** Widget shown above the editor while fast mode is active. */
-const WIDGET_KEY = EXTENSION_ID
-const WIDGET_LABEL = '[fast mode]'
+/** Status-line segment shown above the editor while fast mode is active. */
+const SEGMENT_KEY = EXTENSION_ID
+const SEGMENT_LABEL = '[fast mode]'
 
 const FastModeConfig = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -116,10 +116,10 @@ export default function fastMode(pi: ExtensionAPI) {
       enabled &&
       Eligibility.$is('Eligible')(checkEligibility(ctx.model))
 
-    // Show a dim indicator right above the editor while active.
-    ctx.ui.setWidget(
-      WIDGET_KEY,
-      active ? [ctx.ui.theme.fg('dim', WIDGET_LABEL)] : undefined,
+    setStatuslineSegment(
+      ctx,
+      SEGMENT_KEY,
+      active ? { text: SEGMENT_LABEL, align: 'right' } : undefined,
     )
   }
 

@@ -8,6 +8,11 @@ const PI_REMOVAL_ANCHORS = [
   'badlogic/pi-mono',
 ] as const
 
+// Pi's generated documentation section describes the harness, not Claude Code.
+// Drop the whole paragraph rather than relabeling it during the word rewrite.
+const PI_DOCUMENTATION_HEADING =
+  'Pi documentation (read only when the user asks about pi itself,'
+
 // Rewrite "pi"/"Pi" only as a standalone word (the harness self-identification).
 // The lookbehind/lookahead spare it inside paths and identifiers (`/pi/`,
 // `pi-plugins`, `@pi`, `pi.mod`, `pi_x`, `pi:1`).
@@ -16,6 +21,7 @@ const PI_WORD = /(?<![/\\.@:_-])\b[Pp]i\b(?![/\\.@:_-])/g
 function isPiInternalParagraph(paragraph: string): boolean {
   return (
     paragraph.toLowerCase().includes('you are pi') ||
+    paragraph.startsWith(PI_DOCUMENTATION_HEADING) ||
     PI_REMOVAL_ANCHORS.some((anchor) => paragraph.includes(anchor))
   )
 }
