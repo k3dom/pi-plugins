@@ -1,5 +1,12 @@
 # @pi-plugins/fast-mode
 
+## 0.1.5
+
+### Patch Changes
+
+- 321b296: Prevent the active fast-mode footer from crashing on pi 0.80.10 by adapting the
+  footer's model runtime access to the extension model registry.
+
 ## 0.1.4
 
 ### Patch Changes
