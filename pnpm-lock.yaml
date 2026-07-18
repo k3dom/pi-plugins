@@ -172,7 +172,7 @@ importers:
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 0.80.3
-        version: 0.80.3(ws@8.21.0)(zod@4.4.3)
+        version: 0.80.3
       '@pi-plugins/fmt':
         specifier: workspace:*
         version: link:../../tooling/fmt
@@ -591,6 +591,11 @@ packages:
 
   '@earendil-works/pi-coding-agent@0.80.10':
     resolution: {integrity: sha512-aL4apbupCHiVLSXASXvRzH4Q2vmtfrDa+0s909CJuVu/GgGylbDzr7oyF1mPmip5E+VxYYxKWmph4hV04wUcQg==}
+    engines: {node: '>=22.19.0'}
+    hasBin: true
+
+  '@earendil-works/pi-coding-agent@0.80.3':
+    resolution: {integrity: sha512-TIggw9gCXpA+Ph7OjdTA7ka2NPwTVuPmy39KDSyUzaKq8VvHfMGR7vtRz4JB7Um/RMRblmzhu4p9tUCk6MTgGA==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
@@ -2571,6 +2576,36 @@ snapshots:
       - zod
 
   '@earendil-works/pi-coding-agent@0.80.10(ws@8.21.1)(zod@4.4.3)':
+    dependencies:
+      '@earendil-works/pi-agent-core': 0.80.10(ws@8.21.1)(zod@4.4.3)
+      '@earendil-works/pi-ai': 0.80.10(ws@8.21.1)(zod@4.4.3)
+      '@earendil-works/pi-tui': 0.80.10
+      '@silvia-odwyer/photon-node': 0.3.4
+      chalk: 5.6.2
+      cross-spawn: 7.0.6
+      diff: 8.0.4
+      glob: 13.0.6
+      highlight.js: 10.7.3
+      hosted-git-info: 9.0.3
+      ignore: 7.0.5
+      jiti: 2.7.0
+      minimatch: 10.2.5
+      proper-lockfile: 4.1.2
+      semver: 7.8.0
+      typebox: 1.1.38
+      undici: 8.5.0
+      yaml: 2.9.0
+    optionalDependencies:
+      '@mariozechner/clipboard': 0.3.9
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@earendil-works/pi-coding-agent@0.80.3':
     dependencies:
       '@earendil-works/pi-agent-core': 0.80.10(ws@8.21.1)(zod@4.4.3)
       '@earendil-works/pi-ai': 0.80.10(ws@8.21.1)(zod@4.4.3)
