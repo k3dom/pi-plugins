@@ -4,25 +4,6 @@ A [pi-agent](https://github.com/earendil-works/pi) extension that measures infer
 speed per LLM request — tokens per second (TPS) and time to first token (TTFT) — and
 shows it on a shared status line above the editor.
 
-## How it measures
-
-Each provider request is timed through pi's extension lifecycle events:
-
-- **TTFT** — from `before_provider_request` (payload handed to the provider) to the
-  first streamed delta (text, thinking, or tool-call). This includes network latency
-  and prompt processing.
-- **TPS** — provider-reported output tokens (`usage.output`, which includes reasoning
-  tokens) divided by the time from the first streamed delta to the end of the
-  message.
-
-While a response is streaming, a live estimate (`~42.0 tok/s`) derived from streamed
-characters (≈4 chars/token) is shown; it is replaced by the exact provider-reported
-figure when the message completes. Aborted and failed requests are discarded.
-
-The measurement is rendered dim and left-aligned on a status line shared with other
-pi-plugins extensions (e.g. `@pi-plugins/fast-mode`) above the editor, e.g.
-`48.3 tok/s · TTFT 920ms`.
-
 ## Install
 
 ```bash
@@ -68,13 +49,7 @@ Per model
 
 - Samples are kept per session (up to 1000) and reset when the session ends.
 - Quantiles are exact (nearest-rank over the raw samples, per model) and gated: a
-  percentile is shown only once at least 2 samples lie strictly beyond its rank (p50
-  needs ≥ 4 requests, p95 ≥ 40); below that only the worst observed value is shown,
-  since small-sample percentiles are just the (near-)max relabeled. At session-scale
-  sample counts p99 would never clear that bar, so it is not reported — `max`/`min`
-  covers the extreme tail.
-- Percentiles walk toward the _worse_ tail: high for TTFT, low for tok/s (so "p95
-  42.0" under tok/s means 95% of requests ran at ≥ 42.0 tok/s).
+  percentile is shown only once at least 2 samples lie strictly beyond its rank.
 - TPS uses provider-reported token counts, so reasoning/thinking tokens count toward
   throughput even when they are not displayed.
 - The measured TTFT is end-to-end from pi's perspective; providers that batch their
