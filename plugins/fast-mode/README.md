@@ -49,7 +49,9 @@ pi --fast
 ```
 
 While fast mode is on and the current model is configured for it, a dim `[fast mode]`
-indicator is shown right above the editor.
+indicator is shown at the right of a status line right above the editor, shared with
+other pi-plugins extensions (e.g. `@pi-plugins/speed` renders its measurements at the
+left of the same line).
 
 ## Configuration
 

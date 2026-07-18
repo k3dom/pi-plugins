@@ -2,7 +2,7 @@
 
 A [pi-agent](https://github.com/earendil-works/pi) extension that measures inference
 speed per LLM request — tokens per second (TPS) and time to first token (TTFT) — and
-shows it in a widget line above the editor.
+shows it on a shared status line above the editor.
 
 ## How it measures
 
@@ -19,7 +19,8 @@ While a response is streaming, a live estimate (`~42.0 tok/s`) derived from stre
 characters (≈4 chars/token) is shown; it is replaced by the exact provider-reported
 figure when the message completes. Aborted and failed requests are discarded.
 
-The measurement is rendered as a dim widget line above the editor, e.g.
+The measurement is rendered dim and left-aligned on a status line shared with other
+pi-plugins extensions (e.g. `@pi-plugins/fast-mode`) above the editor, e.g.
 `48.3 tok/s · TTFT 920ms`.
 
 ## Install

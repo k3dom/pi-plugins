@@ -1,18 +1,19 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import { setStatuslineSegment } from '@pi-plugins/shared'
 import { Effect } from 'effect'
 import { liveText, renderReport, sampleText } from './render'
 import { SpeedTracker } from './service'
 
-const WIDGET_KEY = 'speed'
+const SEGMENT_KEY = 'speed'
 
 export default function speed(pi: ExtensionAPI) {
   const tracker = Effect.runSync(SpeedTracker.make)
 
-  /** Renders one measurement line above the editor. */
   function showWidget(ctx: ExtensionContext, text: string | undefined): void {
-    ctx.ui.setWidget(
-      WIDGET_KEY,
-      text === undefined ? undefined : [ctx.ui.theme.fg('dim', text)],
+    setStatuslineSegment(
+      ctx,
+      SEGMENT_KEY,
+      text === undefined ? undefined : { text, align: 'left' },
     )
   }
 
