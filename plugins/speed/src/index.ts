@@ -8,8 +8,8 @@ import {
 } from './stats'
 
 const WIDGET_KEY = 'speed'
-/** Oldest samples are dropped beyond this bound. */
-const MAX_SAMPLES = 500
+/** Retained measurement window; oldest samples beyond this are dropped. */
+const MAX_SAMPLES = 1000
 /** Minimum time between live status refreshes while streaming. */
 const LIVE_UPDATE_INTERVAL_MS = 500
 /** Rough chars-per-token heuristic for the live estimate, corrected by real usage at message end. */
@@ -110,8 +110,10 @@ export default function speed(pi: ExtensionAPI) {
       outputTokens: message.usage.output,
       timestamp: Date.now(),
     })
-    if (samples.length > MAX_SAMPLES) {
-      samples.shift()
+    if (samples.length >= MAX_SAMPLES * 2) {
+      // Amortized trim: let the buffer grow to twice the window, then cut
+      // back in one splice instead of shifting on every append.
+      samples.splice(0, samples.length - MAX_SAMPLES)
     }
     showLastSample(ctx)
   })
