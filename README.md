@@ -20,6 +20,7 @@ concurrency.
 | [`exit`](plugins/exit)                 | Exits pi when `exit` or `quit` is submitted as the whole prompt.                                         | —                           |
 | [`prompts`](plugins/prompts)           | A collection of prompt templates, invoked as slash commands.                                             | `/simplify`, `/code-review` |
 | [`usage`](plugins/usage)               | Shows subscription usage/rate limits for Claude and OpenAI Codex plans.                                  | `/usage`                    |
+| [`speed`](plugins/speed)               | Measures provider inference speed, including tokens per second and time to first token.                  | `/speed`                    |
 
 ## Usage
 
