@@ -1,5 +1,29 @@
 # @pi-plugins/fast-mode
 
+## 0.1.6
+
+### Patch Changes
+
+- 4278f53: Show the active fast-mode indicator as a dim `[fast mode]` widget right above the
+  editor via `ctx.ui.setWidget`, replacing the previous footer-override hack that
+  re-rendered pi's built-in footer to append a `• fast` suffix. Pi still only supports
+  fully replacing the footer, so the widget API is the sanctioned, much simpler way to
+  surface the state.
+
+## 0.1.5
+
+### Patch Changes
+
+- 321b296: Prevent the active fast-mode footer from crashing on pi 0.80.10 by adapting the
+  footer's model runtime access to the extension model registry.
+
+## 0.1.4
+
+### Patch Changes
+
+- 1687714: Restore Pi 0.80.10 compatibility by using the current model-registry credential APIs
+  and removing the retired bare GPT-5.6 alias from fast-mode defaults.
+
 ## 0.1.3
 
 ### Patch Changes

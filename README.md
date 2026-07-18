@@ -21,6 +21,10 @@ concurrency.
 | [`prompts`](plugins/prompts)           | A collection of prompt templates, invoked as slash commands.                                             | `/simplify`, `/code-review` |
 | [`usage`](plugins/usage)               | Shows subscription usage/rate limits for Claude and OpenAI Codex plans.                                  | `/usage`                    |
 
+## Requirements
+
+Pi **0.80.10 or newer** is required.
+
 ## Usage
 
 Install a published plugin with pi-agent:
