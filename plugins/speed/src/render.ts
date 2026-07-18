@@ -83,9 +83,9 @@ export function renderReport(report: SessionReport): string {
     `Inference speed — this session (${requestCount} request${requestCount === 1 ? '' : 's'})`,
     '',
     `Last request  ${last.model}`,
-    `  ${formatTps(tokensPerSecond(last))} · TTFT ${formatMs(last.ttftMs)} · ${formatTokens(
-      last.outputTokens,
-    )} tok in ${formatMs(last.generationMs)}`,
+    `  ${sampleText(last)} · ${formatTokens(last.outputTokens)} tok in ${formatMs(
+      last.generationMs,
+    )}`,
     '',
     'Per model',
     ...stats.flatMap((entry) => [

@@ -10,7 +10,6 @@ export interface Sample {
   readonly ttftMs: number
   readonly generationMs: number
   readonly outputTokens: number
-  readonly timestamp: number
 }
 
 export interface ModelStats {
@@ -158,7 +157,6 @@ export class SpeedTracker extends Context.Service<SpeedTracker>()(
           ttftMs: request.firstTokenAt - request.requestStart,
           generationMs: Math.max(end - request.firstTokenAt, 1),
           outputTokens: outcome.outputTokens,
-          timestamp: Date.now(),
         })
         if (samples.length >= MAX_SAMPLES * 2) {
           // Amortized trim: let the buffer grow to twice the window, then cut
@@ -178,23 +176,24 @@ export class SpeedTracker extends Context.Service<SpeedTracker>()(
           // Grouped by model, most-used model first.
           stats: pipe(
             Record.toEntries(Array.groupBy(samples, (sample) => sample.model)),
-            Array.map(
-              ([model, group]): ModelStats => ({
+            Array.map(([model, group]): ModelStats => {
+              const totalTokens = Number.sumAll(
+                group.map((sample) => sample.outputTokens),
+              )
+              return {
                 model,
                 requests: group.length,
                 tps:
-                  Number.sumAll(group.map((sample) => sample.outputTokens)) /
+                  totalTokens /
                   (Number.sumAll(group.map((sample) => sample.generationMs)) / 1000),
-                totalTokens: Number.sumAll(
-                  group.map((sample) => sample.outputTokens),
-                ),
+                totalTokens,
                 ttft: tailSummary(
                   group.map((sample) => sample.ttftMs),
                   'high',
                 ),
                 requestTps: tailSummary(group.map(tokensPerSecond), 'low'),
-              }),
-            ),
+              }
+            }),
             Array.sortWith(
               (stats: ModelStats) => stats.requests,
               Order.flip(Order.Number),
