@@ -40,14 +40,22 @@ export default function usage(pi: ExtensionAPI): void {
           ],
           { concurrency: 'unbounded' },
         )
-        // One message per provider so each carries its own severity:
-        // successful sections stay informational, failures become warnings.
+        // The UI only shows one message per severity, so group sections by
+        // outcome: all successes in one info message, all failures in one
+        // warning message.
         const rendered = renderSections(sections, now)
-        return sections.map((usageSection, index) => ({
-          report: rendered[index] ?? '',
-          severity:
-            'error' in usageSection ? ('warning' as const) : ('info' as const),
-        }))
+        const grouped = { info: [] as string[], warning: [] as string[] }
+        sections.forEach((usageSection, index) => {
+          grouped['error' in usageSection ? 'warning' : 'info'].push(
+            rendered[index] ?? '',
+          )
+        })
+        return (['info', 'warning'] as const)
+          .filter((severity) => grouped[severity].length > 0)
+          .map((severity) => ({
+            report: grouped[severity].join('\n\n'),
+            severity,
+          }))
       }).pipe(Effect.provide(UsageService.layer(ctx.modelRegistry)))
 
       const exit = await Effect.runPromiseExit(program)
