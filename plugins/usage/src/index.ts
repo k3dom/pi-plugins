@@ -3,7 +3,7 @@ import { Cause, Effect, Exit } from 'effect'
 import {
   claudeSection,
   codexSection,
-  renderReport,
+  renderSections,
   type UsageSection,
 } from './render'
 import { UsageService, type UsageServiceError } from './service'
@@ -40,21 +40,23 @@ export default function usage(pi: ExtensionAPI): void {
           ],
           { concurrency: 'unbounded' },
         )
-        const failed = sections.filter((rendered) => 'error' in rendered).length
-        return {
-          report: renderReport(sections, now),
+        // One message per provider so each carries its own severity:
+        // successful sections stay informational, failures become warnings.
+        const rendered = renderSections(sections, now)
+        return sections.map((usageSection, index) => ({
+          report: rendered[index] ?? '',
           severity:
-            failed === sections.length
-              ? ('error' as const)
-              : failed > 0
-                ? ('warning' as const)
-                : ('info' as const),
-        }
+            'error' in usageSection ? ('warning' as const) : ('info' as const),
+        }))
       }).pipe(Effect.provide(UsageService.layer(ctx.modelRegistry)))
 
       const exit = await Effect.runPromiseExit(program)
       Exit.match(exit, {
-        onSuccess: ({ report, severity }) => ctx.ui.notify(report, severity),
+        onSuccess: (messages) => {
+          for (const { report, severity } of messages) {
+            ctx.ui.notify(report, severity)
+          }
+        },
         onFailure: (cause) =>
           ctx.ui.notify(`Failed to fetch usage: ${Cause.pretty(cause)}`, 'error'),
       })

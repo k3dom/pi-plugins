@@ -77,19 +77,22 @@ function renderSection(
 }
 
 /**
- * Renders all sections with a shared label width so bars and percentages
- * line up across providers, not just within one section.
+ * Renders each section to its own string, using a shared label width so bars
+ * and percentages line up across providers, not just within one section.
  */
-export function renderReport(sections: readonly UsageSection[], now: Date): string {
+export function renderSections(
+  sections: readonly UsageSection[],
+  now: Date,
+): string[] {
   const labelWidth = Math.max(
     MIN_LABEL_WIDTH,
     ...sections.flatMap((section) =>
       'rows' in section ? section.rows.map((row) => row.label.length) : [],
     ),
   )
-  return sections
-    .map((section) => renderSection(section, now, labelWidth).join('\n'))
-    .join('\n\n')
+  return sections.map((section) =>
+    renderSection(section, now, labelWidth).join('\n'),
+  )
 }
 
 // ─── Claude ──────────────────────────────────────────────────────────────────
