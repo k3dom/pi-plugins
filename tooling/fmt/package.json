@@ -18,8 +18,8 @@
   },
   "devDependencies": {
     "@pi-plugins/tsconfig": "workspace:*",
-    "oxfmt": "0.57.0",
-    "typescript": "6.0.3"
+    "oxfmt": "0.59.0",
+    "typescript": "7.0.2"
   },
   "peerDependencies": {
     "oxfmt": "*"

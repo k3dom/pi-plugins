@@ -62,9 +62,8 @@ export const make = Effect.fnUntraced(function* (lockPath: string) {
     ),
     Effect.retry({
       while: (error) => error.reason._tag === 'AlreadyExists',
-      schedule: Schedule.both(
-        Schedule.spaced('100 millis'),
-        Schedule.during('10 seconds'),
+      schedule: Schedule.spaced('100 millis').pipe(
+        Schedule.upTo({ duration: '10 seconds' }),
       ),
     }),
     Effect.mapError((cause) => new FileLockError({ lockPath, cause })),

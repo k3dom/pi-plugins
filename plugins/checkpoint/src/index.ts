@@ -33,7 +33,7 @@ function nearestCheckpoint(
   session: ExtensionContext['sessionManager'],
   fromId: string | null,
 ): string | undefined {
-  for (let id = fromId; id !== null; ) {
+  for (let id = fromId; id !== null;) {
     const entry = session.getEntry(id)
     if (!entry) {
       return undefined

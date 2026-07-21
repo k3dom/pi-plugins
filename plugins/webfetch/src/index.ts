@@ -1,4 +1,3 @@
-import { StringEnum } from '@earendil-works/pi-ai'
 import type { ExtensionAPI, TruncationResult } from '@earendil-works/pi-coding-agent'
 import { truncateHead } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
@@ -15,7 +14,9 @@ const webFetchSchema = Type.Object({
     description: 'The URL to fetch content from',
   }),
   format: Type.Optional(
-    StringEnum(['markdown', 'html'] as const, {
+    Type.Unsafe<'markdown' | 'html'>({
+      type: 'string',
+      enum: ['markdown', 'html'],
       description: "The format to return the content in ('markdown' or 'html').",
       default: 'markdown',
     }),
