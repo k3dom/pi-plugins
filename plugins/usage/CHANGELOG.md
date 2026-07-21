@@ -1,5 +1,11 @@
 # @pi-plugins/usage
 
+## 0.1.2
+
+### Patch Changes
+
+- 9f4e439: Emit one notification per provider so successful providers report as info and failed providers as warnings, instead of a single combined message
+
 ## 0.1.1
 
 ### Patch Changes
