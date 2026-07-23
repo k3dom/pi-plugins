@@ -46,12 +46,14 @@
     "format:check": "oxfmt --check"
   },
   "dependencies": {
+    "@effect/platform-node": "4.0.0-beta.100",
     "effect": "4.0.0-beta.100"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.81.1",
     "@pi-plugins/fmt": "workspace:*",
     "@pi-plugins/lint": "workspace:*",
+    "@pi-plugins/shared": "workspace:*",
     "@pi-plugins/tsconfig": "workspace:*",
     "@types/node": "26.1.1",
     "oxfmt": "0.59.0",

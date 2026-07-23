@@ -249,6 +249,9 @@ importers:
 
   plugins/usage:
     dependencies:
+      '@effect/platform-node':
+        specifier: 4.0.0-beta.100
+        version: 4.0.0-beta.100(effect@4.0.0-beta.100)(ioredis@5.11.1)
       effect:
         specifier: 4.0.0-beta.100
         version: 4.0.0-beta.100
@@ -262,6 +265,9 @@ importers:
       '@pi-plugins/lint':
         specifier: workspace:*
         version: link:../../tooling/lint
+      '@pi-plugins/shared':
+        specifier: workspace:*
+        version: link:../../tooling/shared
       '@pi-plugins/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig
