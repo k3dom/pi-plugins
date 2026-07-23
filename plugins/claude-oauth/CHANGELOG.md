@@ -1,5 +1,11 @@
 # @pi-plugins/claude-oauth
 
+## 0.2.2
+
+### Patch Changes
+
+- 6234a89: Publish the upgraded runtime and build dependencies, including Effect 4.0.0-beta.100 and Pi 0.81.1 compatibility updates.
+
 ## 0.2.1
 
 ### Patch Changes
