@@ -1,7 +1,7 @@
 import { Array } from 'effect'
 import {
   tokensPerSecond,
-  type LiveEstimate,
+  type FirstToken,
   type Sample,
   type SessionReport,
   type TailSummary,
@@ -45,9 +45,12 @@ export function sampleText(sample: Sample): string {
   return `${formatTps(tokensPerSecond(sample))} · TTFT ${formatMs(sample.ttftMs)}`
 }
 
-/** Widget line for the streaming live estimate. */
-export function liveText(estimate: LiveEstimate): string {
-  return `~${formatTps(estimate.tps)} · TTFT ${formatMs(estimate.ttftMs)}`
+/**
+ * Widget line while streaming: only the measured TTFT. Tokens/sec is shown
+ * once the request completes and the provider reports real token counts.
+ */
+export function firstTokenText(firstToken: FirstToken): string {
+  return `TTFT ${formatMs(firstToken.ttftMs)}`
 }
 
 const TAIL_LABEL_WIDTH = 'tok/s'.length

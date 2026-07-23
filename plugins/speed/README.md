@@ -52,5 +52,8 @@ Per model
   percentile is shown only once at least 2 samples lie strictly beyond its rank.
 - TPS uses provider-reported token counts, so reasoning/thinking tokens count toward
   throughput even when they are not displayed.
+- While a response is streaming, the status line only shows the measured TTFT; the
+  tokens/sec figure appears once the request completes and real usage is known. There
+  is deliberately no mid-stream tok/s estimate.
 - The measured TTFT is end-to-end from pi's perspective; providers that batch their
   first deltas will look slightly slower than raw API metrics.

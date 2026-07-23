@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { setStatuslineSegment } from '@pi-plugins/shared'
 import { Effect } from 'effect'
-import { liveText, renderReport, sampleText } from './render'
+import { firstTokenText, renderReport, sampleText } from './render'
 import { SpeedTracker } from './service'
 
 const SEGMENT_KEY = 'speed'
@@ -31,9 +31,9 @@ export default function speed(pi: ExtensionAPI) {
     if (!('delta' in streamEvent)) {
       return
     }
-    const estimate = tracker.recordDelta(streamEvent.delta.length)
-    if (estimate !== undefined) {
-      showWidget(ctx, liveText(estimate))
+    const firstToken = tracker.recordDelta()
+    if (firstToken !== undefined) {
+      showWidget(ctx, firstTokenText(firstToken))
     }
   })
 

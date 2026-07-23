@@ -1,9 +1,6 @@
 import { Array, Context, Effect, Number, Order, pipe, Record } from 'effect'
 
 const MAX_SAMPLES = 1000
-const LIVE_UPDATE_INTERVAL_MS = 500
-/** Rough heuristic for the live estimate, corrected by real usage at message end. */
-const CHARS_PER_TOKEN = 4
 
 export interface Sample {
   readonly model: string
@@ -27,8 +24,7 @@ export interface TailSummary {
   readonly worst: number
 }
 
-export interface LiveEstimate {
-  readonly tps: number
+export interface FirstToken {
   readonly ttftMs: number
 }
 
@@ -47,8 +43,6 @@ export interface RequestOutcome {
 interface InflightRequest {
   readonly requestStart: number
   firstTokenAt?: number
-  deltaChars: number
-  lastLiveUpdate: number
 }
 
 /**
@@ -104,37 +98,23 @@ export class SpeedTracker extends Context.Service<SpeedTracker>()(
 
       /** One LLM request is about to go out; the TTFT start anchor. */
       function beginRequest(): void {
-        inflight = {
-          requestStart: performance.now(),
-          deltaChars: 0,
-          lastLiveUpdate: 0,
-        }
+        inflight = { requestStart: performance.now() }
       }
 
-      /** Returns a fresh live estimate, or undefined while throttled or idle. */
-      function recordDelta(chars: number): LiveEstimate | undefined {
+      /**
+       * Marks the first streamed delta of the in-flight request. Returns the
+       * measured TTFT exactly once (on that first delta), undefined otherwise.
+       * Tokens/sec is intentionally not estimated mid-stream: real token counts
+       * only arrive with the provider usage at message end.
+       */
+      function recordDelta(): FirstToken | undefined {
         const request = inflight
-        if (request === undefined) {
+        if (request === undefined || request.firstTokenAt !== undefined) {
           return undefined
         }
 
-        const now = performance.now()
-        request.firstTokenAt ??= now
-        request.deltaChars += chars
-
-        if (now - request.lastLiveUpdate < LIVE_UPDATE_INTERVAL_MS) {
-          return undefined
-        }
-        request.lastLiveUpdate = now
-
-        const elapsedSeconds = (now - request.firstTokenAt) / 1000
-        if (elapsedSeconds <= 0) {
-          return undefined
-        }
-        return {
-          tps: request.deltaChars / CHARS_PER_TOKEN / elapsedSeconds,
-          ttftMs: request.firstTokenAt - request.requestStart,
-        }
+        request.firstTokenAt = performance.now()
+        return { ttftMs: request.firstTokenAt - request.requestStart }
       }
 
       function endRequest(outcome: RequestOutcome): void {
