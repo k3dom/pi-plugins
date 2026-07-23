@@ -1,6 +1,6 @@
 {
   "name": "@pi-plugins/exit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Exit command extension for pi-agent.",
   "keywords": [
     "exit",
