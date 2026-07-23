@@ -5,7 +5,9 @@ delegate a task to a fresh, headless pi instance with an isolated context window
 
 No agent presets, no orchestration modes — just a `subagent` tool that spawns another
 instance of the running pi harness (`pi --mode json -p --no-session`) and returns its
-final response.
+final response. Child processes inherit the parent environment with
+`PI_CACHE_RETENTION=short`, so they keep pi's standard provider cache retention
+instead of inheriting a process-wide or OAuth-plugin extended setting.
 
 ## Install
 

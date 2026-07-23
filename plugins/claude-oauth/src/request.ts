@@ -104,8 +104,49 @@ interface SystemBlock {
 interface AnthropicPayload {
   messages?: Array<{ role?: string; content?: unknown }>
   system?: SystemBlock[]
+  tools?: unknown[]
   max_tokens?: number
   metadata?: { user_id?: unknown }
+}
+
+/** Configure an existing cache breakpoint for extended or standard retention. */
+function configureCacheTtl(block: unknown, extended: boolean): void {
+  if (!Predicate.isObject(block)) {
+    return
+  }
+  const cacheControl = (block as { cache_control?: unknown }).cache_control
+  if (!Predicate.isObject(cacheControl)) {
+    return
+  }
+  const typed = cacheControl as { type?: unknown; ttl?: unknown }
+  if (typed.type !== 'ephemeral') {
+    return
+  }
+  if (extended) {
+    typed.ttl = '1h'
+  } else if (typed.ttl === '1h') {
+    delete typed.ttl
+  }
+}
+
+/** Update only the cache breakpoints pi already placed in the payload. */
+function configurePayloadCacheTtls(
+  payload: AnthropicPayload,
+  extended: boolean,
+): void {
+  for (const block of payload.system ?? []) {
+    configureCacheTtl(block, extended)
+  }
+  for (const tool of payload.tools ?? []) {
+    configureCacheTtl(tool, extended)
+  }
+  for (const message of payload.messages ?? []) {
+    if (Array.isArray(message.content)) {
+      for (const block of message.content) {
+        configureCacheTtl(block, extended)
+      }
+    }
+  }
 }
 
 /**
@@ -118,6 +159,7 @@ interface AnthropicPayload {
  */
 export function rewriteForClaudeCode(
   payload: unknown,
+  extendedCacheTtl = true,
 ): AnthropicPayload | undefined {
   if (!Predicate.isObject(payload)) {
     return undefined
@@ -160,6 +202,10 @@ export function rewriteForClaudeCode(
   ) {
     typed.max_tokens = CLAUDE_CODE_MAX_OUTPUT_TOKENS
   }
+
+  // The OAuth beta supports one-hour prompt caching. Update the breakpoints pi
+  // already emitted without enabling extended retention for other auth modes.
+  configurePayloadCacheTtls(typed, extendedCacheTtl)
 
   return typed
 }

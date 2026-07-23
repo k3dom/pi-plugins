@@ -265,6 +265,10 @@ export function runSubagent(options: {
         [...invocation.args],
         {
           cwd: options.cwd,
+          // Override a process-wide long retention setting. The explicit short
+          // value also tells @pi-plugins/claude-oauth not to extend child TTLs.
+          env: { PI_CACHE_RETENTION: 'short' },
+          extendEnv: true,
           stdin: Stream.make(new TextEncoder().encode(options.prompt)),
           forceKillAfter: FORCE_KILL_AFTER,
         },
