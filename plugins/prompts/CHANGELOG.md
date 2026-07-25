@@ -1,5 +1,12 @@
 # @pi-plugins/prompts
 
+## 0.2.1
+
+### Patch Changes
+
+- 3f61feb: Have `/code-review` and `/simplify` report their findings as a markdown table with
+  explicit columns instead of a loose field list.
+
 ## 0.2.0
 
 ### Minor Changes
