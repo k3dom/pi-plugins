@@ -1,5 +1,13 @@
 # @pi-plugins/usage
 
+## 0.3.0
+
+### Minor Changes
+
+- db02f56: Show when each rate-limit window resets in the status-line widget, as a compact
+  single-unit countdown after the percentage
+  (`5h ██░░░ 42% (2h) · wk █░░░░ 17% (4d)`).
+
 ## 0.2.0
 
 ### Minor Changes
