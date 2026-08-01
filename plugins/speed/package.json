@@ -1,6 +1,6 @@
 {
   "name": "@pi-plugins/speed",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Inference speed extension for pi-agent: tokens/sec and time to first token.",
   "keywords": [
     "benchmark",
