@@ -1,6 +1,6 @@
 {
   "name": "@pi-plugins/elapsed",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Working timer extension for pi-agent: shows how long the agent has been working.",
   "keywords": [
     "duration",

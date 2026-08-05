@@ -1,5 +1,18 @@
 # @pi-plugins/subagent
 
+## 0.2.0
+
+### Minor Changes
+
+- 78917d2: Stop redrawing subagent rows while the child runs: a row now paints when the child
+  reports its session id and when the run ends, instead of streaming stats and thinking
+  traces that dragged pi's viewport around. Children persist a named session in
+  `~/.pi/agent/sessions/subagents/`, so `pi --session <id>` opens what a subagent did.
+
+### Patch Changes
+
+- cb59f15: Publish the upgraded runtime and build dependencies, including Effect 4.0.0-beta.103 and Pi 0.83.0 compatibility updates.
+
 ## 0.1.7
 
 ### Patch Changes

@@ -1,5 +1,14 @@
 # @pi-plugins/webfetch
 
+## 0.2.2
+
+### Patch Changes
+
+- cb59f15: Publish the upgraded runtime and build dependencies, including Effect 4.0.0-beta.103 and Pi 0.83.0 compatibility updates.
+- 78917d2: Cap the collapsed result preview at five wrapped terminal rows. It previously showed
+  ten source lines, which for a fetched page is ten paragraphs and wrapped to a wall of
+  text.
+
 ## 0.2.1
 
 ### Patch Changes
