@@ -1,5 +1,15 @@
 # @pi-plugins/subagent
 
+## 0.2.1
+
+### Patch Changes
+
+- 6999b4c: Tell the agent to leave the `subagent` tool's `model` parameter alone. Its description
+  advertised itself as an override defaulting to the current model, which invited callers
+  to pass the model they were already running on; it now asks to be left unset unless the
+  user explicitly named a different model. Behaviour is unchanged: an unset `model` still
+  pins the child to the parent session's model and thinking level.
+
 ## 0.2.0
 
 ### Minor Changes
