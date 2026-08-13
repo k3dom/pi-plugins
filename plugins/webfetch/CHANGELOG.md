@@ -1,5 +1,12 @@
 # @pi-plugins/webfetch
 
+## 0.2.3
+
+### Patch Changes
+
+- cdbb644: Stop pages that carry more than one schema.org `url`, such as dblp search
+  results, from printing a stack trace to stderr while converting to Markdown.
+
 ## 0.2.2
 
 ### Patch Changes
