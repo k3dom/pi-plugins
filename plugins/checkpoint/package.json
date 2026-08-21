@@ -1,6 +1,6 @@
 {
   "name": "@pi-plugins/checkpoint",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "File checkpoints for pi-agent: restore files on /tree navigation.",
   "keywords": [
     "checkpoint",

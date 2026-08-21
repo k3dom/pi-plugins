@@ -1,5 +1,16 @@
 # @pi-plugins/webfetch
 
+## 0.2.4
+
+### Patch Changes
+
+- fc580c6: Unify how plugins run Effects at pi's promise boundary through shared
+  `runTool`/`runHandler` helpers. Cancelled tools now report `Operation aborted`
+  like pi's builtins, and failures surface their own message instead of a
+  pretty-printed `Cause`.
+- 902b667: Fix a `web_fetch` timeout killing the agent's next turn (earendil-works/pi#7660):
+  timeouts now fail with a real error message instead of an `undefined` one.
+
 ## 0.2.3
 
 ### Patch Changes

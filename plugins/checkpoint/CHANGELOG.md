@@ -1,5 +1,14 @@
 # @pi-plugins/checkpoint
 
+## 0.1.3
+
+### Patch Changes
+
+- fc580c6: Unify how plugins run Effects at pi's promise boundary through shared
+  `runTool`/`runHandler` helpers. Cancelled tools now report `Operation aborted`
+  like pi's builtins, and failures surface their own message instead of a
+  pretty-printed `Cause`.
+
 ## 0.1.2
 
 ### Patch Changes
