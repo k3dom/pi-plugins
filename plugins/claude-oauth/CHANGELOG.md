@@ -1,5 +1,11 @@
 # @pi-plugins/claude-oauth
 
+## 0.3.2
+
+### Patch Changes
+
+- 4729199: Allow Pi 0.84.3's server-side Anthropic fallback requests by including their required beta header.
+
 ## 0.3.1
 
 ### Patch Changes
