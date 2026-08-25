@@ -28,7 +28,8 @@ export const CCH_SEED = 0x4d659218e32a3268n
 export const PI_OAUTH_SYSTEM_MARKER =
   "You are Claude Code, Anthropic's official CLI for Claude."
 
-// Claude Code's agent beta set; order matches the live client.
+// Claude Code's agent beta set; order matches the live client except for the
+// compatibility beta documented below.
 export const CLAUDE_CODE_AGENT_BETAS = [
   'claude-code-20250219',
   'oauth-2025-04-20',
@@ -40,4 +41,7 @@ export const CLAUDE_CODE_AGENT_BETAS = [
   'advanced-tool-use-2025-11-20',
   'effort-2025-11-24',
   'extended-cache-ttl-2025-04-11',
+  // WARN: Deliberately drifts from the pinned Claude Code 2.1.165 beta set: pi
+  // 0.84.3+ adds `fallbacks` for eligible models, which Anthropic rejects without this beta.
+  'server-side-fallback-2026-07-01',
 ] as const
