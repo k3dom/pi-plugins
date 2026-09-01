@@ -1,5 +1,11 @@
 # @pi-plugins/usage
 
+## 0.4.1
+
+### Patch Changes
+
+- a03d03b: Fix crash when a usage API request times out: errors without a string `message` (e.g. `Cause.TimeoutError`) failed `UsageServiceError`'s schema validation.
+
 ## 0.4.0
 
 ### Minor Changes
