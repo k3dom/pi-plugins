@@ -26,9 +26,4 @@ pi -e ./plugins/claude-oauth
 
 There is no new provider to add and no setup required. Once installed, the extension
 automatically augments pi's existing built-in `anthropic` provider and applies to its
-OAuth requests; every other request passes through unchanged. Existing Anthropic
-cache breakpoints on OAuth requests receive the extended one-hour TTL, without
-requiring the process-wide `PI_CACHE_RETENTION=long` setting. An explicit
-`PI_CACHE_RETENTION=short` keeps the standard five-minute TTL, which is how
-`@pi-plugins/subagent` prevents extended retention from leaking into child agents.
-Keep using the `anthropic` provider exactly as you normally would.
+OAuth requests. Keep using the `anthropic` provider exactly as you normally would.

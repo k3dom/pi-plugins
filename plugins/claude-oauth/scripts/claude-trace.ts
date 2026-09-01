@@ -14,13 +14,10 @@
  * it at a custom base URL suppresses them, so we transparently intercept
  * `api.anthropic.com` and blind-tunnel everything else.
  *
- * Entrypoint caveat: this drives `claude -p`, which runs under the `sdk-cli`
- * entrypoint, whereas the plugin emulates `local-agent` (see src/request.ts).
- * Fields that vary by entrypoint — the system identity marker and the beta set —
- * therefore differ and are reported as `⊘` (skipped), not drift. The version
- * pins, the `cch` seed and the billing fingerprint are entrypoint-independent and
- * validate normally. The fingerprint is checked against the RAW prompt, since
- * `claude -p` wraps it in a <system-reminder> project-context block before sending.
+ * The spawned CLI is forced through the `local-agent` entrypoint so the system
+ * identity, beta set, and request headers match the surface emulated by the
+ * plugin. The fingerprint is checked against the raw prompt because `claude -p`
+ * wraps it in a <system-reminder> project-context block before sending.
  *
  * Requirements: Node 24+ (runs `.ts` directly), `openssl` and `claude` on PATH,
  * and a Claude Code that is logged in via OAuth.
@@ -60,12 +57,7 @@ const CCH_SEED = 0x4d659218e32a3268n
 const FINGERPRINT_SALT = '59cf53e54c78'
 const FINGERPRINT_INDICES = [4, 7, 20] as const
 
-// The plugin emulates the `local-agent` entrypoint (external Agent SDK consumer;
-// see src/request.ts). Driving `claude -p` instead exercises `sdk-cli`, so fields
-// that vary by entrypoint — the system identity marker and the beta set — can't be
-// validated from this capture and are reported as skipped rather than as drift.
 const PLUGIN_ENTRYPOINT = 'local-agent'
-const ENTRYPOINT_DEPENDENT_VALUE_KEYS = new Set(['PI_OAUTH_SYSTEM_MARKER'])
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 // The captured version/header/body constants the plugin pins all live here, so
@@ -74,6 +66,15 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 // `as const` array) so its regex patching can find and rewrite it.
 const CONSTANTS_FILE = path.join(SCRIPT_DIR, '..', 'src', 'constants.ts')
 const encoder = new TextEncoder()
+const MODEL_PREFIX = Buffer.from('"model":"')
+const FALLBACKS_PREFIX = Buffer.from('"fallbacks":[')
+const MAX_TOKENS_PREFIX = Buffer.from('"max_tokens":')
+const FALLBACK_CREDIT_PREFIX = Buffer.from('"fallback_credit_token":"')
+const COMMA = 0x2c
+const QUOTE = 0x22
+const BACKSLASH = 0x5c
+const OPEN_BRACKET = 0x5b
+const CLOSE_BRACKET = 0x5d
 
 // ── xxh64 (mirror of src/utils.ts; kept inline so the script has no imports) ──
 
@@ -142,6 +143,119 @@ function xxh64(input: Uint8Array, seed: bigint): bigint {
   h64 = (h64 * P3) & MASK
   h64 ^= h64 >> 32n
   return h64 & MASK
+}
+
+interface ByteRange {
+  start: number
+  end: number
+}
+
+function findNextCchIgnoredRange(
+  body: Buffer,
+  offset: number,
+): ByteRange | undefined {
+  let earliest: ByteRange | undefined
+  const add = (start: number, end: number): void => {
+    if (end < body.length && body[end] === COMMA) {
+      end++
+    } else if (start > offset && body[start - 1] === COMMA) {
+      start--
+    }
+    if (!earliest || start < earliest.start) {
+      earliest = { start, end }
+    }
+  }
+
+  const fallbacksIdx = body.indexOf(FALLBACKS_PREFIX, offset)
+  if (fallbacksIdx !== -1) {
+    let depth = 1
+    let inString = false
+    let escaped = false
+    for (let i = fallbacksIdx + FALLBACKS_PREFIX.length; i < body.length; i++) {
+      const byte = body[i]
+      if (inString) {
+        if (escaped) {
+          escaped = false
+        } else if (byte === BACKSLASH) {
+          escaped = true
+        } else if (byte === QUOTE) {
+          inString = false
+        }
+      } else if (byte === QUOTE) {
+        inString = true
+      } else if (byte === OPEN_BRACKET) {
+        depth++
+      } else if (byte === CLOSE_BRACKET && --depth === 0) {
+        add(fallbacksIdx, i + 1)
+        break
+      }
+    }
+  }
+
+  const creditIdx = body.indexOf(FALLBACK_CREDIT_PREFIX, offset)
+  if (creditIdx !== -1) {
+    const endQuote = body.indexOf(QUOTE, creditIdx + FALLBACK_CREDIT_PREFIX.length)
+    if (endQuote !== -1) {
+      add(creditIdx, endQuote + 1)
+    }
+  }
+
+  let maxTokensIdx = body.indexOf(MAX_TOKENS_PREFIX, offset)
+  while (maxTokensIdx !== -1) {
+    const valueStart = maxTokensIdx + MAX_TOKENS_PREFIX.length
+    let end = valueStart
+    while (end < body.length && body[end]! >= 0x30 && body[end]! <= 0x39) {
+      end++
+    }
+    if (end > valueStart) {
+      add(maxTokensIdx, end)
+      break
+    }
+    maxTokensIdx = body.indexOf(MAX_TOKENS_PREFIX, valueStart)
+  }
+
+  return earliest
+}
+
+function canonicalizeForCch(body: Buffer): Buffer {
+  const chunks: Buffer[] = []
+  let length = 0
+  let offset = 0
+
+  const append = (start: number, end: number): void => {
+    if (end > start) {
+      chunks.push(body.subarray(start, end))
+      length += end - start
+    }
+  }
+
+  while (offset < body.length) {
+    const ignored = findNextCchIgnoredRange(body, offset)
+    const modelIdx = body.indexOf(MODEL_PREFIX, offset)
+
+    if (ignored && (modelIdx === -1 || ignored.start < modelIdx)) {
+      append(offset, ignored.start)
+      offset = ignored.end
+      continue
+    }
+
+    if (modelIdx !== -1) {
+      const valueStart = modelIdx + MODEL_PREFIX.length
+      const endQuote = body.indexOf(QUOTE, valueStart)
+      if (endQuote !== -1) {
+        append(offset, valueStart)
+        offset = endQuote
+        continue
+      }
+    }
+
+    break
+  }
+
+  append(offset, body.length)
+  return chunks.length === 1 && length === body.length
+    ? body
+    : Buffer.concat(chunks, length)
 }
 
 // ── option parsing ──────────────────────────────────────────────────────────
@@ -520,12 +634,27 @@ function requestModel(request: CapturedRequest): string {
   }
 }
 
+function requestHasFallbacks(request: CapturedRequest): boolean {
+  try {
+    const parsed = JSON.parse(request.body) as object
+    return Object.hasOwn(parsed, 'fallbacks')
+  } catch {
+    return false
+  }
+}
+
 // ── fingerprint extraction ──────────────────────────────────────────────────
 
 interface Extracted {
   values: Record<string, string>
   betas: string[]
-  billing?: { version: string; suffix: string; entrypoint: string; cch: string }
+  billing?: {
+    version: string
+    suffix: string
+    entrypoint: string
+    cch: string
+    promptId?: string
+  }
   identityMarker?: string
   firstUserMessage: string
 }
@@ -535,6 +664,12 @@ interface AnthropicBody {
   max_tokens?: number
   system?: Array<{ type?: string; text?: string }>
   messages?: Array<{ role?: string; content?: unknown }>
+  metadata?: { user_id?: unknown }
+  thinking?: { type?: unknown }
+  context_management?: unknown
+  output_config?: unknown
+  diagnostics?: unknown
+  stream?: unknown
 }
 
 function firstUserMessageText(body: AnthropicBody): string {
@@ -584,10 +719,6 @@ function extract(request: CapturedRequest): Extracted {
   if (sdk) {
     values['CLAUDE_AGENT_SDK_VERSION'] = sdk
   }
-  const clientVersion = headerValue(request.headers, 'anthropic-client-version')
-  if (clientVersion) {
-    values['CLAUDE_CLIENT_VERSION'] = clientVersion
-  }
   const stainlessPkg = headerValue(request.headers, 'x-stainless-package-version')
   if (stainlessPkg) {
     values['CLAUDE_CODE_STAINLESS_PACKAGE_VERSION'] = stainlessPkg
@@ -598,6 +729,10 @@ function extract(request: CapturedRequest): Extracted {
   )
   if (stainlessRuntime) {
     values['CLAUDE_CODE_STAINLESS_RUNTIME_VERSION'] = stainlessRuntime
+  }
+  const stainlessTimeout = headerValue(request.headers, 'x-stainless-timeout')
+  if (stainlessTimeout) {
+    values['CLAUDE_CODE_STAINLESS_TIMEOUT'] = stainlessTimeout
   }
 
   const betas = (headerValue(request.headers, 'anthropic-beta') ?? '')
@@ -627,17 +762,19 @@ function extract(request: CapturedRequest): Extracted {
     const version = /cc_version=(\d+\.\d+\.\d+)\.([0-9a-f]{3})/u.exec(billingText)
     const entrypoint = /cc_entrypoint=([^;]+)/u.exec(billingText)?.[1]?.trim()
     const cch = /cch=([0-9a-f]{5})/u.exec(billingText)?.[1]
+    const promptId = /cc_prompt_id=([^;]+)/u.exec(billingText)?.[1]?.trim()
     if (version && entrypoint && cch) {
       billing = {
         version: version[1] ?? '',
         suffix: version[2] ?? '',
         entrypoint,
         cch,
+        promptId,
       }
     }
   }
   if (identityMarker) {
-    values['PI_OAUTH_SYSTEM_MARKER'] = identityMarker
+    values['CLAUDE_AGENT_SDK_IDENTITY'] = identityMarker
   }
 
   return {
@@ -674,6 +811,37 @@ function verify(
   rawUserMessage: string,
 ): Verification[] {
   const checks: Verification[] = []
+  const requiredHeaders = [
+    'user-agent',
+    'anthropic-beta',
+    'x-app',
+    'x-client-request-id',
+    'x-claude-code-session-id',
+    'x-stainless-arch',
+    'x-stainless-lang',
+    'x-stainless-os',
+    'x-stainless-package-version',
+    'x-stainless-retry-count',
+    'x-stainless-runtime',
+    'x-stainless-runtime-version',
+    'x-stainless-timeout',
+  ]
+  const missingHeaders = requiredHeaders.filter(
+    (name) => headerValue(request.headers, name) === undefined,
+  )
+  checks.push({
+    label: 'required request headers',
+    ok: missingHeaders.length === 0,
+    detail:
+      missingHeaders.length === 0
+        ? 'all present'
+        : `missing=${missingHeaders.join(',')}`,
+  })
+  checks.push({
+    label: 'billing attribution',
+    ok: extracted.billing !== undefined,
+    detail: extracted.billing ? 'parsed' : 'missing or malformed',
+  })
 
   // xxh64 sanity: empty-input vector.
   checks.push({
@@ -689,7 +857,10 @@ function verify(
     const cchIdx = markerIdx >= 0 ? raw.indexOf('cch=', markerIdx) : -1
     if (cchIdx >= 0) {
       const zeroed = `${raw.slice(0, cchIdx + 4)}00000${raw.slice(cchIdx + 9)}`
-      const computed = (xxh64(encoder.encode(zeroed), CCH_SEED) & 0xfffffn)
+      const computed = (
+        xxh64(canonicalizeForCch(Buffer.from(encoder.encode(zeroed))), CCH_SEED) &
+        0xfffffn
+      )
         .toString(16)
         .padStart(5, '0')
       checks.push({
@@ -699,6 +870,92 @@ function verify(
       })
     }
   }
+
+  const uuidPattern =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
+  if (extracted.billing) {
+    checks.push({
+      label: 'local-agent entrypoint',
+      ok: extracted.billing.entrypoint === PLUGIN_ENTRYPOINT,
+      detail: `observed=${extracted.billing.entrypoint}`,
+    })
+    checks.push({
+      label: 'cc_prompt_id',
+      ok:
+        extracted.billing.promptId !== undefined &&
+        uuidPattern.test(extracted.billing.promptId),
+      detail: `observed=${extracted.billing.promptId ?? '(missing)'}`,
+    })
+  }
+
+  const clientRequestId = headerValue(request.headers, 'x-client-request-id')
+  checks.push({
+    label: 'x-client-request-id',
+    ok: clientRequestId !== undefined && uuidPattern.test(clientRequestId),
+    detail: `observed=${clientRequestId ?? '(missing)'}`,
+  })
+
+  const sessionHeader = headerValue(request.headers, 'x-claude-code-session-id')
+  let metadataSession: string | undefined
+  let body: AnthropicBody = {}
+  try {
+    body = JSON.parse(request.body) as AnthropicBody
+    if (typeof body.metadata?.user_id === 'string') {
+      const identity = JSON.parse(body.metadata.user_id) as {
+        session_id?: unknown
+      }
+      if (typeof identity.session_id === 'string') {
+        metadataSession = identity.session_id
+      }
+    }
+  } catch {
+    body = {}
+  }
+  checks.push({
+    label: 'Claude session identity',
+    ok:
+      sessionHeader !== undefined &&
+      uuidPattern.test(sessionHeader) &&
+      sessionHeader === metadataSession,
+    detail: `header=${sessionHeader ?? '(missing)'} metadata=${metadataSession ?? '(missing)'}`,
+  })
+  checks.push({
+    label: 'legacy client headers absent',
+    ok:
+      headerValue(request.headers, 'anthropic-client-platform') === undefined &&
+      headerValue(request.headers, 'anthropic-client-version') === undefined,
+    detail: 'anthropic-client-platform/version are absent',
+  })
+
+  const thinkingActive =
+    body.thinking?.type === 'adaptive' || body.thinking?.type === 'enabled'
+  checks.push({
+    label: 'context management',
+    ok:
+      !thinkingActive ||
+      JSON.stringify(body.context_management) ===
+        JSON.stringify({
+          edits: [{ type: 'clear_thinking_20251015', keep: 'all' }],
+        }),
+    detail: thinkingActive
+      ? `observed=${JSON.stringify(body.context_management)}`
+      : 'not required for disabled thinking',
+  })
+  checks.push({
+    label: 'Agent SDK identity and output cap',
+    ok:
+      extracted.identityMarker !== undefined && typeof body.max_tokens === 'number',
+    detail: `identity=${extracted.identityMarker ? 'present' : 'missing'} max_tokens=${body.max_tokens ?? '(missing)'}`,
+  })
+  checks.push({
+    label: 'cache diagnostics',
+    ok:
+      typeof body.diagnostics === 'object' &&
+      body.diagnostics !== null &&
+      (body.diagnostics as { previous_message_id?: unknown }).previous_message_id ===
+        null,
+    detail: `observed=${JSON.stringify(body.diagnostics)}`,
+  })
 
   // billing fingerprint salt + indices + slice length. Claude fingerprints the RAW
   // user prompt, not the context-wrapped message it transmits, so hash that.
@@ -756,23 +1013,10 @@ function report(
   console.log(`\n${DIM}captured POST /v1/messages${RESET}`)
   console.log(`  model:    ${model || '(unknown)'}`)
   console.log(`  response: ${capture.responseStatus ?? '(not observed)'}`)
-  if (capture.responseStatus && !capture.responseStatus.includes(' 200')) {
+  if (!capture.responseStatus?.includes(' 200')) {
+    allGood = false
     console.log(
       `  ${YELLOW}note: response was not 200 — the request may have been rejected${RESET}`,
-    )
-  }
-
-  // `claude -p` reports the `sdk-cli` entrypoint; the plugin emulates `local-agent`.
-  // When they differ, entrypoint-dependent fields can't be validated from this
-  // capture, so mark them ⊘ and keep them out of the pass/fail verdict.
-  const capturedEntrypoint = extracted.billing?.entrypoint
-  const entrypointMismatch =
-    capturedEntrypoint !== undefined && capturedEntrypoint !== PLUGIN_ENTRYPOINT
-  if (entrypointMismatch) {
-    console.log(
-      `\n  ${YELLOW}note:${RESET} captured entrypoint ${DIM}${capturedEntrypoint}${RESET} ≠ plugin entrypoint ${DIM}${PLUGIN_ENTRYPOINT}${RESET} ${DIM}(driving \`claude -p\`).${RESET}\n` +
-        `  ${DIM}Entrypoint-dependent fields (system marker, beta set) can't be validated this way;\n` +
-        `  they are marked ${RESET}${YELLOW}⊘${RESET}${DIM} and excluded from the verdict rather than counted as drift.${RESET}`,
     )
   }
 
@@ -780,51 +1024,41 @@ function report(
   for (const [name, value] of Object.entries(extracted.values)) {
     const current = currentConstant(source, name)
     const same = current === value
-    const skipped =
-      !same && entrypointMismatch && ENTRYPOINT_DEPENDENT_VALUE_KEYS.has(name)
-    if (!same && !skipped) {
+    if (!same) {
       allGood = false
     }
-    const mark = same
-      ? `${GREEN}=${RESET}`
-      : skipped
-        ? `${YELLOW}⊘${RESET}`
-        : `${YELLOW}≠${RESET}`
-    const display = name === 'PI_OAUTH_SYSTEM_MARKER' ? JSON.stringify(value) : value
+    const mark = same ? `${GREEN}=${RESET}` : `${YELLOW}≠${RESET}`
+    const isIdentity = name === 'CLAUDE_AGENT_SDK_IDENTITY'
+    const display = isIdentity ? JSON.stringify(value) : value
     const currentDisplay =
       current === undefined
         ? `${DIM}(not found)${RESET}`
         : same
           ? `${DIM}unchanged${RESET}`
-          : skipped
-            ? `${DIM}entrypoint-dependent — not validated${RESET}`
-            : `${DIM}was ${name === 'PI_OAUTH_SYSTEM_MARKER' ? JSON.stringify(current) : current}${RESET}`
+          : `${DIM}was ${isIdentity ? JSON.stringify(current) : current}${RESET}`
     console.log(`  ${mark} ${name}: ${display}  ${currentDisplay}`)
   }
 
   const currentBetaList = currentBetas(source)
+  const fallbackBeta = currentConstant(source, 'CLAUDE_CODE_SERVER_FALLBACK_BETA')
+  const expectsFallbackBeta = requestHasFallbacks(capture.request) && fallbackBeta
+  const expectedBetaList = expectsFallbackBeta
+    ? [...currentBetaList, expectsFallbackBeta]
+    : currentBetaList
   const betasSame =
-    JSON.stringify(currentBetaList) === JSON.stringify(extracted.betas)
-  // The beta set varies by entrypoint (e.g. sdk-cli drops fine-grained-tool-streaming)
-  // and by model (e.g. a 1M-context model adds context-1m), so a `claude -p` capture
-  // can't validate the plugin's local-agent set — skip the verdict, still show the diff.
-  const betasSkipped = !betasSame && entrypointMismatch
-  if (!betasSame && !betasSkipped) {
+    JSON.stringify(expectedBetaList) === JSON.stringify(extracted.betas)
+  if (!betasSame) {
     allGood = false
   }
-  const betasMark = betasSame
-    ? `${GREEN}=${RESET}`
-    : betasSkipped
-      ? `${YELLOW}⊘${RESET}`
-      : `${YELLOW}≠${RESET}`
+  const betasMark = betasSame ? `${GREEN}=${RESET}` : `${YELLOW}≠${RESET}`
   console.log(
-    `  ${betasMark} CLAUDE_CODE_AGENT_BETAS (${extracted.betas.length})${betasSkipped ? ` ${DIM}entrypoint/model-dependent — not validated${RESET}` : ''}:`,
+    `  ${betasMark} CLAUDE_CODE_AGENT_BETAS (${extracted.betas.length})${expectsFallbackBeta ? ` ${DIM}+ conditional fallback${RESET}` : ''}:`,
   )
   for (const beta of extracted.betas) {
-    const known = currentBetaList.includes(beta)
+    const known = expectedBetaList.includes(beta)
     console.log(`      ${known ? ' ' : `${YELLOW}+${RESET}`} ${beta}`)
   }
-  for (const beta of currentBetaList) {
+  for (const beta of expectedBetaList) {
     if (!extracted.betas.includes(beta)) {
       console.log(`      ${RED}-${RESET} ${DIM}${beta}${RESET}`)
     }
@@ -850,7 +1084,7 @@ function report(
 
 // ── writing back to src/constants.ts ──────────────────────────────────────────
 
-function writeBack(extracted: Extracted): void {
+function writeBack(extracted: Extracted, request: CapturedRequest): void {
   let source = readFileSync(CONSTANTS_FILE, 'utf8')
   const changed: string[] = []
 
@@ -878,15 +1112,23 @@ function writeBack(extracted: Extracted): void {
   }
 
   for (const [name, value] of Object.entries(extracted.values)) {
-    if (name === 'CLAUDE_CODE_MAX_OUTPUT_TOKENS') {
+    if (
+      name === 'CLAUDE_CODE_MAX_OUTPUT_TOKENS' ||
+      name === 'CLAUDE_CODE_STAINLESS_TIMEOUT'
+    ) {
       replaceNumber(name, value)
     } else {
       replaceString(name, value)
     }
   }
 
-  if (extracted.betas.length > 0) {
-    const rendered = extracted.betas.map((b) => `  '${b}',`).join('\n')
+  const fallbackBeta = currentConstant(source, 'CLAUDE_CODE_SERVER_FALLBACK_BETA')
+  const capturedBetas =
+    requestHasFallbacks(request) && fallbackBeta
+      ? extracted.betas.filter((beta) => beta !== fallbackBeta)
+      : extracted.betas
+  if (capturedBetas.length > 0) {
+    const rendered = capturedBetas.map((b) => `  '${b}',`).join('\n')
     const re = /(CLAUDE_CODE_AGENT_BETAS\s*=\s*\[)[\s\S]*?(\]\s*as const)/u
     if (re.test(source)) {
       source = source.replace(
@@ -930,6 +1172,16 @@ async function run(opts: Options): Promise<void> {
   const proxyUrl = `http://127.0.0.1:${proxy.port}`
   console.error(`${DIM}proxy listening on ${proxyUrl}${RESET}`)
 
+  const versionResult = spawnSync(opts.command, ['--version'], {
+    encoding: 'utf8',
+  })
+  const codeVersion = /\b(\d+\.\d+\.(\d+))\b/u.exec(
+    `${versionResult.stdout ?? ''}${versionResult.stderr ?? ''}`,
+  )
+  if (!codeVersion?.[2]) {
+    throw new Error(`could not determine ${opts.command} version`)
+  }
+  const agentSdkVersion = `0.3.${codeVersion[2]}`
   const childEnv = {
     ...process.env,
     HTTPS_PROXY: proxyUrl,
@@ -937,6 +1189,8 @@ async function run(opts: Options): Promise<void> {
     https_proxy: proxyUrl,
     http_proxy: proxyUrl,
     NODE_TLS_REJECT_UNAUTHORIZED: '0',
+    CLAUDE_CODE_ENTRYPOINT: PLUGIN_ENTRYPOINT,
+    CLAUDE_AGENT_SDK_VERSION: agentSdkVersion,
   }
 
   let child: ReturnType<typeof spawn> | undefined
@@ -944,7 +1198,7 @@ async function run(opts: Options): Promise<void> {
   if (opts.manual) {
     console.error('\n--manual: run this in another shell, then send a message:\n')
     console.error(
-      `  HTTPS_PROXY=${proxyUrl} NODE_TLS_REJECT_UNAUTHORIZED=0 ${opts.command}\n`,
+      `  HTTPS_PROXY=${proxyUrl} NODE_TLS_REJECT_UNAUTHORIZED=0 CLAUDE_CODE_ENTRYPOINT=${PLUGIN_ENTRYPOINT} CLAUDE_AGENT_SDK_VERSION=${agentSdkVersion} ${opts.command}\n`,
     )
   } else {
     console.error(
@@ -980,7 +1234,7 @@ async function run(opts: Options): Promise<void> {
     const allGood = report(capture, extracted, source, rawUserMessage)
 
     if (opts.write) {
-      writeBack(extracted)
+      writeBack(extracted, capture.request)
     } else if (!allGood) {
       console.log(`\n${DIM}run again with --write to patch src/constants.ts${RESET}`)
     } else {

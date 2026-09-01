@@ -9,8 +9,8 @@ import {
 import { Array, Match, Predicate } from 'effect'
 import {
   CCH_PLACEHOLDER,
+  CLAUDE_AGENT_SDK_IDENTITY,
   CLAUDE_AGENT_SDK_VERSION,
-  CLAUDE_CLIENT_VERSION,
   CLAUDE_CODE_AGENT_BETAS,
   CLAUDE_CODE_BILLING_FINGERPRINT_INDICES,
   CLAUDE_CODE_BILLING_FINGERPRINT_SALT,
@@ -18,8 +18,9 @@ import {
   CLAUDE_CODE_MAX_OUTPUT_TOKENS,
   CLAUDE_CODE_STAINLESS_PACKAGE_VERSION,
   CLAUDE_CODE_STAINLESS_RUNTIME_VERSION,
+  CLAUDE_CODE_STAINLESS_TIMEOUT,
   CLAUDE_CODE_VERSION,
-  PI_OAUTH_SYSTEM_MARKER,
+  PI_ANTHROPIC_OAUTH_SENTINEL,
 } from './constants'
 import { sanitizeSystemText } from './system-prompt'
 import { firstUserMessageText, isTextBlock } from './utils'
@@ -43,9 +44,6 @@ const mapStainlessOs = (value: string): string =>
     Match.orElse((key) => `Other::${key}`),
   )
 
-// Static headers merged over pi's Anthropic defaults. pi merges provider headers
-// last, and the SDK applies `defaultHeaders` after its auto-generated
-// Stainless/User-Agent headers, so these win while the OAuth Bearer is preserved.
 export function buildProviderHeaders(): Record<string, string> {
   return {
     'user-agent': `claude-cli/${CLAUDE_CODE_VERSION} (external, local-agent, agent-sdk/${CLAUDE_AGENT_SDK_VERSION})`,
@@ -59,9 +57,7 @@ export function buildProviderHeaders(): Record<string, string> {
     'x-stainless-lang': 'js',
     'x-stainless-arch': mapStainlessArch(osArch()),
     'x-stainless-os': mapStainlessOs(osPlatform()),
-    'x-stainless-timeout': '900',
-    'anthropic-client-platform': 'desktop_app',
-    'anthropic-client-version': CLAUDE_CLIENT_VERSION,
+    'x-stainless-timeout': String(CLAUDE_CODE_STAINLESS_TIMEOUT),
   }
 }
 
@@ -79,11 +75,11 @@ function createBillingHeader(firstUserMessage: string): string {
     )
     .digest('hex')
     .slice(0, 3)
-  return `${CLAUDE_CODE_BILLING_HEADER_PREFIX} cc_version=${CLAUDE_CODE_VERSION}.${versionSuffix}; cc_entrypoint=local-agent; ${CCH_PLACEHOLDER};`
+  return `${CLAUDE_CODE_BILLING_HEADER_PREFIX} cc_version=${CLAUDE_CODE_VERSION}.${versionSuffix}; cc_entrypoint=local-agent; ${CCH_PLACEHOLDER}; cc_prompt_id=${randomUUID()};`
 }
 
-// Claude Code sends `metadata.user_id` as a JSON `{ device_id, session_id }`
-// envelope: device_id is machine-stable, session_id is per process. userInfo()
+// Claude Code sends `metadata.user_id` as a JSON identity envelope: device_id
+// is machine-stable and session_id is per process. userInfo()
 // can throw in locked-down sandboxes, so fall back to a hostname-only seed.
 let machineSeed: string
 try {
@@ -107,6 +103,9 @@ interface AnthropicPayload {
   tools?: unknown[]
   max_tokens?: number
   metadata?: { user_id?: unknown }
+  thinking?: { type?: unknown }
+  context_management?: unknown
+  diagnostics?: unknown
 }
 
 /** Configure an existing cache breakpoint for extended or standard retention. */
@@ -165,17 +164,20 @@ export function rewriteForClaudeCode(
     return undefined
   }
   const typed = payload as AnthropicPayload
-  // Only Claude Code OAuth requests carry the identity marker as system[0].
+  // Pi only adds this sentinel to Anthropic OAuth payloads.
   const system = typed.system
-  if (!Array.isArray(system) || system[0]?.text !== PI_OAUTH_SYSTEM_MARKER) {
+  if (!Array.isArray(system) || system[0]?.text !== PI_ANTHROPIC_OAUTH_SENTINEL) {
     return undefined
   }
 
-  // Rewrite pi's self-references to Claude Code in every system block except the
-  // identity marker, so the whole prompt stays consistent. Emptied blocks drop out.
+  // Replace the OAuth sentinel with the Agent SDK identity and rewrite pi's
+  // self-references in the remaining system blocks. Emptied blocks drop out.
   const normalized = Array.flatMap(system, (block) => {
-    if (!isTextBlock(block) || block.text === PI_OAUTH_SYSTEM_MARKER) {
+    if (!isTextBlock(block)) {
       return [block]
+    }
+    if (block.text === PI_ANTHROPIC_OAUTH_SENTINEL) {
+      return [{ ...block, text: CLAUDE_AGENT_SDK_IDENTITY }]
     }
     const text = sanitizeSystemText(block.text)
     return text ? [{ ...block, text }] : []
@@ -189,11 +191,27 @@ export function rewriteForClaudeCode(
   })
   typed.system = normalized
 
-  if (!Predicate.isString(typed.metadata?.user_id)) {
-    typed.metadata = {
-      ...typed.metadata,
-      user_id: JSON.stringify({ device_id: deviceId, session_id: sessionId }),
+  let accountUuid = ''
+  if (Predicate.isString(typed.metadata?.user_id)) {
+    try {
+      const current = JSON.parse(typed.metadata.user_id) as unknown
+      if (
+        Predicate.isObject(current) &&
+        Predicate.isString(current['account_uuid'])
+      ) {
+        accountUuid = current['account_uuid']
+      }
+    } catch {
+      accountUuid = ''
     }
+  }
+  typed.metadata = {
+    ...typed.metadata,
+    user_id: JSON.stringify({
+      device_id: deviceId,
+      account_uuid: accountUuid,
+      session_id: sessionId,
+    }),
   }
 
   if (
@@ -202,6 +220,13 @@ export function rewriteForClaudeCode(
   ) {
     typed.max_tokens = CLAUDE_CODE_MAX_OUTPUT_TOKENS
   }
+
+  if (typed.thinking?.type === 'adaptive' || typed.thinking?.type === 'enabled') {
+    typed.context_management = {
+      edits: [{ type: 'clear_thinking_20251015', keep: 'all' }],
+    }
+  }
+  typed.diagnostics = { previous_message_id: null }
 
   // The OAuth beta supports one-hour prompt caching. Update the breakpoints pi
   // already emitted without enabling extended retention for other auth modes.

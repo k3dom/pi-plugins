@@ -1,63 +1,208 @@
+import { randomUUID } from 'node:crypto'
 import {
   CCH_PLACEHOLDER,
   CCH_SEED,
   CLAUDE_CODE_BILLING_HEADER_PREFIX,
+  CLAUDE_CODE_SERVER_FALLBACK_BETA,
 } from './constants'
 import { xxHash64 } from './utils'
 
 const encoder = new TextEncoder()
-
-// Anchor the placeholder to the first system block. The Anthropic SDK serializes
-// `messages` before `system`, so these bytes can only appear at the billing
-// header we injected; user content in `messages` can never collide with them.
-const BILLING_SYSTEM_MARKER = encoder.encode(
+const BILLING_SYSTEM_MARKER = Buffer.from(
   `"system":[{"type":"text","text":"${CLAUDE_CODE_BILLING_HEADER_PREFIX}`,
 )
-const CCH_PLACEHOLDER_BYTES = encoder.encode(CCH_PLACEHOLDER)
-// Placeholder must sit within this many bytes of the marker, else something
-// reshaped system[0] and we refuse to patch an unrelated match.
+const CCH_PLACEHOLDER_BYTES = Buffer.from(CCH_PLACEHOLDER)
+const MODEL_PREFIX = Buffer.from('"model":"')
+const FALLBACKS_PREFIX = Buffer.from('"fallbacks":[')
+const MAX_TOKENS_PREFIX = Buffer.from('"max_tokens":')
+const FALLBACK_CREDIT_PREFIX = Buffer.from('"fallback_credit_token":"')
 const CCH_SEARCH_WINDOW = 150
+const COMMA = 0x2c
+const QUOTE = 0x22
+const BACKSLASH = 0x5c
+const OPEN_BRACKET = 0x5b
+const CLOSE_BRACKET = 0x5d
+
+interface ByteRange {
+  start: number
+  end: number
+}
+
+function findNextIgnoredRange(body: Buffer, offset: number): ByteRange | undefined {
+  let earliest: ByteRange | undefined
+  const add = (start: number, end: number): void => {
+    if (end < body.length && body[end] === COMMA) {
+      end++
+    } else if (start > offset && body[start - 1] === COMMA) {
+      start--
+    }
+    if (!earliest || start < earliest.start) {
+      earliest = { start, end }
+    }
+  }
+
+  const fallbacksIdx = body.indexOf(FALLBACKS_PREFIX, offset)
+  if (fallbacksIdx !== -1) {
+    let depth = 1
+    let inString = false
+    let escaped = false
+    for (let i = fallbacksIdx + FALLBACKS_PREFIX.length; i < body.length; i++) {
+      const byte = body[i]
+      if (inString) {
+        if (escaped) {
+          escaped = false
+        } else if (byte === BACKSLASH) {
+          escaped = true
+        } else if (byte === QUOTE) {
+          inString = false
+        }
+      } else if (byte === QUOTE) {
+        inString = true
+      } else if (byte === OPEN_BRACKET) {
+        depth++
+      } else if (byte === CLOSE_BRACKET && --depth === 0) {
+        add(fallbacksIdx, i + 1)
+        break
+      }
+    }
+  }
+
+  const creditIdx = body.indexOf(FALLBACK_CREDIT_PREFIX, offset)
+  if (creditIdx !== -1) {
+    const endQuote = body.indexOf(QUOTE, creditIdx + FALLBACK_CREDIT_PREFIX.length)
+    if (endQuote !== -1) {
+      add(creditIdx, endQuote + 1)
+    }
+  }
+
+  let maxTokensIdx = body.indexOf(MAX_TOKENS_PREFIX, offset)
+  while (maxTokensIdx !== -1) {
+    const valueStart = maxTokensIdx + MAX_TOKENS_PREFIX.length
+    let end = valueStart
+    while (end < body.length && body[end]! >= 0x30 && body[end]! <= 0x39) {
+      end++
+    }
+    if (end > valueStart) {
+      add(maxTokensIdx, end)
+      break
+    }
+    maxTokensIdx = body.indexOf(MAX_TOKENS_PREFIX, valueStart)
+  }
+
+  return earliest
+}
+
+// Claude excludes mutable routing fields and model values from the attestation.
+function canonicalizeForCch(body: Buffer): Buffer {
+  const chunks: Buffer[] = []
+  let length = 0
+  let offset = 0
+
+  const append = (start: number, end: number): void => {
+    if (end > start) {
+      chunks.push(body.subarray(start, end))
+      length += end - start
+    }
+  }
+
+  while (offset < body.length) {
+    const ignored = findNextIgnoredRange(body, offset)
+    const modelIdx = body.indexOf(MODEL_PREFIX, offset)
+
+    if (ignored && (modelIdx === -1 || ignored.start < modelIdx)) {
+      append(offset, ignored.start)
+      offset = ignored.end
+      continue
+    }
+
+    if (modelIdx !== -1) {
+      const valueStart = modelIdx + MODEL_PREFIX.length
+      const endQuote = body.indexOf(QUOTE, valueStart)
+      if (endQuote !== -1) {
+        append(offset, valueStart)
+        offset = endQuote
+        continue
+      }
+    }
+
+    break
+  }
+
+  append(offset, body.length)
+  return chunks.length === 1 && length === body.length
+    ? body
+    : Buffer.concat(chunks, length)
+}
 
 type FetchImpl = typeof fetch
 
-/**
- * Wrap fetch so request bodies carrying the `cch=00000` placeholder get their
- * attestation patched in place: `cch=00000` becomes `XXH64(body) & 0xfffff` as 5
- * hex chars. The hash covers the serialized body, so the patch must happen here at
- * the fetch layer rather than on the payload. Every other request passes through
- * byte-for-byte, so a global install is safe.
- */
-export function wrapFetchForCch(base: FetchImpl): FetchImpl {
+export function wrapFetchForCch(
+  base: FetchImpl,
+  claudeHeaders: Readonly<Record<string, string>>,
+): FetchImpl {
   return (input, init) => {
     const body = init?.body
     if (typeof body !== 'string' || !body.includes(CCH_PLACEHOLDER)) {
       return base(input, init)
     }
 
-    const encoded = encoder.encode(body)
-    // Buffer.indexOf is a native memmem; the marker sits near the body's end
-    // (messages serialize first), so a hand-rolled scan would walk the whole payload.
-    const view = Buffer.from(encoded.buffer, encoded.byteOffset, encoded.byteLength)
-    const markerIdx = view.indexOf(BILLING_SYSTEM_MARKER)
+    const encoded = Buffer.from(encoder.encode(body))
+    const markerIdx = encoded.indexOf(BILLING_SYSTEM_MARKER)
     const searchFrom = markerIdx + BILLING_SYSTEM_MARKER.length
     const placeholderIdx =
-      markerIdx === -1 ? -1 : view.indexOf(CCH_PLACEHOLDER_BYTES, searchFrom)
+      markerIdx === -1 ? -1 : encoded.indexOf(CCH_PLACEHOLDER_BYTES, searchFrom)
 
     if (placeholderIdx === -1 || placeholderIdx - searchFrom > CCH_SEARCH_WINDOW) {
-      // Placeholder present but not anchored to system[0]. Send as-is rather than
-      // fail the request, but say so.
       console.warn(
         '[claude-oauth] cch placeholder present but not anchored; sending request with cch left unset',
       )
-    } else {
-      const cch = (xxHash64(encoded, CCH_SEED) & 0xfffffn)
-        .toString(16)
-        .padStart(5, '0')
-      for (let i = 0; i < 5; i++) {
-        encoded[placeholderIdx + 4 + i] = cch.charCodeAt(i)
-      }
+      return base(input, init)
     }
 
-    return base(input, { ...init, body: encoded })
+    const cch = (xxHash64(canonicalizeForCch(encoded), CCH_SEED) & 0xfffffn)
+      .toString(16)
+      .padStart(5, '0')
+    encoded.write(cch, placeholderIdx + 4, 5, 'ascii')
+
+    const inputHeaders =
+      init?.headers ?? (input instanceof Request ? input.headers : undefined)
+    const headers = new Headers(inputHeaders)
+    const preserveServerFallbackBeta = (headers.get('anthropic-beta') ?? '')
+      .split(',')
+      .some((beta) => beta.trim() === CLAUDE_CODE_SERVER_FALLBACK_BETA)
+    for (const [name, value] of Object.entries(claudeHeaders)) {
+      headers.set(name, value)
+    }
+    if (preserveServerFallbackBeta) {
+      const betas = headers.get('anthropic-beta')
+      headers.set(
+        'anthropic-beta',
+        betas
+          ? `${betas},${CLAUDE_CODE_SERVER_FALLBACK_BETA}`
+          : CLAUDE_CODE_SERVER_FALLBACK_BETA,
+      )
+    }
+    headers.delete('anthropic-client-platform')
+    headers.delete('anthropic-client-version')
+    headers.delete('x-claude-code-session-id')
+    headers.set('x-client-request-id', randomUUID())
+
+    try {
+      const payload = JSON.parse(body) as {
+        metadata?: { user_id?: unknown }
+      }
+      if (typeof payload.metadata?.user_id === 'string') {
+        const identity = JSON.parse(payload.metadata.user_id) as {
+          session_id?: unknown
+        }
+        if (typeof identity.session_id === 'string') {
+          headers.set('x-claude-code-session-id', identity.session_id)
+        }
+      }
+    } catch {
+      headers.delete('x-claude-code-session-id')
+    }
+
+    return base(input, { ...init, body: encoded, headers })
   }
 }

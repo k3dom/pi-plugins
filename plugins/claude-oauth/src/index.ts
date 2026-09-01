@@ -5,9 +5,9 @@ import { buildProviderHeaders, rewriteForClaudeCode } from './request'
 let fetchWrapped = false
 
 /**
- * Install the `cch` attestation wrapper on the global fetch. The Anthropic SDK
- * resolves `fetch` from the global at client construction and pi builds a fresh
- * client per request, so wrapping here is picked up by every Anthropic call.
+ * Install the Claude request transport wrapper on the global fetch. The
+ * Anthropic SDK resolves `fetch` at client construction, so pi's fresh client
+ * picks it up for every request.
  */
 function installCchFetchWrapper(): void {
   if (fetchWrapped) {
@@ -17,15 +17,15 @@ function installCchFetchWrapper(): void {
   if (typeof target.fetch !== 'function') {
     return
   }
-  target.fetch = wrapFetchForCch(target.fetch.bind(globalThis) as typeof fetch)
+  target.fetch = wrapFetchForCch(
+    target.fetch.bind(globalThis) as typeof fetch,
+    buildProviderHeaders(),
+  )
   fetchWrapped = true
 }
 
 export default function claudeOauth(pi: ExtensionAPI): void {
   installCchFetchWrapper()
-  // Header-only registration augments the built-in provider, so OAuth login and
-  // models are preserved while the request headers match the current Claude Code client.
-  pi.registerProvider('anthropic', { headers: buildProviderHeaders() })
 
   // Returning the payload replaces it; returning `undefined` leaves it unchanged.
   // `short` is also set by @pi-plugins/subagent to prevent extended retention
