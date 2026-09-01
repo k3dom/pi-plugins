@@ -4,6 +4,7 @@ import {
 } from '@earendil-works/pi-coding-agent'
 import {
   Array,
+  Cause,
   Context,
   Data,
   Effect,
@@ -40,6 +41,20 @@ export class UsageServiceError extends Schema.TaggedErrorClass<UsageServiceError
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+/** Maps a transport/decoding failure to a `RequestFailed` service error. */
+const requestFailed = (cause: unknown) =>
+  new UsageServiceError({
+    kind: 'RequestFailed',
+    message: Cause.isTimeoutError(cause)
+      ? 'usage API request timed out'
+      : cause instanceof Error &&
+          typeof cause.message === 'string' &&
+          cause.message.length > 0
+        ? cause.message
+        : 'usage API request failed',
+    cause,
+  })
 
 /** Subscription providers the service knows how to query. */
 export type UsageProvider = Data.TaggedEnum<{
@@ -174,20 +189,9 @@ export class UsageService extends Context.Service<UsageService>()(
             ),
           ),
         })
-        return yield* client.usage().pipe(
-          Effect.timeout(REQUEST_TIMEOUT),
-          Effect.mapError(
-            (cause) =>
-              new UsageServiceError({
-                kind: 'RequestFailed',
-                message:
-                  cause instanceof Error
-                    ? cause.message
-                    : 'usage API request failed',
-                cause,
-              }),
-          ),
-        )
+        return yield* client
+          .usage()
+          .pipe(Effect.timeout(REQUEST_TIMEOUT), Effect.mapError(requestFailed))
       })
 
       const codex = Effect.fn('UsageService.codex')(function* () {
@@ -203,20 +207,9 @@ export class UsageService extends Context.Service<UsageService>()(
             ),
           ),
         })
-        return yield* client.usage().pipe(
-          Effect.timeout(REQUEST_TIMEOUT),
-          Effect.mapError(
-            (cause) =>
-              new UsageServiceError({
-                kind: 'RequestFailed',
-                message:
-                  cause instanceof Error
-                    ? cause.message
-                    : 'usage API request failed',
-                cause,
-              }),
-          ),
-        )
+        return yield* client
+          .usage()
+          .pipe(Effect.timeout(REQUEST_TIMEOUT), Effect.mapError(requestFailed))
       })
 
       return { claude, codex } as const
