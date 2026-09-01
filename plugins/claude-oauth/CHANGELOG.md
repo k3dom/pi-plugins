@@ -1,5 +1,11 @@
 # @pi-plugins/claude-oauth
 
+## 0.3.3
+
+### Patch Changes
+
+- 65398ce: Update Anthropic OAuth requests to match Claude Code 2.1.251's local-agent headers, identity, metadata, payload fields, attribution, and canonical request attestation while leaving API-key requests untouched.
+
 ## 0.3.2
 
 ### Patch Changes
