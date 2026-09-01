@@ -42,7 +42,6 @@ export class UsageServiceError extends Schema.TaggedErrorClass<UsageServiceError
   },
 ) {}
 
-/** Maps a transport/decoding failure to a `RequestFailed` service error. */
 const requestFailed = (cause: unknown) =>
   new UsageServiceError({
     kind: 'RequestFailed',
