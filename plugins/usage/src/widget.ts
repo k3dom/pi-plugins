@@ -1,6 +1,12 @@
 import type { ClaudeUsage, UsageWindow } from './provider/anthropic'
 import type { CodexUsage } from './provider/openai'
-import { codexResetsAt, formatCompactDuration, parseResetsAt } from './reset'
+import { zaiRateLimits, type ZaiUsageData } from './provider/zai'
+import {
+  codexResetsAt,
+  formatCompactDuration,
+  parseEpochMs,
+  parseResetsAt,
+} from './reset'
 
 export interface WidgetLimit {
   readonly label: string
@@ -93,6 +99,27 @@ export function codexWidgetLimits(usage: CodexUsage, now: Date): WidgetLimit[] {
             label: codexWindowLabel(window.limit_window_seconds),
             percent: window.used_percent,
             resetsAt: codexResetsAt(window, now),
+          },
+        ]
+      : [],
+  )
+}
+
+// ─── GLM Coding Plan ──────────────────────────────────────────────────────────
+
+/** Short label by position after the reset-time sort: first = 5h, second = week. */
+function glmLimitLabel(index: number): string {
+  return index === 0 ? '5h' : index === 1 ? 'wk' : `${index + 1}`
+}
+
+export function glmWidgetLimits(usage: ZaiUsageData): WidgetLimit[] {
+  return zaiRateLimits(usage).flatMap((limit, index) =>
+    typeof limit.percentage === 'number'
+      ? [
+          {
+            label: glmLimitLabel(index),
+            percent: limit.percentage,
+            resetsAt: parseEpochMs(limit.nextResetTime),
           },
         ]
       : [],

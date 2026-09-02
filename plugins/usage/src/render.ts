@@ -1,6 +1,13 @@
 import type { ClaudeUsage, UnifiedLimit, UsageWindow } from './provider/anthropic'
 import type { CodexUsage, RateLimitDetails } from './provider/openai'
-import { codexResetsAt, formatDuration, parseResetsAt } from './reset'
+import {
+  zaiMcpLimit,
+  zaiRateLimits,
+  zaiUnitWord,
+  type ZaiQuotaLimit,
+  type ZaiUsageData,
+} from './provider/zai'
+import { codexResetsAt, formatDuration, parseEpochMs, parseResetsAt } from './reset'
 
 const MIN_LABEL_WIDTH = 22
 const BAR_WIDTH = 10
@@ -232,5 +239,48 @@ export function codexSection(usage: CodexUsage, now: Date): UsageSection {
   const title = usage.plan_type
     ? `OpenAI Codex (${usage.plan_type})`
     : 'OpenAI Codex'
+  return { title, rows }
+}
+
+// ─── GLM Coding Plan ──────────────────────────────────────────────────────────
+
+const numberFormat = new Intl.NumberFormat('en-US')
+
+/** Quota note like "1,360 of 28,000 credits", when the counts are known. */
+function zaiQuotaNote(current: number, total: number, unitWord: string): string {
+  return `${numberFormat.format(current)} of ${numberFormat.format(total)} ${unitWord}`
+}
+
+function zaiLimitRow(label: string, limit: ZaiQuotaLimit): UsageRow {
+  const current = typeof limit.currentValue === 'number' ? limit.currentValue : null
+  const total = typeof limit.usage === 'number' ? limit.usage : null
+  return {
+    label,
+    percent: limit.percentage,
+    resetsAt: parseEpochMs(limit.nextResetTime),
+    note:
+      current !== null && total !== null && total > 0
+        ? zaiQuotaNote(current, total, zaiUnitWord(limit))
+        : undefined,
+  }
+}
+
+export function glmSection(usage: ZaiUsageData): UsageSection {
+  const rows: UsageRow[] = []
+
+  // Sorted by reset time: first entry is the 5h window, second the weekly one
+  // (the official dashboard's convention; `unit`/`number` are undocumented).
+  for (const [index, limit] of zaiRateLimits(usage).entries()) {
+    const label =
+      index === 0 ? 'Session (5h)' : index === 1 ? 'Week' : `Window ${index + 1}`
+    rows.push(zaiLimitRow(label, limit))
+  }
+
+  const mcp = zaiMcpLimit(usage)
+  if (mcp) {
+    rows.push(zaiLimitRow('MCP tools (month)', mcp))
+  }
+
+  const title = usage.level ? `GLM Coding (${usage.level})` : 'GLM Coding'
   return { title, rows }
 }

@@ -24,6 +24,7 @@ import {
   ClaudeUsageApi,
 } from './provider/anthropic'
 import { CHATGPT_BASE_URL, CodexUsageApi } from './provider/openai'
+import { ZAI_BASE_URL, ZAI_CN_BASE_URL, ZaiUsageApi } from './provider/zai'
 
 const REQUEST_TIMEOUT = '10 seconds'
 const LOGIN_HINT = 'run /login to (re-)authenticate'
@@ -58,12 +59,15 @@ const requestFailed = (cause: unknown) =>
 export type UsageProvider = Data.TaggedEnum<{
   Anthropic: {}
   OpenAI: {}
+  /** `cn` selects the Zhipu China platform (open.bigmodel.cn) over Z.ai. */
+  Zai: { readonly cn: boolean }
 }>
 export const UsageProvider = Data.taggedEnum<UsageProvider>()
 
 export type UsageCredentials = Data.TaggedEnum<{
   Anthropic: { readonly accessToken: string }
   OpenAI: { readonly accessToken: string; readonly accountId: string }
+  Zai: { readonly apiKey: string }
 }>
 export const UsageCredentials = Data.taggedEnum<UsageCredentials>()
 
@@ -114,12 +118,18 @@ export class UsageService extends Context.Service<UsageService>()(
         const providerId = UsageProvider.$match(provider, {
           Anthropic: () => 'anthropic',
           OpenAI: () => 'openai-codex',
+          Zai: (zai) => (zai.cn ? 'zai-coding-cn' : 'zai'),
         })
+        // Subscription plans use OAuth; the GLM coding plan uses an API key.
+        const requiredType = provider._tag === 'Zai' ? 'api_key' : 'oauth'
 
-        if (readStoredCredential(providerId)?.type !== 'oauth') {
+        if (readStoredCredential(providerId)?.type !== requiredType) {
           return yield* new UsageServiceError({
             kind: 'CredentialsMissing',
-            message: `no subscription (OAuth) credentials found — ${LOGIN_HINT}`,
+            message:
+              provider._tag === 'Zai'
+                ? `no API key found for ${providerId} — ${LOGIN_HINT}`
+                : `no subscription (OAuth) credentials found — ${LOGIN_HINT}`,
           })
         }
         const accessToken = yield* Effect.tryPromise({
@@ -162,6 +172,7 @@ export class UsageService extends Context.Service<UsageService>()(
             }
             return UsageCredentials.OpenAI({ accessToken, accountId })
           }),
+          Zai: () => Effect.succeed(UsageCredentials.Zai({ apiKey: accessToken })),
         })) as CredentialsFor<P>
       })
 
@@ -201,7 +212,39 @@ export class UsageService extends Context.Service<UsageService>()(
           .pipe(Effect.timeout(REQUEST_TIMEOUT), Effect.mapError(requestFailed))
       })
 
-      return { claude, codex } as const
+      const glm = Effect.fn('UsageService.glm')(function* (cn: boolean) {
+        const { apiKey } = yield* credentials(UsageProvider.Zai({ cn }))
+        const client = yield* HttpApiClient.makeWith(ZaiUsageApi, {
+          baseUrl: cn ? ZAI_CN_BASE_URL : ZAI_BASE_URL,
+          httpClient: http.pipe(
+            HttpClient.mapRequest(
+              HttpClientRequest.setHeaders({
+                Authorization: `Bearer ${apiKey}`,
+              }),
+            ),
+          ),
+        })
+        // The platform answers HTTP 200 for API errors too; success is only
+        // signalled inside the envelope body.
+        const envelope = yield* client
+          .usage()
+          .pipe(Effect.timeout(REQUEST_TIMEOUT), Effect.mapError(requestFailed))
+        if (envelope.success === false || envelope.code === undefined) {
+          return yield* new UsageServiceError({
+            kind: 'RequestFailed',
+            message: envelope.msg || 'GLM usage API reported an error',
+          })
+        }
+        if (envelope.code !== 200) {
+          return yield* new UsageServiceError({
+            kind: 'RequestFailed',
+            message: envelope.msg || `GLM usage API error (code ${envelope.code})`,
+          })
+        }
+        return envelope.data ?? {}
+      })
+
+      return { claude, codex, glm } as const
     }),
   },
 ) {

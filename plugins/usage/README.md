@@ -1,19 +1,25 @@
 # `@pi-plugins/usage`
 
 A [pi-agent](https://github.com/earendil-works/pi) extension that surfaces the
-subscription plan usage / rate limits for Anthropic Claude (Pro/Max) and OpenAI Codex
-(ChatGPT) plans via a `/usage` command and a compact status-line widget.
+subscription plan usage / rate limits for Anthropic Claude (Pro/Max), OpenAI Codex
+(ChatGPT), and Z.ai/Zhipu GLM Coding plans via a `/usage` command and a compact
+status-line widget.
 
 Credentials are read from pi's internal auth store, so anything you have logged into
 with `/login` works out of the box — no extra configuration required:
 
-| Provider     | Endpoint                                         | Credential (auth store)                         |
-| ------------ | ------------------------------------------------ | ----------------------------------------------- |
-| Claude       | `GET https://api.anthropic.com/api/oauth/usage`  | `anthropic` OAuth token                         |
-| OpenAI Codex | `GET https://chatgpt.com/backend-api/wham/usage` | `openai-codex` OAuth token + ChatGPT account id |
+| Provider           | Endpoint                                                     | Credential (auth store)                         |
+| ------------------ | ------------------------------------------------------------ | ----------------------------------------------- |
+| Claude             | `GET https://api.anthropic.com/api/oauth/usage`              | `anthropic` OAuth token                         |
+| OpenAI Codex       | `GET https://chatgpt.com/backend-api/wham/usage`             | `openai-codex` OAuth token + ChatGPT account id |
+| GLM Coding         | `GET https://api.z.ai/api/monitor/usage/quota/limit`         | `zai` API key                                   |
+| GLM Coding (China) | `GET https://open.bigmodel.cn/api/monitor/usage/quota/limit` | `zai-coding-cn` API key                         |
 
 Expired access tokens are refreshed transparently through pi's auth storage before
-the usage request is made.
+the usage request is made. The GLM coding plan authenticates with the API key stored
+for the `zai` (or `zai-coding-cn`) provider. `/usage` reports the platform you have a
+key for, preferring the global one; the widget always follows the active model's
+provider.
 
 ## Install
 
@@ -51,13 +57,17 @@ Claude
 OpenAI Codex (pro)
   5h limit               [████░░░░░░]  42% · resets in 3h 25m
   Week limit             [████████░░]  84% · resets in 4d 2h
+
+GLM Coding (max)
+  Session (5h)           [█░░░░░░░░░]   7% · resets in 4h 17m · 2,096 of 28,000 credits
+  Week                   [░░░░░░░░░░]   1% · resets in 5d 1h · 2,096 of 140,000 credits
 ```
 
 ## Widget
 
-While the active model belongs to a subscription provider (`anthropic` or
-`openai-codex`), the session and weekly rate limits are shown as small progress bars
-on the shared status line above the editor:
+While the active model belongs to a subscription provider (`anthropic`,
+`openai-codex`, `zai`, or `zai-coding-cn`), the session and weekly rate limits are
+shown as small progress bars on the shared status line above the editor:
 
 ```text
 5h ██░░░ 42% (2h) · wk █░░░░ 17% (4d)

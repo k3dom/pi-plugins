@@ -14,6 +14,10 @@ export function parseResetsAt(
   return null
 }
 
+export function parseEpochMs(value: number | null | undefined): Date | null {
+  return typeof value === 'number' && !Number.isNaN(value) ? new Date(value) : null
+}
+
 export function codexResetsAt(window: RateLimitWindow, now: Date): Date | null {
   if (typeof window.reset_after_seconds === 'number') {
     return new Date(now.getTime() + window.reset_after_seconds * 1000)
