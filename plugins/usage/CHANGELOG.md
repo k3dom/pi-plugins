@@ -1,5 +1,13 @@
 # @pi-plugins/usage
 
+## 0.4.2
+
+### Patch Changes
+
+- 9096d75: Drop the widget's background refresh; it hit the usage endpoints' rate limits and
+  often left the widget empty. It refreshes at most every 30 seconds on session
+  start, model select and `agent_settled` again.
+
 ## 0.4.1
 
 ### Patch Changes
