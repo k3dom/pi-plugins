@@ -1,5 +1,11 @@
 # @pi-plugins/usage
 
+## 0.5.0
+
+### Minor Changes
+
+- 11e0893: Report Z.ai / Zhipu GLM Coding Plan usage in `/usage` and the status-line widget.
+
 ## 0.4.2
 
 ### Patch Changes
