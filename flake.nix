@@ -25,7 +25,7 @@
           export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
           pnpm install --frozen-lockfile
-          turbo run format:check lint check-types build
+          turbo run format:check lint check-types build test
         '';
       };
     in {
