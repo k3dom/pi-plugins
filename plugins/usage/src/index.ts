@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { loadExtensionConfig } from '@pi-plugins/shared/config'
 import { runHandler } from '@pi-plugins/shared/run'
 import { setStatuslineSegment } from '@pi-plugins/shared/statusline'
-import { Effect, type Fiber, Schedule, Schema, Semaphore } from 'effect'
+import { Effect, Schema } from 'effect'
 import {
   claudeSection,
   codexSection,
@@ -18,6 +18,8 @@ import {
 } from './widget'
 
 const EXTENSION_ID = 'usage'
+/** Minimum time between two background usage fetches for the widget. */
+const WIDGET_REFRESH_MS = 30_000
 
 const UsageConfig = Schema.Struct({
   /** Show rate-limit bars above the editor for the active model's provider. */
@@ -60,7 +62,7 @@ export default function usage(pi: ExtensionAPI): void {
   /** Latest widget limits per provider; kept across model switches. */
   const limitsCache = new Map<WidgetProvider, readonly WidgetLimit[]>()
   const fetchedAt = new Map<WidgetProvider, number>()
-  const fetchLock = Semaphore.makeUnsafe(1)
+  const inFlight = new Set<WidgetProvider>()
 
   function recordLimits(
     provider: WidgetProvider,
@@ -70,13 +72,12 @@ export default function usage(pi: ExtensionAPI): void {
     fetchedAt.set(provider, Date.now())
   }
 
-  function activeProvider(ctx: ExtensionContext): WidgetProvider | undefined {
-    return ctx.hasUI && config.showWidget ? widgetProvider(ctx.model) : undefined
-  }
-
   /** Redraws the segment from cache for the active model's provider. */
   function renderWidget(ctx: ExtensionContext): void {
-    const provider = activeProvider(ctx)
+    if (!ctx.hasUI) {
+      return
+    }
+    const provider = config.showWidget ? widgetProvider(ctx.model) : undefined
     const text =
       provider === undefined
         ? undefined
@@ -88,115 +89,58 @@ export default function usage(pi: ExtensionAPI): void {
     )
   }
 
-  /** Refetches the active provider into the cache and repaints. */
-  function fetchLimits(
-    ctx: ExtensionContext,
-    floorMs = 30_000,
-  ): Effect.Effect<void, UsageServiceError> {
-    // Inside the lock: whoever waited must re-judge the cache that fetch left.
-    return fetchLock.withPermit(
-      Effect.suspend(() => {
-        const provider = activeProvider(ctx)
-        if (provider === undefined) {
-          return Effect.void
-        }
-        if (Date.now() - (fetchedAt.get(provider) ?? 0) < floorMs) {
-          return Effect.void
-        }
-
-        return Effect.gen(function* () {
-          const service = yield* UsageService
-          recordLimits(
-            provider,
-            provider === 'claude'
-              ? claudeWidgetLimits(yield* service.claude())
-              : codexWidgetLimits(yield* service.codex(), new Date()),
-          )
-          renderWidget(ctx)
-        }).pipe(
-          Effect.provide(UsageService.layer(ctx.modelRegistry)),
-          // Stamped on failure too, so a broken provider is not re-queried by
-          // every event. Retrying is the poll loop's job, at its backed-off pace.
-          Effect.onExit(() =>
-            Effect.sync(() => fetchedAt.set(provider, Date.now())),
-          ),
-        )
-      }),
-    )
-  }
-
   /** Redraws from cache, then refetches in the background when the data is stale. */
-  async function refreshWidget(
-    ctx: ExtensionContext,
-    floorMs?: number,
-  ): Promise<void> {
+  async function refreshWidget(ctx: ExtensionContext): Promise<void> {
     renderWidget(ctx)
+    if (!ctx.hasUI || !config.showWidget) {
+      return
+    }
+
+    const provider = widgetProvider(ctx.model)
+    if (provider === undefined || inFlight.has(provider)) {
+      return
+    }
+    const last = fetchedAt.get(provider)
+    if (last !== undefined && Date.now() - last < WIDGET_REFRESH_MS) {
+      return
+    }
+
+    inFlight.add(provider)
+    const program = Effect.gen(function* () {
+      const service = yield* UsageService
+      return provider === 'claude'
+        ? claudeWidgetLimits(yield* service.claude())
+        : codexWidgetLimits(yield* service.codex(), new Date())
+    }).pipe(Effect.provide(UsageService.layer(ctx.modelRegistry)))
+
     // On failure keep whatever is shown. /usage reports errors explicitly.
-    await runHandler(fetchLimits(ctx, floorMs))
-  }
-
-  let backgroundLoops: Fiber.Fiber<void, UsageServiceError> | undefined
-
-  function startBackground(ctx: ExtensionContext): void {
-    backgroundLoops?.interruptUnsafe()
-
-    // Countdowns are baked into the segment text, so nothing else repaints them.
-    const repaint = Effect.suspend(() => {
+    let limits: WidgetLimit[] | undefined
+    try {
+      limits = await runHandler(program)
+    } finally {
+      inFlight.delete(provider)
+      // Record the attempt time even on failure so a broken provider (e.g. not
+      // logged in) is not re-queried on every event.
+      fetchedAt.set(provider, Date.now())
+    }
+    if (limits !== undefined) {
+      limitsCache.set(provider, limits)
       renderWidget(ctx)
-      const provider = activeProvider(ctx)
-      if (provider === undefined) {
-        return Effect.void
-      }
-      // A window that reset since the last attempt zeroed what is on screen.
-      const now = Date.now()
-      const attemptedAt = fetchedAt.get(provider) ?? 0
-      const rolledOver = (limitsCache.get(provider) ?? []).some(
-        ({ resetsAt }) =>
-          resetsAt != null &&
-          resetsAt.getTime() <= now &&
-          resetsAt.getTime() > attemptedAt,
-      )
-      return rolledOver ? Effect.ignore(fetchLimits(ctx)) : Effect.void
-    }).pipe(Effect.repeat(Schedule.fixed('1 minute')))
-
-    // min() takes the shorter delay, capping the backoff at 30 minutes.
-    const poll = fetchLimits(ctx).pipe(
-      Effect.retry(
-        Schedule.jittered(
-          Schedule.min([
-            Schedule.exponential('5 minutes'),
-            Schedule.spaced('30 minutes'),
-          ]),
-        ),
-      ),
-      Effect.repeat(Schedule.spaced('5 minutes')),
-    )
-
-    backgroundLoops = Effect.runFork(
-      Effect.all([repaint, poll], { concurrency: 'unbounded', discard: true }),
-    )
+    }
   }
 
   pi.on('session_start', async (_event, ctx) => {
     config = await loadExtensionConfig(ctx, UsageConfig, EXTENSION_ID, config)
     await refreshWidget(ctx)
-    if (ctx.hasUI && config.showWidget) {
-      startBackground(ctx)
-    }
-  })
-
-  pi.on('session_shutdown', () => {
-    backgroundLoops?.interruptUnsafe()
-    backgroundLoops = undefined
   })
 
   pi.on('model_select', async (_event, ctx) => {
     await refreshWidget(ctx)
   })
 
-  // The one moment the numbers are known to have moved, so it skips the floor.
+  // Past retries, auto-compaction and queued follow-ups, unlike agent_end.
   pi.on('agent_settled', async (_event, ctx) => {
-    await refreshWidget(ctx, 0)
+    await refreshWidget(ctx)
   })
 
   pi.registerCommand('usage', {

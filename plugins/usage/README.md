@@ -65,9 +65,9 @@ on the shared status line above the editor:
 
 The value in parentheses is the time left until that window resets.
 
-The widget repaints every minute and refetches in the background every 5 minutes,
-after each agent turn, and on session start or model select. It reuses the data
-fetched by `/usage`.
+The widget refreshes in the background (at most every 30 seconds) when a session
+starts, a model is selected, or an agent turn settles, and reuses the data fetched by
+`/usage`.
 
 ## Configuration
 
