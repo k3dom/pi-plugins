@@ -1,77 +1,54 @@
 import { Schema as S } from 'effect'
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from 'effect/unstable/httpapi'
 
-/**
- * Model of the GLM Coding Plan usage endpoint (Z.ai global / Zhipu China).
- * Undocumented console API the official usage dashboard calls:
- *
- *   GET https://api.z.ai/api/monitor/usage/quota/limit
- *   GET https://open.bigmodel.cn/api/monitor/usage/quota/limit
- *
- */
+/** Console API host of each pi provider (global Z.ai vs. Zhipu China platform). */
+export const ZAI_BASE_URL = {
+  zai: 'https://api.z.ai',
+  'zai-coding-cn': 'https://open.bigmodel.cn',
+} as const
+export type ZaiProvider = keyof typeof ZAI_BASE_URL
 
-export const ZAI_BASE_URL = 'https://api.z.ai'
-export const ZAI_CN_BASE_URL = 'https://open.bigmodel.cn'
-
-/**
- * One quota window. `type` depends on plan generation: `TOKENS_LIMIT` (token
- * plans), `CREDIT_LIMIT` (points plans), `TIME_LIMIT` (monthly MCP tools).
- */
-export const ZaiQuotaLimit = S.Struct({
-  /** "TOKENS_LIMIT" | "CREDIT_LIMIT" | "TIME_LIMIT" | future values. */
+export const QuotaLimit = S.Struct({
+  /** `TOKENS_LIMIT` (token plans), `CREDIT_LIMIT` (credit plans) or `TIME_LIMIT` (monthly MCP tools). */
   type: S.optional(S.NullOr(S.String)),
-  /**
-   * Window duration as unit enum + count: unit 3 (hour) + 5 → 5h window,
-   * unit 6 (week) + 1 → weekly window. Values are inferred, not documented.
-   */
-  unit: S.optional(S.NullOr(S.Number)),
-  number: S.optional(S.NullOr(S.Number)),
-  /** Total quota of the window (tokens or credits). */
+  /** Total quota of the window, despite the name. */
   usage: S.optional(S.NullOr(S.Number)),
-  /** Amount used in the current window. */
   currentValue: S.optional(S.NullOr(S.Number)),
-  remaining: S.optional(S.NullOr(S.Number)),
-  /** Percentage used, 0-100. */
   percentage: S.optional(S.NullOr(S.Number)),
-  /** Epoch milliseconds when the window resets. */
+  /** Epoch milliseconds. */
   nextResetTime: S.optional(S.NullOr(S.Number)),
 })
-export type ZaiQuotaLimit = typeof ZaiQuotaLimit.Type
+export type QuotaLimit = typeof QuotaLimit.Type
 
-export const ZaiUsageData = S.Struct({
-  limits: S.optional(S.NullOr(S.Array(ZaiQuotaLimit))),
-  /** Plan tier, e.g. "lite" | "pro" | "max". */
+export const GlmUsage = S.Struct({
   level: S.optional(S.NullOr(S.String)),
+  limits: S.optional(S.NullOr(S.Array(QuotaLimit))),
 })
-export type ZaiUsageData = typeof ZaiUsageData.Type
+export type GlmUsage = typeof GlmUsage.Type
 
-/**
- * Every endpoint of the platform returns this envelope with HTTP 200; API
- * errors are `success: false` / `code !== 200` inside the body.
- */
-export const ZaiUsageEnvelope = S.Struct({
+/** API errors arrive as HTTP 200 with the failure inside this envelope. */
+export const GlmUsageEnvelope = S.Struct({
   code: S.optional(S.NullOr(S.Number)),
   msg: S.optional(S.NullOr(S.String)),
-  data: S.optional(S.NullOr(ZaiUsageData)),
   success: S.optional(S.NullOr(S.Boolean)),
+  data: S.optional(S.NullOr(GlmUsage)),
 })
-export type ZaiUsageEnvelope = typeof ZaiUsageEnvelope.Type
+export type GlmUsageEnvelope = typeof GlmUsageEnvelope.Type
 
-export const ZaiUsageApi = HttpApi.make('ZaiUsage').add(
+export const GlmUsageApi = HttpApi.make('GlmUsage').add(
   HttpApiGroup.make('monitor', { topLevel: true }).add(
     HttpApiEndpoint.get('usage', '/api/monitor/usage/quota/limit', {
-      success: ZaiUsageEnvelope,
+      success: GlmUsageEnvelope,
     }),
   ),
 )
 
 /**
- * Rate-limit windows of the plan (token/credit limits only; the monthly MCP
- * `TIME_LIMIT` is separate), sorted by `nextResetTime`. The official
- * dashboard treats the first entry as the 5h window and the second as the
- * weekly one, since `unit`/`number` are undocumented.
+ * The token/credit windows in reset order. Nothing in the payload names a
+ * window, so like the official dashboard the first is taken as the 5h window
+ * and the second as the weekly one.
  */
-export function zaiRateLimits(usage: ZaiUsageData): ZaiQuotaLimit[] {
+export function glmRateLimits(usage: GlmUsage): QuotaLimit[] {
   return (usage.limits ?? [])
     .filter(
       (limit) => limit.type === 'TOKENS_LIMIT' || limit.type === 'CREDIT_LIMIT',
@@ -81,21 +58,4 @@ export function zaiRateLimits(usage: ZaiUsageData): ZaiQuotaLimit[] {
         (a.nextResetTime ?? Number.POSITIVE_INFINITY) -
         (b.nextResetTime ?? Number.POSITIVE_INFINITY),
     )
-}
-
-/** Monthly MCP tools quota (`TIME_LIMIT`), if the plan reports one. */
-export function zaiMcpLimit(usage: ZaiUsageData): ZaiQuotaLimit | undefined {
-  return (usage.limits ?? []).find((limit) => limit.type === 'TIME_LIMIT')
-}
-
-/** Unit word for the quota counters, by plan generation. */
-export function zaiUnitWord(limit: ZaiQuotaLimit): string {
-  switch (limit.type) {
-    case 'CREDIT_LIMIT':
-      return 'credits'
-    case 'TIME_LIMIT':
-      return 'uses'
-    default:
-      return 'tokens'
-  }
 }

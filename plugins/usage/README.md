@@ -5,10 +5,10 @@ subscription plan usage / rate limits for Anthropic Claude (Pro/Max), OpenAI Cod
 (ChatGPT), and Z.ai/Zhipu GLM Coding plans via a `/usage` command and a compact
 status-line widget.
 
-Credentials are read from pi's internal auth store, so anything you have logged into
-with `/login` works out of the box — no extra configuration required:
+Credentials are read from pi's auth store, so anything you have logged into with
+`/login` works out of the box — no extra configuration required:
 
-| Provider           | Endpoint                                                     | Credential (auth store)                         |
+| Provider           | Endpoint                                                     | Credential                                      |
 | ------------------ | ------------------------------------------------------------ | ----------------------------------------------- |
 | Claude             | `GET https://api.anthropic.com/api/oauth/usage`              | `anthropic` OAuth token                         |
 | OpenAI Codex       | `GET https://chatgpt.com/backend-api/wham/usage`             | `openai-codex` OAuth token + ChatGPT account id |
@@ -16,10 +16,10 @@ with `/login` works out of the box — no extra configuration required:
 | GLM Coding (China) | `GET https://open.bigmodel.cn/api/monitor/usage/quota/limit` | `zai-coding-cn` API key                         |
 
 Expired access tokens are refreshed transparently through pi's auth storage before
-the usage request is made. The GLM coding plan authenticates with the API key stored
-for the `zai` (or `zai-coding-cn`) provider. `/usage` reports the platform you have a
-key for, preferring the global one; the widget always follows the active model's
-provider.
+the usage request is made. The GLM coding plan uses whatever API key pi resolves for
+the `zai` (or `zai-coding-cn`) provider, so `ZAI_API_KEY` / `ZAI_CODING_CN_API_KEY`
+work as well as `/login`. `/usage` reports the platform you have a key for,
+preferring the global one; the widget follows the active model's provider.
 
 ## Install
 

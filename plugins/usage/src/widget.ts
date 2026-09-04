@@ -1,10 +1,10 @@
 import type { ClaudeUsage, UsageWindow } from './provider/anthropic'
 import type { CodexUsage } from './provider/openai'
-import { zaiRateLimits, type ZaiUsageData } from './provider/zai'
+import { glmRateLimits, type GlmUsage } from './provider/zai'
 import {
   codexResetsAt,
   formatCompactDuration,
-  parseEpochMs,
+  glmResetsAt,
   parseResetsAt,
 } from './reset'
 
@@ -105,23 +105,12 @@ export function codexWidgetLimits(usage: CodexUsage, now: Date): WidgetLimit[] {
   )
 }
 
-// ─── GLM Coding Plan ──────────────────────────────────────────────────────────
-
-/** Short label by position after the reset-time sort: first = 5h, second = week. */
-function glmLimitLabel(index: number): string {
-  return index === 0 ? '5h' : index === 1 ? 'wk' : `${index + 1}`
-}
-
-export function glmWidgetLimits(usage: ZaiUsageData): WidgetLimit[] {
-  return zaiRateLimits(usage).flatMap((limit, index) =>
-    typeof limit.percentage === 'number'
-      ? [
-          {
-            label: glmLimitLabel(index),
-            percent: limit.percentage,
-            resetsAt: parseEpochMs(limit.nextResetTime),
-          },
-        ]
-      : [],
-  )
+export function glmWidgetLimits(usage: GlmUsage): WidgetLimit[] {
+  const labels = ['5h', 'wk']
+  return glmRateLimits(usage).flatMap((limit, index) => {
+    const label = labels[index]
+    return label !== undefined && typeof limit.percentage === 'number'
+      ? [{ label, percent: limit.percentage, resetsAt: glmResetsAt(limit) }]
+      : []
+  })
 }

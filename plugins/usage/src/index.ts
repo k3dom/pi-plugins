@@ -1,9 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
-import { readStoredCredential } from '@earendil-works/pi-coding-agent'
 import { loadExtensionConfig } from '@pi-plugins/shared/config'
 import { runHandler } from '@pi-plugins/shared/run'
 import { setStatuslineSegment } from '@pi-plugins/shared/statusline'
-import { Effect, Schema } from 'effect'
+import { Effect, Record, Schema } from 'effect'
+import { ZAI_BASE_URL, type ZaiProvider } from './provider/zai'
 import {
   claudeSection,
   codexSection,
@@ -27,7 +27,7 @@ const UsageConfig = Schema.Struct({
   showWidget: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 })
 
-type WidgetProvider = 'claude' | 'codex' | 'glm'
+type WidgetProvider = 'claude' | 'codex' | ZaiProvider
 
 function widgetProvider(
   model: ExtensionContext['model'],
@@ -39,26 +39,10 @@ function widgetProvider(
       return 'codex'
     case 'zai':
     case 'zai-coding-cn':
-      return 'glm'
+      return model.provider
     default:
       return undefined
   }
-}
-
-/** Whether the widget's GLM platform is the Zhipu China one. */
-function widgetGlmCn(ctx: ExtensionContext): boolean {
-  return ctx.model?.provider === 'zai-coding-cn'
-}
-
-/**
- * Which GLM platform `/usage` reports on: the one with a stored API key,
- * preferring the global Z.ai platform when both exist.
- */
-function reportGlmCn(): boolean {
-  if (readStoredCredential('zai')?.type === 'api_key') {
-    return false
-  }
-  return readStoredCredential('zai-coding-cn')?.type === 'api_key'
 }
 
 function section<A>(
@@ -124,7 +108,7 @@ export default function usage(pi: ExtensionAPI): void {
         ? claudeWidgetLimits(yield* service.claude())
         : provider === 'codex'
           ? codexWidgetLimits(yield* service.codex(), new Date())
-          : glmWidgetLimits(yield* service.glm(widgetGlmCn(ctx)))
+          : glmWidgetLimits(yield* service.glm(provider))
     }).pipe(Effect.provide(UsageService.layer(ctx.modelRegistry)))
 
     let limits: WidgetLimit[] | undefined
@@ -161,6 +145,11 @@ export default function usage(pi: ExtensionAPI): void {
       'Show subscription usage/rate limits for Claude, OpenAI Codex, and GLM coding plans',
     handler: async (_args, ctx) => {
       const now = new Date()
+      // The GLM platforms are separate accounts; the global one wins when both have a key.
+      const glmProvider =
+        Record.keys(ZAI_BASE_URL).find(
+          (id) => ctx.modelRegistry.getProviderAuthStatus(id).configured,
+        ) ?? 'zai'
       const program = Effect.gen(function* () {
         const service = yield* UsageService
         const sections = yield* Effect.all(
@@ -194,10 +183,12 @@ export default function usage(pi: ExtensionAPI): void {
             section(
               'GLM Coding',
               service
-                .glm(reportGlmCn())
+                .glm(glmProvider)
                 .pipe(
                   Effect.tap((data) =>
-                    Effect.sync(() => recordLimits('glm', glmWidgetLimits(data))),
+                    Effect.sync(() =>
+                      recordLimits(glmProvider, glmWidgetLimits(data)),
+                    ),
                   ),
                 ),
               glmSection,
