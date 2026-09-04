@@ -24,6 +24,9 @@
       "cache": false
     },
     "format:check": {},
+    "test": {
+      "dependsOn": ["^test"]
+    },
     "//#format": {
       "cache": false
     },

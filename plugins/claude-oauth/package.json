@@ -39,9 +39,10 @@
     "prepack": "pnpm run build",
     "build": "tsdown",
     "capture": "node scripts/claude-trace.ts",
-    "check": "pnpm run lint && pnpm run check-types && pnpm run format:check",
+    "check": "pnpm run lint && pnpm run check-types && pnpm run format:check && pnpm run test",
     "check-types": "tsc -b",
     "lint": "oxlint",
+    "test": "node --experimental-strip-types --import ./test/resolve-typescript.mjs --test ./test/*.test.mjs",
     "format": "oxfmt",
     "format:check": "oxfmt --check"
   },

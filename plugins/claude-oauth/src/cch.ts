@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto'
+import { Array, pipe, String } from 'effect'
 import {
   CCH_PLACEHOLDER,
   CCH_SEED,
   CLAUDE_CODE_BILLING_HEADER_PREFIX,
-  CLAUDE_CODE_SERVER_FALLBACK_BETA,
 } from './constants'
 import { xxHash64 } from './utils'
 
@@ -167,20 +167,23 @@ export function wrapFetchForCch(
     const inputHeaders =
       init?.headers ?? (input instanceof Request ? input.headers : undefined)
     const headers = new Headers(inputHeaders)
-    const preserveServerFallbackBeta = (headers.get('anthropic-beta') ?? '')
-      .split(',')
-      .some((beta) => beta.trim() === CLAUDE_CODE_SERVER_FALLBACK_BETA)
+    // Pi selects betas for the request fields it emitted. Preserve them when
+    // applying Claude Code's baseline so body and header capabilities stay aligned.
+    const incomingBetaHeader = headers.get('anthropic-beta') ?? ''
     for (const [name, value] of Object.entries(claudeHeaders)) {
       headers.set(name, value)
     }
-    if (preserveServerFallbackBeta) {
-      const betas = headers.get('anthropic-beta')
-      headers.set(
-        'anthropic-beta',
-        betas
-          ? `${betas},${CLAUDE_CODE_SERVER_FALLBACK_BETA}`
-          : CLAUDE_CODE_SERVER_FALLBACK_BETA,
-      )
+    const mergedBetas = pipe(
+      [headers.get('anthropic-beta') ?? '', incomingBetaHeader],
+      Array.flatMap(String.split(',')),
+      Array.map(String.trim),
+      Array.filter(String.isNonEmpty),
+      Array.dedupe,
+    )
+    if (mergedBetas.length > 0) {
+      headers.set('anthropic-beta', mergedBetas.join(','))
+    } else {
+      headers.delete('anthropic-beta')
     }
     headers.delete('anthropic-client-platform')
     headers.delete('anthropic-client-version')
