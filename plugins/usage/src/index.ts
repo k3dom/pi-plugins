@@ -141,8 +141,7 @@ export default function usage(pi: ExtensionAPI): void {
   })
 
   pi.registerCommand('usage', {
-    description:
-      'Show subscription usage/rate limits for Claude, OpenAI Codex, and GLM coding plans',
+    description: 'Show subscription plan usage and rate limits',
     handler: async (_args, ctx) => {
       const now = new Date()
       const glmProvider =

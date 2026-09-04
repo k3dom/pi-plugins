@@ -1,7 +1,7 @@
 {
   "name": "@pi-plugins/usage",
   "version": "0.4.1",
-  "description": "Subscription usage/rate-limit command extension for pi-agent (Claude, OpenAI Codex, and GLM coding plans).",
+  "description": "Subscription usage/rate-limit command extension for pi-agent.",
   "keywords": [
     "anthropic",
     "codex",
