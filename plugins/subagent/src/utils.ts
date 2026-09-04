@@ -22,6 +22,19 @@ function formatTokens(count: number): string {
   return `${(count / 1000000).toFixed(1)}M`
 }
 
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000)
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`
+  }
+  const seconds = `${totalSeconds % 60}`.padStart(2, '0')
+  const minutes = Math.floor(totalSeconds / 60) % 60
+  const hours = Math.floor(totalSeconds / 3600)
+  return hours > 0
+    ? `${hours}h${`${minutes}`.padStart(2, '0')}m${seconds}s`
+    : `${minutes}m${seconds}s`
+}
+
 export function formatStats(result: SubagentResult): string {
   const { usage, toolCalls } = result
   const parts: string[] = []
@@ -47,19 +60,7 @@ export function formatStats(result: SubagentResult): string {
     parts.push(`$${usage.cost.toFixed(4)}`)
   }
   if (result.durationMs !== undefined) {
-    const totalSeconds = Math.round(result.durationMs / 1000)
-    if (totalSeconds < 60) {
-      parts.push(`${totalSeconds}s`)
-    } else {
-      const seconds = `${totalSeconds % 60}`.padStart(2, '0')
-      const minutes = Math.floor(totalSeconds / 60) % 60
-      const hours = Math.floor(totalSeconds / 3600)
-      parts.push(
-        hours > 0
-          ? `${hours}h${`${minutes}`.padStart(2, '0')}m${seconds}s`
-          : `${minutes}m${seconds}s`,
-      )
-    }
+    parts.push(formatDuration(result.durationMs))
   }
   return parts.join(' ')
 }

@@ -23,6 +23,7 @@ const UNSETTLED_RELATIVE_ERROR = 0.15
 // Bartlett lags for the serial-correlation term; past two the weights are noise.
 const HAC_LAGS = 2
 
+// A sample carrying the whole window leaves no residual to correct against.
 const MAX_LEVERAGE = 0.99
 
 // Share of billed reasoning the streamed thinking must cover to count as streamed
@@ -37,6 +38,7 @@ export type DeltaKind = 'thinking' | 'visible'
 
 interface Sample {
   readonly model: string
+  /** Monotonic: a wall clock can step backwards. */
   readonly recordedAt: number
   readonly ttftMs: number
   readonly generationMs: number
@@ -68,6 +70,60 @@ interface InflightRequest {
   firstDeltaChars: number
   visibleChars: number
   thinkingChars: number
+}
+
+// Splits total weight rather than count; `NaN` when empty.
+function weightedMedian(
+  entries: readonly { readonly value: number; readonly weight: number }[],
+): number {
+  const sorted = Array.sort(
+    entries,
+    Order.mapInput(Order.Number, (entry: (typeof entries)[number]) => entry.value),
+  )
+  const half = sorted.reduce((total, entry) => total + entry.weight, 0) / 2
+  let seen = 0
+  for (const entry of sorted) {
+    seen += entry.weight
+    if (seen >= half) {
+      return entry.value
+    }
+  }
+  return Number.NaN
+}
+
+// Reasoning is billed under `output` whether or not it streams. Withheld or
+// summarized thinking was produced before the first delta, so counting it would
+// credit work no measured interval covers (up to 2x too fast). Only the thinking
+// that streamed belongs in the numerator, converted back to tokens by this
+// request's visible chars-per-token.
+function streamedTokens(
+  request: InflightRequest,
+  outcome: RequestOutcome,
+): number | undefined {
+  const chars = request.visibleChars + request.thinkingChars
+  const withinInterval = chars - request.firstDeltaChars
+  if (withinInterval <= 0) {
+    return undefined
+  }
+
+  const reasoning = Math.min(outcome.reasoningTokens ?? 0, outcome.outputTokens)
+  const visible = outcome.outputTokens - reasoning
+  const density = visible > 0 ? request.visibleChars / visible : 0
+  const implied = density > 0 ? request.thinkingChars / density : 0
+  // Not clamped to `implied` on every request: that would charge density noise
+  // to models that stream their thinking in full.
+  const streamedReasoning =
+    density <= 0
+      ? request.thinkingChars > 0
+        ? reasoning
+        : 0
+      : implied >= reasoning * REASONING_STREAMED
+        ? reasoning
+        : implied
+
+  // The first delta predates the interval; its share is prorated out by
+  // characters since the opening chunk is routinely a fragment.
+  return ((visible + streamedReasoning) * withinInterval) / chars
 }
 
 // Tokens and milliseconds are summed separately and divided once, so a request
@@ -107,6 +163,7 @@ function recentSpeed(
     distance += sample.tokens
   }
 
+  // `latest` always matches and every sample clears MIN_OBSERVED_MS, so millis > 0.
   const rate = tokens / millis
 
   // Taylor-linearized variance of the ratio estimator. Each squared residual is
@@ -138,30 +195,13 @@ function recentSpeed(
   const relativeError = Math.sqrt(Math.max(variance, independent)) / tokens
   const effectiveSamples = 1 / leverageSquares
 
-  // Weighted median rather than latest: a retried request charges its whole
-  // backoff to TTFT.
-  const byTtft = Array.sort(
-    window,
-    Order.mapInput(
-      Order.Number,
-      (entry: (typeof window)[number]) => entry.sample.ttftMs,
-    ),
-  )
-  const halfWeight = byTtft.reduce((total, entry) => total + entry.weight, 0) / 2
-  let ttftMs = Number.NaN
-  let seen = 0
-  for (const entry of byTtft) {
-    seen += entry.weight
-    if (seen >= halfWeight) {
-      ttftMs = entry.sample.ttftMs
-      break
-    }
-  }
-
   return {
     model,
     tps: rate * 1000,
-    ttftMs,
+    // Median, not latest: a retried request charges its whole backoff to TTFT.
+    ttftMs: weightedMedian(
+      window.map((entry) => ({ value: entry.sample.ttftMs, weight: entry.weight })),
+    ),
     // The sample floor gates unconditionally: a window rebuilt from one request
     // fits it exactly, and its zero residual would hold the latch open on nothing.
     provisional: !(
@@ -227,6 +267,7 @@ export class SpeedTracker extends Context.Service<SpeedTracker>()(
           outcome.stopReason === 'aborted' ||
           outcome.outputTokens <= 0
         ) {
+          // A lone delta spans no interval; timing it would read as thousands of tok/s.
           return
         }
 
@@ -235,37 +276,8 @@ export class SpeedTracker extends Context.Service<SpeedTracker>()(
           return
         }
 
-        const chars = request.visibleChars + request.thinkingChars
-        const withinInterval = chars - request.firstDeltaChars
-        if (withinInterval <= 0) {
-          return
-        }
-
-        // Reasoning is billed under `output` whether or not it streams. Withheld
-        // or summarized thinking was produced before the first delta, so counting
-        // it would credit work no measured interval covers (up to 2x too fast).
-        // Only the thinking that streamed belongs in the numerator, converted
-        // back to tokens by this request's visible chars-per-token.
-        const reasoning = Math.min(
-          outcome.reasoningTokens ?? 0,
-          outcome.outputTokens,
-        )
-        const visible = outcome.outputTokens - reasoning
-        const density = visible > 0 ? request.visibleChars / visible : 0
-        const implied = density > 0 ? request.thinkingChars / density : 0
-        const streamedReasoning =
-          density <= 0
-            ? request.thinkingChars > 0
-              ? reasoning
-              : 0
-            : implied >= reasoning * REASONING_STREAMED
-              ? reasoning
-              : implied
-
-        // The first delta predates the interval; its share is prorated out by
-        // characters since the opening chunk is routinely a fragment.
-        const tokens = ((visible + streamedReasoning) * withinInterval) / chars
-        if (tokens <= 0) {
+        const tokens = streamedTokens(request, outcome)
+        if (tokens === undefined || tokens <= 0) {
           return
         }
 

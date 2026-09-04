@@ -1,4 +1,4 @@
-import type { ClaudeUsage, UsageWindow } from './provider/anthropic'
+import type { ClaudeUsage, UnifiedLimit, UsageWindow } from './provider/anthropic'
 import type { CodexUsage, RateLimitDetails } from './provider/openai'
 import { codexResetsAt, formatDuration, parseResetsAt } from './reset'
 
@@ -15,6 +15,30 @@ export interface UsageRow {
 export type UsageSection =
   | { readonly title: string; readonly rows: readonly UsageRow[] }
   | { readonly title: string; readonly error: string }
+
+function formatRow(row: UsageRow, now: Date, labelWidth: number): string {
+  const parts = [`  ${row.label.padEnd(labelWidth)}`]
+
+  if (typeof row.percent === 'number') {
+    const clamped = Math.min(Math.max(row.percent, 0), 100)
+    const filled = Math.round((clamped / 100) * BAR_WIDTH)
+    parts.push(
+      `[${'█'.repeat(filled)}${'░'.repeat(BAR_WIDTH - filled)}]`,
+      `${Math.round(row.percent)}%`.padStart(4),
+    )
+  }
+
+  if (row.resetsAt) {
+    const delta = row.resetsAt.getTime() - now.getTime()
+    parts.push(delta > 0 ? `· resets in ${formatDuration(delta)}` : '· resets soon')
+  }
+
+  if (row.note) {
+    parts.push(parts.length > 1 ? `· ${row.note}` : row.note)
+  }
+
+  return parts.join(' ')
+}
 
 export function renderSections(
   sections: readonly UsageSection[],
@@ -33,32 +57,10 @@ export function renderSections(
     if (section.rows.length === 0) {
       return `${section.title}\n  (no usage data reported)`
     }
-    const lines = section.rows.map((row) => {
-      const parts = [`  ${row.label.padEnd(labelWidth)}`]
-
-      if (typeof row.percent === 'number') {
-        const clamped = Math.min(Math.max(row.percent, 0), 100)
-        const filled = Math.round((clamped / 100) * BAR_WIDTH)
-        parts.push(
-          `[${'█'.repeat(filled)}${'░'.repeat(BAR_WIDTH - filled)}]`,
-          `${Math.round(row.percent)}%`.padStart(4),
-        )
-      }
-
-      if (row.resetsAt) {
-        const delta = row.resetsAt.getTime() - now.getTime()
-        parts.push(
-          delta > 0 ? `· resets in ${formatDuration(delta)}` : '· resets soon',
-        )
-      }
-
-      if (row.note) {
-        parts.push(parts.length > 1 ? `· ${row.note}` : row.note)
-      }
-
-      return parts.join(' ')
-    })
-    return [section.title, ...lines].join('\n')
+    return [
+      section.title,
+      ...section.rows.map((row) => formatRow(row, now, labelWidth)),
+    ].join('\n')
   })
 }
 
@@ -80,6 +82,21 @@ function formatMinorAmount(
   return value.toFixed(decimalPlaces)
 }
 
+function unifiedLimitLabel(limit: UnifiedLimit): string {
+  switch (limit.kind) {
+    case 'session':
+      return 'Session (5h)'
+    case 'weekly_all':
+      return 'Week (all models)'
+    case 'weekly_scoped': {
+      const model = limit.scope?.model
+      return `Week (${model?.display_name ?? model?.id ?? 'scoped'})`
+    }
+    default:
+      return limit.kind
+  }
+}
+
 export function claudeSection(usage: ClaudeUsage): UsageSection {
   const rows: UsageRow[] = []
 
@@ -88,24 +105,8 @@ export function claudeSection(usage: ClaudeUsage): UsageSection {
     // `is_active` marks the currently binding limit, not visibility, so every
     // limit is listed.
     for (const limit of limits) {
-      let label: string
-      switch (limit.kind) {
-        case 'session':
-          label = 'Session (5h)'
-          break
-        case 'weekly_all':
-          label = 'Week (all models)'
-          break
-        case 'weekly_scoped': {
-          const model = limit.scope?.model
-          label = `Week (${model?.display_name ?? model?.id ?? 'scoped'})`
-          break
-        }
-        default:
-          label = limit.kind
-      }
       rows.push({
-        label,
+        label: unifiedLimitLabel(limit),
         percent: limit.percent,
         resetsAt: parseResetsAt(limit.resets_at),
       })
@@ -162,6 +163,19 @@ export function claudeSection(usage: ClaudeUsage): UsageSection {
   return { title: 'Claude', rows }
 }
 
+function codexWindowName(seconds: number | null | undefined): string {
+  if (typeof seconds !== 'number' || seconds <= 0) {
+    return 'Window'
+  }
+  if (seconds >= 604_800 * 0.9) {
+    return 'Week'
+  }
+  if (seconds >= 86_400) {
+    return `${Math.round(seconds / 86_400)}d`
+  }
+  return `${Math.round(seconds / 3600)}h`
+}
+
 function codexWindowRows(
   details: RateLimitDetails | null | undefined,
   now: Date,
@@ -172,17 +186,8 @@ function codexWindowRows(
     if (!window) {
       continue
     }
-    const seconds = window.limit_window_seconds
-    const name =
-      typeof seconds !== 'number' || seconds <= 0
-        ? 'Window'
-        : seconds >= 604_800 * 0.9
-          ? 'Week'
-          : seconds >= 86_400
-            ? `${Math.round(seconds / 86_400)}d`
-            : `${Math.round(seconds / 3600)}h`
     rows.push({
-      label: labelFor(name),
+      label: labelFor(codexWindowName(window.limit_window_seconds)),
       percent: window.used_percent,
       resetsAt: codexResetsAt(window, now),
     })

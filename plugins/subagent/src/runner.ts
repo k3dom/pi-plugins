@@ -116,6 +116,42 @@ interface RunState {
   errorMessage?: string | undefined
 }
 
+function foldMessage(
+  state: RunState,
+  message: (typeof AssistantMessageEnd)['Type']['message'],
+): RunState {
+  const { result } = state
+  let toolCalls = result.toolCalls
+  const texts: string[] = []
+  for (const part of message.content) {
+    if (part.type === 'text' && part.text !== undefined) {
+      texts.push(part.text)
+    } else if (part.type === 'toolCall') {
+      toolCalls += 1
+    }
+  }
+  const text = texts.join('\n\n').trim()
+  const usage = message.usage
+  return {
+    result: {
+      ...result,
+      output: text.length > 0 ? text : result.output,
+      toolCalls,
+      usage: {
+        turns: result.usage.turns + 1,
+        input: result.usage.input + (usage?.input ?? 0),
+        output: result.usage.output + (usage?.output ?? 0),
+        cacheRead: result.usage.cacheRead + (usage?.cacheRead ?? 0),
+        cacheWrite: result.usage.cacheWrite + (usage?.cacheWrite ?? 0),
+        cost: result.usage.cost + (usage?.cost?.total ?? 0),
+        contextTokens: usage?.totalTokens ?? result.usage.contextTokens,
+      },
+    },
+    stopReason: message.stopReason ?? state.stopReason,
+    errorMessage: message.errorMessage ?? state.errorMessage,
+  }
+}
+
 export function runSubagent(options: {
   prompt: string
   sessionDir: string
@@ -214,38 +250,7 @@ export function runSubagent(options: {
                   result: { ...previous.result, sessionId: event.id },
                 }
               }
-
-              const { result } = previous
-              const { message } = event
-              let toolCalls = result.toolCalls
-              const texts: string[] = []
-              for (const part of message.content) {
-                if (part.type === 'text' && part.text !== undefined) {
-                  texts.push(part.text)
-                } else if (part.type === 'toolCall') {
-                  toolCalls += 1
-                }
-              }
-              const text = texts.join('\n\n').trim()
-              const usage = message.usage
-              return {
-                result: {
-                  ...result,
-                  output: text.length > 0 ? text : result.output,
-                  toolCalls,
-                  usage: {
-                    turns: result.usage.turns + 1,
-                    input: result.usage.input + (usage?.input ?? 0),
-                    output: result.usage.output + (usage?.output ?? 0),
-                    cacheRead: result.usage.cacheRead + (usage?.cacheRead ?? 0),
-                    cacheWrite: result.usage.cacheWrite + (usage?.cacheWrite ?? 0),
-                    cost: result.usage.cost + (usage?.cost?.total ?? 0),
-                    contextTokens: usage?.totalTokens ?? result.usage.contextTokens,
-                  },
-                },
-                stopReason: message.stopReason ?? previous.stopReason,
-                errorMessage: message.errorMessage ?? previous.errorMessage,
-              }
+              return foldMessage(previous, event.message)
             }),
         ),
       )

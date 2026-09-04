@@ -27,26 +27,26 @@ export interface FileLock {
 export const make = Effect.fnUntraced(function* (lockPath: string) {
   const fs = yield* FileSystem.FileSystem
 
+  // A holder that stopped heartbeating (e.g. was killed) is broken.
+  const breakIfStale = Effect.fnUntraced(function* () {
+    const { mtime } = yield* fs.stat(lockPath)
+    const now = yield* DateTime.now
+    const stale = Option.exists(mtime, (time) =>
+      Duration.isGreaterThan(
+        DateTime.distance(DateTime.fromDateUnsafe(time), now),
+        Duration.seconds(30),
+      ),
+    )
+    if (stale) {
+      yield* fs.remove(lockPath, { recursive: true })
+    }
+  }, Effect.ignore)
+
   const acquire = Effect.acquireRelease(fs.makeDirectory(lockPath), () =>
     Effect.ignore(fs.remove(lockPath, { recursive: true })),
   ).pipe(
     Effect.tapError((error) =>
-      error.reason._tag !== 'AlreadyExists'
-        ? Effect.void
-        : Effect.gen(function* () {
-            // A holder that stopped heartbeating (e.g. was killed) is broken.
-            const { mtime } = yield* fs.stat(lockPath)
-            const now = yield* DateTime.now
-            const stale = Option.exists(mtime, (time) =>
-              Duration.isGreaterThan(
-                DateTime.distance(DateTime.fromDateUnsafe(time), now),
-                Duration.seconds(30),
-              ),
-            )
-            if (stale) {
-              yield* fs.remove(lockPath, { recursive: true })
-            }
-          }).pipe(Effect.ignore),
+      error.reason._tag === 'AlreadyExists' ? breakIfStale() : Effect.void,
     ),
     Effect.retry({
       while: (error) => error.reason._tag === 'AlreadyExists',

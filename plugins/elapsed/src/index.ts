@@ -1,5 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 
+// pi's own default working message, so the clock reads as an extension of it.
+const WORKING_LABEL = 'Working...'
 const TICK_MS = 1000
 
 function pad(value: number): string {
@@ -42,7 +44,7 @@ export default function elapsed(pi: ExtensionAPI) {
     const startedAt = performance.now()
     const show = () => {
       ctx.ui.setWorkingMessage(
-        `Working... ${formatElapsed(performance.now() - startedAt)}`,
+        `${WORKING_LABEL} ${formatElapsed(performance.now() - startedAt)}`,
       )
     }
 

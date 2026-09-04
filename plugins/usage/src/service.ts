@@ -72,6 +72,29 @@ type CredentialsFor<P extends UsageProvider> = Data.TaggedEnum.Value<
   P['_tag']
 >
 
+const accountIdFromToken = Effect.fnUntraced(function* (accessToken: string) {
+  const payload = yield* Effect.fromResult(
+    Encoding.decodeBase64UrlString(
+      pipe(
+        accessToken,
+        String.split('.'),
+        Array.get(1),
+        Option.getOrElse(() => ''),
+      ),
+    ),
+  )
+  const claims = yield* Schema.decodeEffect(
+    Schema.fromJsonString(
+      Schema.Struct({
+        'https://api.openai.com/auth': Schema.Struct({
+          chatgpt_account_id: Schema.String,
+        }),
+      }),
+    ),
+  )(payload)
+  return claims['https://api.openai.com/auth'].chatgpt_account_id
+})
+
 export class UsageService extends Context.Service<UsageService>()(
   '@pi-plugins/usage/UsageService',
   {
@@ -128,28 +151,9 @@ export class UsageService extends Context.Service<UsageService>()(
                 : undefined
             const accountId =
               storedAccountId ??
-              (yield* Effect.gen(function* () {
-                const payload = yield* Effect.fromResult(
-                  Encoding.decodeBase64UrlString(
-                    pipe(
-                      accessToken,
-                      String.split('.'),
-                      Array.get(1),
-                      Option.getOrElse(() => ''),
-                    ),
-                  ),
-                )
-                const claims = yield* Schema.decodeEffect(
-                  Schema.fromJsonString(
-                    Schema.Struct({
-                      'https://api.openai.com/auth': Schema.Struct({
-                        chatgpt_account_id: Schema.String,
-                      }),
-                    }),
-                  ),
-                )(payload)
-                return claims['https://api.openai.com/auth'].chatgpt_account_id
-              }).pipe(Effect.orElseSucceed(() => undefined)))
+              (yield* accountIdFromToken(accessToken).pipe(
+                Effect.orElseSucceed(() => undefined),
+              ))
             if (!accountId) {
               return yield* new UsageServiceError({
                 kind: 'AccountIdMissing',

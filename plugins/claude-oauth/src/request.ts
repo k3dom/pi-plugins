@@ -52,7 +52,9 @@ export function buildProviderHeaders(): Record<string, string> {
   }
 }
 
-// `userInfo()` can throw in locked-down sandboxes.
+// Claude Code sends `metadata.user_id` as a JSON identity envelope: `device_id`
+// is machine-stable, `session_id` is per process. `userInfo()` can throw in
+// locked-down sandboxes.
 let machineSeed: string
 try {
   machineSeed = `${hostname()}:${userInfo().username}:${homedir()}`

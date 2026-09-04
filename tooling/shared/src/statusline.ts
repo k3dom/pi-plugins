@@ -30,6 +30,10 @@ function side(segments: Registry, align: StatuslineSegment['align']): string {
   )
 }
 
+function textWidth(text: string): number {
+  return Array.fromIterable(text).length
+}
+
 export function setStatuslineSegment(
   ctx: ExtensionContext,
   key: string,
@@ -62,8 +66,7 @@ export function setStatuslineSegment(
       // Left indented one column like pi's widget rows, right flush like pi's footer.
       const margin = Math.min(width, 1)
       const inner = width - margin
-      const gap =
-        inner - Array.fromIterable(left).length - Array.fromIterable(right).length
+      const gap = inner - textWidth(left) - textWidth(right)
       const minGap = String.isNonEmpty(left) && String.isNonEmpty(right) ? 2 : 0
 
       const line =

@@ -71,27 +71,30 @@ export function claudeWidgetLimits(usage: ClaudeUsage): WidgetLimit[] {
   )
 }
 
+function codexWindowLabel(seconds: number | null | undefined): string {
+  if (typeof seconds !== 'number' || seconds <= 0) {
+    return '?'
+  }
+  if (seconds >= 604_800 * 0.9) {
+    return 'wk'
+  }
+  if (seconds >= 86_400) {
+    return `${Math.round(seconds / 86_400)}d`
+  }
+  return `${Math.round(seconds / 3600)}h`
+}
+
 export function codexWidgetLimits(usage: CodexUsage, now: Date): WidgetLimit[] {
   const details = usage.rate_limit
-  return [details?.primary_window, details?.secondary_window].flatMap((window) => {
-    if (!window) {
-      return []
-    }
-    const seconds = window.limit_window_seconds
-    const label =
-      typeof seconds !== 'number' || seconds <= 0
-        ? '?'
-        : seconds >= 604_800 * 0.9
-          ? 'wk'
-          : seconds >= 86_400
-            ? `${Math.round(seconds / 86_400)}d`
-            : `${Math.round(seconds / 3600)}h`
-    return [
-      {
-        label,
-        percent: window.used_percent,
-        resetsAt: codexResetsAt(window, now),
-      },
-    ]
-  })
+  return [details?.primary_window, details?.secondary_window].flatMap((window) =>
+    window
+      ? [
+          {
+            label: codexWindowLabel(window.limit_window_seconds),
+            percent: window.used_percent,
+            resetsAt: codexResetsAt(window, now),
+          },
+        ]
+      : [],
+  )
 }
