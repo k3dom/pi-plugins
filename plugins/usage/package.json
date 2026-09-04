@@ -1,17 +1,20 @@
 {
   "name": "@pi-plugins/usage",
   "version": "0.4.2",
-  "description": "Subscription usage/rate-limit command extension for pi-agent (Claude and OpenAI Codex plans).",
+  "description": "Subscription usage/rate-limit command extension for pi-agent.",
   "keywords": [
     "anthropic",
     "codex",
+    "glm",
     "openai",
     "pi",
     "pi-agent",
     "pi-extension",
     "pi-package",
     "rate-limit",
-    "usage"
+    "usage",
+    "zai",
+    "zhipu"
   ],
   "homepage": "https://github.com/k3dom/pi-plugins/tree/main/plugins/usage#readme",
   "bugs": {

@@ -28,10 +28,10 @@
  * Options:
  *   --message <text>   Prompt to send (default exercises fingerprint indices 4/7/20)
  *   --command <cmd>    Claude binary (default: claude)
- *   --port <n>         Proxy port (default: 8118; 0 = random)
+ *   --port <n>         Proxy port (default: 8118, or 0 for random)
  *   --timeout <ms>     Overall timeout (default: 120000)
  *   --skip <substr>    Skip requests whose model contains this (default: haiku)
- *   --manual           Do not spawn claude; print the env and wait for you to run it
+ *   --manual           Print the env instead of spawning claude, then wait for you to run it
  *   --write            Patch src/constants.ts in place with the captured values
  *   --json             Print the raw captured exchange as JSON
  *   --keep-cert        Leave the generated debug cert on disk (for debugging)
@@ -76,7 +76,7 @@ const BACKSLASH = 0x5c
 const OPEN_BRACKET = 0x5b
 const CLOSE_BRACKET = 0x5d
 
-// ── xxh64 (mirror of src/utils.ts; kept inline so the script has no imports) ──
+// ── xxh64 (mirror of src/utils.ts, kept inline so the script has no imports) ──
 
 const MASK = (1n << 64n) - 1n
 const P1 = 11400714785074694791n
@@ -281,7 +281,7 @@ const HELP = readFileSync(fileURLToPath(import.meta.url), 'utf8')
 function parseArgs(argv: readonly string[]): Options | 'help' {
   const opts: Options = {
     // >20 chars so the billing-fingerprint indices (4, 7, 20) hit real characters
-    // instead of all falling back to '0'; otherwise that check never exercises them.
+    // instead of all falling back to '0'. Otherwise that check never exercises them.
     message: 'Reply with exactly: ok',
     command: 'claude',
     port: 8118,
@@ -385,7 +385,7 @@ function generateDebugCert(): DebugCert {
   }
 }
 
-// ── minimal HTTP request parser (Content-Length only; no chunked requests) ────
+// ── minimal HTTP request parser (Content-Length only, no chunked requests) ────
 
 interface CapturedRequest {
   method: string
@@ -744,7 +744,7 @@ function extract(request: CapturedRequest): Extracted {
   try {
     body = JSON.parse(request.body) as AnthropicBody
   } catch {
-    // leave body empty; extraction just skips body-derived values
+    // leave body empty as extraction just skips body-derived values
   }
   const systemBlocks = body.system ?? []
   const billingText = systemBlocks.find((b) =>
@@ -1219,8 +1219,8 @@ async function run(opts: Options): Promise<void> {
 
     const source = readFileSync(CONSTANTS_FILE, 'utf8')
     const extracted = extract(capture.request)
-    // Claude fingerprints the raw prompt. When we spawn claude we know it exactly;
-    // in --manual mode recover it from the captured (context-wrapped) user message.
+    // Claude fingerprints the raw prompt. When we spawn claude we know it exactly.
+    // In --manual mode recover it from the captured (context-wrapped) user message.
     const rawUserMessage = opts.manual
       ? rawUserPrompt(extracted.firstUserMessage)
       : opts.message

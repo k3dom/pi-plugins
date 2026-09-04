@@ -37,7 +37,7 @@ Requests are sent with browser-like headers and transient failures are retried.
 ### Output
 
 Returns the page content as text. With `format: 'markdown'`, HTML pages are converted
-to Markdown; non-HTML responses are returned unchanged. With `format: 'html'`, the
+to Markdown and non-HTML responses are returned unchanged. With `format: 'html'`, the
 raw response body is returned.
 
 Long content is truncated from the head to fit the tool's output budget. When this

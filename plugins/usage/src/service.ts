@@ -24,6 +24,7 @@ import {
   ClaudeUsageApi,
 } from './provider/anthropic'
 import { CHATGPT_BASE_URL, CodexUsageApi } from './provider/openai'
+import { GlmUsageApi, ZAI_BASE_URL, type ZaiProvider } from './provider/zai'
 
 const REQUEST_TIMEOUT = '10 seconds'
 const LOGIN_HINT = 'run /login to (re-)authenticate'
@@ -58,12 +59,14 @@ const requestFailed = (cause: unknown) =>
 export type UsageProvider = Data.TaggedEnum<{
   Anthropic: {}
   OpenAI: {}
+  Zai: { readonly providerId: ZaiProvider }
 }>
 export const UsageProvider = Data.taggedEnum<UsageProvider>()
 
 export type UsageCredentials = Data.TaggedEnum<{
   Anthropic: { readonly accessToken: string }
   OpenAI: { readonly accessToken: string; readonly accountId: string }
+  Zai: { readonly apiKey: string }
 }>
 export const UsageCredentials = Data.taggedEnum<UsageCredentials>()
 
@@ -114,9 +117,11 @@ export class UsageService extends Context.Service<UsageService>()(
         const providerId = UsageProvider.$match(provider, {
           Anthropic: () => 'anthropic',
           OpenAI: () => 'openai-codex',
+          Zai: (zai) => zai.providerId,
         })
+        const oauth = provider._tag !== 'Zai'
 
-        if (readStoredCredential(providerId)?.type !== 'oauth') {
+        if (oauth && readStoredCredential(providerId)?.type !== 'oauth') {
           return yield* new UsageServiceError({
             kind: 'CredentialsMissing',
             message: `no subscription (OAuth) credentials found — ${LOGIN_HINT}`,
@@ -132,10 +137,17 @@ export class UsageService extends Context.Service<UsageService>()(
             }),
         })
         if (!accessToken) {
-          return yield* new UsageServiceError({
-            kind: 'TokenRefreshFailed',
-            message: `token refresh failed — ${LOGIN_HINT}`,
-          })
+          return yield* new UsageServiceError(
+            oauth
+              ? {
+                  kind: 'TokenRefreshFailed',
+                  message: `token refresh failed — ${LOGIN_HINT}`,
+                }
+              : {
+                  kind: 'CredentialsMissing',
+                  message: `no API key found for ${providerId} — ${LOGIN_HINT}`,
+                },
+          )
         }
 
         return (yield* UsageProvider.$match(provider, {
@@ -162,6 +174,7 @@ export class UsageService extends Context.Service<UsageService>()(
             }
             return UsageCredentials.OpenAI({ accessToken, accountId })
           }),
+          Zai: () => Effect.succeed(UsageCredentials.Zai({ apiKey: accessToken })),
         })) as CredentialsFor<P>
       })
 
@@ -201,7 +214,28 @@ export class UsageService extends Context.Service<UsageService>()(
           .pipe(Effect.timeout(REQUEST_TIMEOUT), Effect.mapError(requestFailed))
       })
 
-      return { claude, codex } as const
+      const glm = Effect.fn('UsageService.glm')(function* (providerId: ZaiProvider) {
+        const { apiKey } = yield* credentials(UsageProvider.Zai({ providerId }))
+        const client = yield* HttpApiClient.makeWith(GlmUsageApi, {
+          baseUrl: ZAI_BASE_URL[providerId],
+          httpClient: http.pipe(
+            HttpClient.mapRequest(HttpClientRequest.bearerToken(apiKey)),
+          ),
+        })
+        const envelope = yield* client
+          .usage()
+          .pipe(Effect.timeout(REQUEST_TIMEOUT), Effect.mapError(requestFailed))
+        // The API answers HTTP 200 for failures too, so filterStatusOk can't catch them.
+        if (!envelope.success) {
+          return yield* new UsageServiceError({
+            kind: 'RequestFailed',
+            message: envelope.msg || `GLM usage API error (code ${envelope.code})`,
+          })
+        }
+        return envelope.data
+      })
+
+      return { claude, codex, glm } as const
     }),
   },
 ) {

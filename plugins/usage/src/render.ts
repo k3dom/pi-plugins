@@ -1,9 +1,12 @@
+import { Array } from 'effect'
 import type { ClaudeUsage, UnifiedLimit, UsageWindow } from './provider/anthropic'
 import type { CodexUsage, RateLimitDetails } from './provider/openai'
+import { glmRateLimits, type GlmUsage, type QuotaLimit } from './provider/zai'
 import { codexResetsAt, formatDuration, parseResetsAt } from './reset'
 
 const MIN_LABEL_WIDTH = 22
 const BAR_WIDTH = 10
+const numberFormat = new Intl.NumberFormat('en-US')
 
 export interface UsageRow {
   readonly label: string
@@ -232,5 +235,37 @@ export function codexSection(usage: CodexUsage, now: Date): UsageSection {
   const title = usage.plan_type
     ? `OpenAI Codex (${usage.plan_type})`
     : 'OpenAI Codex'
+  return { title, rows }
+}
+
+function glmRow(label: string, limit: QuotaLimit): UsageRow {
+  const unit =
+    limit.type === 'CREDIT_LIMIT'
+      ? 'credits'
+      : limit.type === 'TIME_LIMIT'
+        ? 'calls'
+        : 'tokens'
+  return {
+    label,
+    percent: limit.percentage,
+    resetsAt: limit.nextResetTime,
+    note:
+      typeof limit.currentValue === 'number' &&
+      typeof limit.usage === 'number' &&
+      limit.usage > 0
+        ? `${numberFormat.format(limit.currentValue)} of ${numberFormat.format(limit.usage)} ${unit}`
+        : undefined,
+  }
+}
+
+export function glmSection(usage: GlmUsage): UsageSection {
+  const rows = Array.zipWith(['Session (5h)', 'Week'], glmRateLimits(usage), glmRow)
+
+  const mcp = usage.limits?.find((limit) => limit.type === 'TIME_LIMIT')
+  if (mcp) {
+    rows.push(glmRow('MCP tools (month)', mcp))
+  }
+
+  const title = usage.level ? `GLM Coding (${usage.level})` : 'GLM Coding'
   return { title, rows }
 }

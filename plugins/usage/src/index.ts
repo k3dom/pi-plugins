@@ -2,10 +2,12 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { loadExtensionConfig } from '@pi-plugins/shared/config'
 import { runHandler } from '@pi-plugins/shared/run'
 import { setStatuslineSegment } from '@pi-plugins/shared/statusline'
-import { Effect, Schema } from 'effect'
+import { Effect, Record, Schema } from 'effect'
+import { ZAI_BASE_URL, type ZaiProvider } from './provider/zai'
 import {
   claudeSection,
   codexSection,
+  glmSection,
   renderSections,
   type UsageSection,
 } from './render'
@@ -13,6 +15,7 @@ import { UsageService, type UsageServiceError } from './service'
 import {
   claudeWidgetLimits,
   codexWidgetLimits,
+  glmWidgetLimits,
   widgetText,
   type WidgetLimit,
 } from './widget'
@@ -24,7 +27,7 @@ const UsageConfig = Schema.Struct({
   showWidget: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 })
 
-type WidgetProvider = 'claude' | 'codex'
+type WidgetProvider = 'claude' | 'codex' | ZaiProvider
 
 function widgetProvider(
   model: ExtensionContext['model'],
@@ -34,6 +37,9 @@ function widgetProvider(
       return 'claude'
     case 'openai-codex':
       return 'codex'
+    case 'zai':
+    case 'zai-coding-cn':
+      return model.provider
     default:
       return undefined
   }
@@ -100,7 +106,9 @@ export default function usage(pi: ExtensionAPI): void {
       const service = yield* UsageService
       return provider === 'claude'
         ? claudeWidgetLimits(yield* service.claude())
-        : codexWidgetLimits(yield* service.codex(), new Date())
+        : provider === 'codex'
+          ? codexWidgetLimits(yield* service.codex(), new Date())
+          : glmWidgetLimits(yield* service.glm(provider))
     }).pipe(Effect.provide(UsageService.layer(ctx.modelRegistry)))
 
     let limits: WidgetLimit[] | undefined
@@ -133,10 +141,13 @@ export default function usage(pi: ExtensionAPI): void {
   })
 
   pi.registerCommand('usage', {
-    description:
-      'Show subscription usage/rate limits for Claude and OpenAI Codex plans',
+    description: 'Show subscription plan usage and rate limits',
     handler: async (_args, ctx) => {
       const now = new Date()
+      const glmProvider =
+        Record.keys(ZAI_BASE_URL).find(
+          (id) => ctx.modelRegistry.getProviderAuthStatus(id).configured,
+        ) ?? 'zai'
       const program = Effect.gen(function* () {
         const service = yield* UsageService
         const sections = yield* Effect.all(
@@ -166,6 +177,19 @@ export default function usage(pi: ExtensionAPI): void {
                   ),
                 ),
               (data) => codexSection(data, now),
+            ),
+            section(
+              'GLM Coding',
+              service
+                .glm(glmProvider)
+                .pipe(
+                  Effect.tap((data) =>
+                    Effect.sync(() =>
+                      recordLimits(glmProvider, glmWidgetLimits(data)),
+                    ),
+                  ),
+                ),
+              glmSection,
             ),
           ],
           { concurrency: 'unbounded' },

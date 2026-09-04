@@ -36,7 +36,7 @@ spinner, restarting at `0s` for every prompt and disappearing when the agent is 
 - The clock covers one full prompt — the whole agent run, including every turn and
   tool call — not a single LLM request. For per-request timings use
   [`speed`](../speed).
-- It ticks once per second and replaces pi's default `Working...` message; pi's own
+- It ticks once per second and replaces pi's default `Working...` message. Pi's own
   message is restored when the run ends.
 - Interactive (TUI) mode only. In RPC, print, and JSON modes there is no working
   indicator, so the extension stays idle.

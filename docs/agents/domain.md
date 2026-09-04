@@ -11,8 +11,8 @@ exploring the codebase.
   `plugins/<name>/docs/adr/` and `tooling/<name>/docs/adr/` for package-scoped
   decisions.
 
-If any of these files don't exist, **proceed silently**. Don't flag their absence;
-don't suggest creating them upfront. The `/domain-modeling` skill (reached via
+If any of these files don't exist, **proceed silently**. Don't flag their absence or
+suggest creating them upfront. The `/domain-modeling` skill (reached via
 `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when
 terms or decisions actually get resolved.
 
@@ -39,8 +39,8 @@ workspace package.
 ```
 
 Not every package has these files, and that's expected — `/domain-modeling` creates
-them lazily as terms and decisions actually get resolved. Read the ones that exist;
-proceed silently past the ones that don't.
+them lazily as terms and decisions actually get resolved. Read the ones that exist
+and proceed silently past the ones that don't.
 
 ## Use the glossary's vocabulary
 
