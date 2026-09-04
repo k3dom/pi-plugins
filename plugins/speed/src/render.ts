@@ -1,14 +1,5 @@
 import type { FirstToken, RecentSpeed } from './service'
 
-/**
- * Two significant figures. The standard error runs to a few percent, so past a
- * hundred tokens the last digit is below the noise and only reads as precision.
- */
-function formatTps(tps: number): string {
-  return `${tps < 100 ? Math.round(tps) : Math.round(tps / 10) * 10} tok/s`
-}
-
-/** "830ms", "1.24s", "27.3s", "94s" */
 function formatMs(ms: number): string {
   if (ms < 1000) {
     return `${Math.round(ms)}ms`
@@ -21,17 +12,17 @@ function formatMs(ms: number): string {
 }
 
 function recentTps(recent: RecentSpeed): string {
-  return `${recent.provisional ? '~' : ''}${formatTps(recent.tps)}`
+  // Two significant figures: the standard error is a few percent, so more digits
+  // would be noise.
+  const tps =
+    recent.tps < 100 ? Math.round(recent.tps) : Math.round(recent.tps / 10) * 10
+  return `${recent.provisional ? '~' : ''}${tps} tok/s`
 }
 
 export function recentText(recent: RecentSpeed): string {
   return `${recentTps(recent)} · TTFT ${formatMs(recent.ttftMs)}`
 }
 
-/**
- * Throughput stays on screen mid-stream because it describes the model, not the
- * in-flight request, and moves only once real token counts arrive.
- */
 export function streamingText(
   recent: RecentSpeed | undefined,
   firstToken: FirstToken,

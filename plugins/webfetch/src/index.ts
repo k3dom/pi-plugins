@@ -8,7 +8,6 @@ import { WebFetch, type WebFetchFormat } from './fetch'
 
 const DEFAULT_TIMEOUT_SECONDS = 30
 const MAX_TIMEOUT_SECONDS = 120
-/** Wrapped terminal rows, not source lines: fetched pages are prose, not code. */
 const PREVIEW_LINES = 5
 
 const webFetchSchema = Type.Object({

@@ -1,4 +1,4 @@
-import type { ClaudeUsage, UnifiedLimit, UsageWindow } from './provider/anthropic'
+import type { ClaudeUsage, UsageWindow } from './provider/anthropic'
 import type { CodexUsage, RateLimitDetails } from './provider/openai'
 import { codexResetsAt, formatDuration, parseResetsAt } from './reset'
 
@@ -7,66 +7,15 @@ const BAR_WIDTH = 10
 
 export interface UsageRow {
   readonly label: string
-  /** Percentage used, 0-100. */
   readonly percent?: number | null | undefined
   readonly resetsAt?: Date | null | undefined
-  /** Free-form suffix (used instead of / in addition to the bar). */
   readonly note?: string | undefined
 }
 
-/** One provider block of the report: usage rows, or an inline failure. */
 export type UsageSection =
   | { readonly title: string; readonly rows: readonly UsageRow[] }
   | { readonly title: string; readonly error: string }
 
-function bar(percent: number): string {
-  const clamped = Math.min(Math.max(percent, 0), 100)
-  const filled = Math.round((clamped / 100) * BAR_WIDTH)
-  return `[${'█'.repeat(filled)}${'░'.repeat(BAR_WIDTH - filled)}]`
-}
-
-function formatRow(row: UsageRow, now: Date, labelWidth: number): string {
-  const parts = [`  ${row.label.padEnd(labelWidth)}`]
-
-  if (typeof row.percent === 'number') {
-    parts.push(bar(row.percent), `${Math.round(row.percent)}%`.padStart(4))
-  }
-
-  if (row.resetsAt) {
-    const delta = row.resetsAt.getTime() - now.getTime()
-    parts.push(delta > 0 ? `· resets in ${formatDuration(delta)}` : '· resets soon')
-  }
-
-  if (row.note) {
-    // Separate the note from a preceding bar/percent or reset, but keep
-    // note-only rows (e.g. "disabled — …") unprefixed.
-    parts.push(parts.length > 1 ? `· ${row.note}` : row.note)
-  }
-
-  return parts.join(' ')
-}
-
-function renderSection(
-  section: UsageSection,
-  now: Date,
-  labelWidth: number,
-): string[] {
-  if ('error' in section) {
-    return [section.title, `  ${section.error}`]
-  }
-  if (section.rows.length === 0) {
-    return [section.title, '  (no usage data reported)']
-  }
-  return [
-    section.title,
-    ...section.rows.map((row) => formatRow(row, now, labelWidth)),
-  ]
-}
-
-/**
- * Renders each section to its own string, using a shared label width so bars
- * and percentages line up across providers, not just within one section.
- */
 export function renderSections(
   sections: readonly UsageSection[],
   now: Date,
@@ -77,49 +26,40 @@ export function renderSections(
       'rows' in section ? section.rows.map((row) => row.label.length) : [],
     ),
   )
-  return sections.map((section) =>
-    renderSection(section, now, labelWidth).join('\n'),
-  )
-}
-
-// ─── Claude ──────────────────────────────────────────────────────────────────
-
-function windowRow(
-  label: string,
-  window: UsageWindow | null | undefined,
-): UsageRow | null {
-  if (!window || typeof window.utilization !== 'number') {
-    return null
-  }
-  return {
-    label,
-    percent: window.utilization,
-    resetsAt: parseResetsAt(window.resets_at),
-  }
-}
-
-function unifiedLimitLabel(limit: UnifiedLimit): string {
-  switch (limit.kind) {
-    case 'session':
-      return 'Session (5h)'
-    case 'weekly_all':
-      return 'Week (all models)'
-    case 'weekly_scoped': {
-      const model = limit.scope?.model
-      return `Week (${model?.display_name ?? model?.id ?? 'scoped'})`
+  return sections.map((section) => {
+    if ('error' in section) {
+      return `${section.title}\n  ${section.error}`
     }
-    default:
-      return limit.kind
-  }
-}
+    if (section.rows.length === 0) {
+      return `${section.title}\n  (no usage data reported)`
+    }
+    const lines = section.rows.map((row) => {
+      const parts = [`  ${row.label.padEnd(labelWidth)}`]
 
-/** "out_of_credit" -> "Out Of Credit" */
-function formatIdentifier(value: string): string {
-  return value
-    .split('_')
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ')
+      if (typeof row.percent === 'number') {
+        const clamped = Math.min(Math.max(row.percent, 0), 100)
+        const filled = Math.round((clamped / 100) * BAR_WIDTH)
+        parts.push(
+          `[${'█'.repeat(filled)}${'░'.repeat(BAR_WIDTH - filled)}]`,
+          `${Math.round(row.percent)}%`.padStart(4),
+        )
+      }
+
+      if (row.resetsAt) {
+        const delta = row.resetsAt.getTime() - now.getTime()
+        parts.push(
+          delta > 0 ? `· resets in ${formatDuration(delta)}` : '· resets soon',
+        )
+      }
+
+      if (row.note) {
+        parts.push(parts.length > 1 ? `· ${row.note}` : row.note)
+      }
+
+      return parts.join(' ')
+    })
+    return [section.title, ...lines].join('\n')
+  })
 }
 
 function formatMinorAmount(
@@ -134,7 +74,7 @@ function formatMinorAmount(
         value,
       )
     } catch {
-      // Unknown currency code — fall through to the plain rendering.
+      // Unknown currency code.
     }
   }
   return value.toFixed(decimalPlaces)
@@ -145,11 +85,27 @@ export function claudeSection(usage: ClaudeUsage): UsageSection {
 
   const limits = usage.limits ?? []
   if (limits.length > 0) {
-    // The unified `limits` array supersedes the flat windows when present.
-    // Note: `is_active` marks the currently binding limit, not visibility.
+    // `is_active` marks the currently binding limit, not visibility, so every
+    // limit is listed.
     for (const limit of limits) {
+      let label: string
+      switch (limit.kind) {
+        case 'session':
+          label = 'Session (5h)'
+          break
+        case 'weekly_all':
+          label = 'Week (all models)'
+          break
+        case 'weekly_scoped': {
+          const model = limit.scope?.model
+          label = `Week (${model?.display_name ?? model?.id ?? 'scoped'})`
+          break
+        }
+        default:
+          label = limit.kind
+      }
       rows.push({
-        label: unifiedLimitLabel(limit),
+        label,
         percent: limit.percent,
         resetsAt: parseResetsAt(limit.resets_at),
       })
@@ -162,9 +118,12 @@ export function claudeSection(usage: ClaudeUsage): UsageSection {
       ['Week (Sonnet)', usage.seven_day_sonnet],
     ]
     for (const [label, window] of flatWindows) {
-      const row = windowRow(label, window)
-      if (row) {
-        rows.push(row)
+      if (window && typeof window.utilization === 'number') {
+        rows.push({
+          label,
+          percent: window.utilization,
+          resetsAt: parseResetsAt(window.resets_at),
+        })
       }
     }
   }
@@ -188,31 +147,19 @@ export function claudeSection(usage: ClaudeUsage): UsageSection {
       })
     }
     if (extra.is_enabled === false) {
+      const reason = extra.disabled_reason
+        ?.split('_')
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ')
       rows.push({
         label: 'Extra usage',
-        note: extra.disabled_reason
-          ? `disabled — ${formatIdentifier(extra.disabled_reason)}`
-          : 'disabled',
+        note: reason ? `disabled — ${reason}` : 'disabled',
       })
     }
   }
 
   return { title: 'Claude', rows }
-}
-
-// ─── OpenAI Codex ────────────────────────────────────────────────────────────
-
-function codexWindowName(seconds: number | null | undefined): string {
-  if (typeof seconds !== 'number' || seconds <= 0) {
-    return 'Window'
-  }
-  if (seconds >= 604_800 * 0.9) {
-    return 'Week'
-  }
-  if (seconds >= 86_400) {
-    return `${Math.round(seconds / 86_400)}d`
-  }
-  return `${Math.round(seconds / 3600)}h`
 }
 
 function codexWindowRows(
@@ -225,8 +172,17 @@ function codexWindowRows(
     if (!window) {
       continue
     }
+    const seconds = window.limit_window_seconds
+    const name =
+      typeof seconds !== 'number' || seconds <= 0
+        ? 'Window'
+        : seconds >= 604_800 * 0.9
+          ? 'Week'
+          : seconds >= 86_400
+            ? `${Math.round(seconds / 86_400)}d`
+            : `${Math.round(seconds / 3600)}h`
     rows.push({
-      label: labelFor(codexWindowName(window.limit_window_seconds)),
+      label: labelFor(name),
       percent: window.used_percent,
       resetsAt: codexResetsAt(window, now),
     })

@@ -26,12 +26,6 @@ export class SnapshotterError extends Schema.TaggedErrorClass<SnapshotterError>(
   },
 ) {}
 
-/**
- * Snapshots the git worktree containing `cwd` into a shadow repository (a
- * separate `GIT_DIR` outside the project).
- *
- * `make` fails with a `NotAWorktree` error outside git worktrees.
- */
 export class Snapshotter extends Context.Service<Snapshotter>()(
   '@pi-plugins/checkpoint/Snapshotter',
   {
@@ -41,11 +35,6 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
       const crypto = yield* Crypto.Crypto
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
 
-      /**
-       * Runs `git args` in `dir` and returns its stdout, failing with a
-       * `GitError` on non-zero exit. Invocations are killed after a timeout
-       * so a hung git process cannot stall the agent's hooks indefinitely.
-       */
       const git = Effect.fnUntraced(
         function* (args: readonly string[], dir: string) {
           const handle = yield* spawner.spawn(
@@ -86,10 +75,6 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
           ),
       )
 
-      /**
-       * Wraps `args` with the arguments that point git at the shadow
-       * repository and additional safety configuration.
-       */
       const shadowGit = (args: readonly string[]): readonly string[] => [
         '-c',
         'core.autocrlf=false',
@@ -104,7 +89,6 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
         ...args,
       ]
 
-      // Resolve the canonical repository root by which the shadow `GIT_DIR` is keyed.
       const worktree = yield* git(['rev-parse', '--show-toplevel'], cwd).pipe(
         Effect.map(String.trim),
         Effect.catchTag('SnapshotterError', (error) =>
@@ -144,17 +128,11 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
         }),
       )
 
-      /**
-       * Lists the paths currently tracked by the shadow index.
-       */
       const listIndexFiles = Effect.fnUntraced(function* () {
         const out = yield* git(shadowGit(['ls-files', '-z']), worktree)
         return pipe(out, String.split('\0'), Array.filter(String.isNonEmpty))
       })
 
-      /**
-       * Creates a snapshot of the current worktree state.
-       */
       const track = Effect.fn('Snapshotter.track')(function* () {
         yield* git(shadowGit(['add', '--all']), worktree)
         return yield* git(shadowGit(['write-tree']), worktree).pipe(
@@ -162,11 +140,7 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
         )
       }, lock.withLock)
 
-      /**
-       * Applies a snapshot to the worktree: checks out its files and deletes
-       * files tracked in the shadow index but absent from the snapshot.
-       * Assumes the shadow index reflects the current worktree state.
-       */
+      // Assumes the shadow index reflects the current worktree state.
       const applyTree = Effect.fnUntraced(function* (tree: string) {
         const before = yield* listIndexFiles()
         yield* git(shadowGit(['read-tree', tree]), worktree)
@@ -180,15 +154,7 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
         )
       })
 
-      /**
-       * Restores the worktree to the state of a snapshot, deleting files that
-       * were present in the worktree but not in the snapshot.
-       *
-       * A failed restore is rolled back to the pre-restore state so that a
-       * partial checkout never leaves the worktree in a mixed state.
-       */
       const restore = Effect.fn('Snapshotter.restore')(function* (tree: string) {
-        // Snapshot the current state as the rollback point.
         yield* git(shadowGit(['add', '--all']), worktree)
         const current = yield* git(shadowGit(['write-tree']), worktree).pipe(
           Effect.map(String.trim),
@@ -210,10 +176,6 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
         )
       }, lock.withLock)
 
-      /**
-       * Prunes all stored checkpoint objects and records the current worktree
-       * as a fresh baseline so checkpointing can continue immediately.
-       */
       const cleanup = Effect.fn('Snapshotter.cleanup')(function* () {
         const index = path.join(gitdir, 'index')
         if (yield* fs.exists(index)) {

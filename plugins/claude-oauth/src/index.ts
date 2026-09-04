@@ -4,32 +4,20 @@ import { buildProviderHeaders, rewriteForClaudeCode } from './request'
 
 let fetchWrapped = false
 
-/**
- * Install the Claude request transport wrapper on the global fetch. The
- * Anthropic SDK resolves `fetch` at client construction, so pi's fresh client
- * picks it up for every request.
- */
-function installCchFetchWrapper(): void {
-  if (fetchWrapped) {
-    return
-  }
-  const target = globalThis as { fetch?: typeof fetch }
-  if (typeof target.fetch !== 'function') {
-    return
-  }
-  target.fetch = wrapFetchForCch(
-    target.fetch.bind(globalThis) as typeof fetch,
-    buildProviderHeaders(),
-  )
-  fetchWrapped = true
-}
-
 export default function claudeOauth(pi: ExtensionAPI): void {
-  installCchFetchWrapper()
+  // The Anthropic SDK resolves `fetch` at client construction, so pi's fresh
+  // client picks the wrapper up for every request.
+  const target = globalThis as { fetch?: typeof fetch }
+  if (!fetchWrapped && typeof target.fetch === 'function') {
+    target.fetch = wrapFetchForCch(
+      target.fetch.bind(globalThis) as typeof fetch,
+      buildProviderHeaders(),
+    )
+    fetchWrapped = true
+  }
 
-  // Returning the payload replaces it; returning `undefined` leaves it unchanged.
-  // `short` is also set by @pi-plugins/subagent to prevent extended retention
-  // from leaking into the fresh child process through this globally loaded plugin.
+  // @pi-plugins/subagent sets `short` on its children so extended retention does
+  // not leak into them through this globally loaded plugin.
   pi.on('before_provider_request', (event) =>
     rewriteForClaudeCode(
       event.payload,

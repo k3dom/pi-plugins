@@ -4,13 +4,9 @@ import { Data, Effect, Fiber, Filter, Schema, Stream } from 'effect'
 import type { PlatformError } from 'effect/PlatformError'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 
-/** Cap on buffered stderr (in characters) so a pathological child can't exhaust memory. */
 const STDERR_CAP = 50 * 1024
-
-/** Grace period between SIGTERM and SIGKILL when terminating the child. */
 const FORCE_KILL_AFTER = '5 seconds'
 
-/** Aggregated token/cost statistics across all turns of a subagent run. */
 export interface SubagentUsage {
   turns: number
   input: number
@@ -21,7 +17,6 @@ export interface SubagentUsage {
   contextTokens: number
 }
 
-/** What a run produced; errors carry the partial result of the work done so far. */
 export interface SubagentResult {
   output: string
   toolCalls: number
@@ -44,13 +39,8 @@ export const emptyResult: SubagentResult = {
   },
 }
 
-/**
- * The subagent stopped without completing its task: the child reported an
- * `error` or `aborted` stop reason on its final assistant message.
- */
 export class SubagentStopError extends Data.TaggedError('SubagentStopError')<{
   readonly reason: 'error' | 'aborted'
-  /** Error detail reported by the child, if any. */
   readonly errorMessage?: string | undefined
   readonly stderr: string
   readonly result: SubagentResult
@@ -62,7 +52,6 @@ export class SubagentStopError extends Data.TaggedError('SubagentStopError')<{
     `run stopped (${this.reason})`
 }
 
-/** The pi child process exited with a nonzero exit code. */
 export class SubagentExitError extends Data.TaggedError('SubagentExitError')<{
   readonly exitCode: number
   readonly stderr: string
@@ -74,11 +63,6 @@ export class SubagentExitError extends Data.TaggedError('SubagentExitError')<{
     `pi exited with code ${this.exitCode}`
 }
 
-/**
- * The child exited cleanly but emitted no assistant messages, meaning it
- * produced no usable output (wrong invocation, polluted stdout, JSON format
- * drift, ...).
- */
 export class SubagentNoOutputError extends Data.TaggedError(
   'SubagentNoOutputError',
 )<{
@@ -90,7 +74,6 @@ export class SubagentNoOutputError extends Data.TaggedError(
     (this.stderr.trim() ? `\nstderr: ${this.stderr.trim()}` : '')
 }
 
-/** The header pi prints as the first line of a `--mode json` stream. */
 const SessionHeader = Schema.Struct({
   type: Schema.Literal('session'),
   id: Schema.String,
@@ -123,90 +106,16 @@ const AssistantMessageEnd = Schema.Struct({
   }),
 })
 
-/**
- * The `--mode json` event lines we care about (see pi docs/json.md): the
- * session header and completed assistant messages.
- */
 const SubagentEvent = Schema.fromJsonString(
   Schema.Union([SessionHeader, AssistantMessageEnd]),
 )
 
-type AssistantMessage = (typeof AssistantMessageEnd)['Type']['message']
-
-/** Fold state: the public result plus the child's last reported stop info. */
 interface RunState {
   result: SubagentResult
   stopReason?: string | undefined
   errorMessage?: string | undefined
 }
 
-const initialState: RunState = { result: emptyResult }
-
-/** Folds one completed assistant message into the run state. */
-function foldMessage(state: RunState, message: AssistantMessage): RunState {
-  const { result } = state
-  let toolCalls = result.toolCalls
-  const texts: string[] = []
-  for (const part of message.content) {
-    if (part.type === 'text' && part.text !== undefined) {
-      texts.push(part.text)
-    } else if (part.type === 'toolCall') {
-      toolCalls += 1
-    }
-  }
-  const text = texts.join('\n\n').trim()
-  const output = text.length > 0 ? text : result.output
-
-  const usage = message.usage
-  return {
-    result: {
-      ...result,
-      output,
-      toolCalls,
-      usage: {
-        turns: result.usage.turns + 1,
-        input: result.usage.input + (usage?.input ?? 0),
-        output: result.usage.output + (usage?.output ?? 0),
-        cacheRead: result.usage.cacheRead + (usage?.cacheRead ?? 0),
-        cacheWrite: result.usage.cacheWrite + (usage?.cacheWrite ?? 0),
-        cost: result.usage.cost + (usage?.cost?.total ?? 0),
-        contextTokens: usage?.totalTokens ?? result.usage.contextTokens,
-      },
-    },
-    stopReason: message.stopReason ?? state.stopReason,
-    errorMessage: message.errorMessage ?? state.errorMessage,
-  }
-}
-
-/**
- * Resolves how to re-invoke the running pi harness: the current entry script
- * via the current runtime, the executable itself (compiled binaries), or
- * `pi` on PATH.
- */
-function resolvePiInvocation(args: ReadonlyArray<string>): {
-  command: string
-  args: ReadonlyArray<string>
-} {
-  const currentScript = process.argv[1]
-  const isBunVirtualScript = currentScript?.startsWith('/$bunfs/root/')
-  if (currentScript && !isBunVirtualScript && fs.existsSync(currentScript)) {
-    return { command: process.execPath, args: [currentScript, ...args] }
-  }
-
-  const execName = path.basename(process.execPath).toLowerCase()
-  const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName)
-  if (!isGenericRuntime) {
-    return { command: process.execPath, args }
-  }
-
-  return { command: 'pi', args }
-}
-
-/**
- * Runs one headless pi instance for the given prompt and folds its JSONL
- * event stream into a `SubagentResult`. `onSession` fires once, when the child
- * reports the id of the session it persists to.
- */
 export function runSubagent(options: {
   prompt: string
   sessionDir: string
@@ -222,8 +131,7 @@ export function runSubagent(options: {
 > {
   return Effect.scoped(
     Effect.gen(function* () {
-      // `--exclude-tools subagent` prevents children from recursively
-      // spawning their own subagents.
+      // `--exclude-tools subagent` keeps children from spawning their own.
       const args = [
         '--mode',
         'json',
@@ -238,8 +146,6 @@ export function runSubagent(options: {
       if (name) {
         args.push('--name', name)
       }
-      // Inherit the parent's active tool set so a restricted parent
-      // (e.g. `--tools read`) cannot be escaped through the child.
       if (options.tools !== undefined) {
         if (options.tools.length > 0) {
           args.push('--tools', options.tools.join(','))
@@ -250,21 +156,29 @@ export function runSubagent(options: {
       if (options.model !== undefined) {
         args.push('--model', options.model)
       }
-      const invocation = resolvePiInvocation(args)
+
+      // Re-invoke the running harness: the entry script via the current runtime,
+      // the executable itself for compiled binaries, or `pi` on PATH.
+      const currentScript = process.argv[1]
+      const isBunVirtualScript = currentScript?.startsWith('/$bunfs/root/')
+      const execName = path.basename(process.execPath).toLowerCase()
+      const invocation =
+        currentScript && !isBunVirtualScript && fs.existsSync(currentScript)
+          ? { command: process.execPath, args: [currentScript, ...args] }
+          : /^(node|bun)(\.exe)?$/.test(execName)
+            ? { command: 'pi', args }
+            : { command: process.execPath, args }
+
       const startedAt = Date.now()
-      const handle = yield* ChildProcess.make(
-        invocation.command,
-        [...invocation.args],
-        {
-          cwd: options.cwd,
-          // Override a process-wide long retention setting. The explicit short
-          // value also tells @pi-plugins/claude-oauth not to extend child TTLs.
-          env: { PI_CACHE_RETENTION: 'short' },
-          extendEnv: true,
-          stdin: Stream.make(new TextEncoder().encode(options.prompt)),
-          forceKillAfter: FORCE_KILL_AFTER,
-        },
-      )
+      const handle = yield* ChildProcess.make(invocation.command, invocation.args, {
+        cwd: options.cwd,
+        // Overrides a process-wide long retention setting; the explicit value
+        // also tells @pi-plugins/claude-oauth not to extend child TTLs.
+        env: { PI_CACHE_RETENTION: 'short' },
+        extendEnv: true,
+        stdin: Stream.make(new TextEncoder().encode(options.prompt)),
+        forceKillAfter: FORCE_KILL_AFTER,
+      })
 
       const stderrFiber = yield* Effect.forkScoped(
         handle.stderr.pipe(
@@ -286,7 +200,7 @@ export function runSubagent(options: {
           Filter.fromPredicateOption(Schema.decodeUnknownOption(SubagentEvent)),
         ),
         Stream.runFoldEffect(
-          () => initialState,
+          (): RunState => ({ result: emptyResult }),
           (previous, event) =>
             Effect.sync(() => {
               if (event.type === 'session') {
@@ -300,7 +214,38 @@ export function runSubagent(options: {
                   result: { ...previous.result, sessionId: event.id },
                 }
               }
-              return foldMessage(previous, event.message)
+
+              const { result } = previous
+              const { message } = event
+              let toolCalls = result.toolCalls
+              const texts: string[] = []
+              for (const part of message.content) {
+                if (part.type === 'text' && part.text !== undefined) {
+                  texts.push(part.text)
+                } else if (part.type === 'toolCall') {
+                  toolCalls += 1
+                }
+              }
+              const text = texts.join('\n\n').trim()
+              const usage = message.usage
+              return {
+                result: {
+                  ...result,
+                  output: text.length > 0 ? text : result.output,
+                  toolCalls,
+                  usage: {
+                    turns: result.usage.turns + 1,
+                    input: result.usage.input + (usage?.input ?? 0),
+                    output: result.usage.output + (usage?.output ?? 0),
+                    cacheRead: result.usage.cacheRead + (usage?.cacheRead ?? 0),
+                    cacheWrite: result.usage.cacheWrite + (usage?.cacheWrite ?? 0),
+                    cost: result.usage.cost + (usage?.cost?.total ?? 0),
+                    contextTokens: usage?.totalTokens ?? result.usage.contextTokens,
+                  },
+                },
+                stopReason: message.stopReason ?? previous.stopReason,
+                errorMessage: message.errorMessage ?? previous.errorMessage,
+              }
             }),
         ),
       )

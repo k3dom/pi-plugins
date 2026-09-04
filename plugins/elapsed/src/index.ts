@@ -1,14 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 
-/** pi's own default working message, so the clock reads as an extension of it. */
-const WORKING_LABEL = 'Working...'
 const TICK_MS = 1000
 
 function pad(value: number): string {
   return value.toString().padStart(2, '0')
 }
 
-/** `4s`, `1m 04s`, `2h 07m 30s` — padded so the row keeps its width while counting. */
 export function formatElapsed(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000)
   const seconds = totalSeconds % 60
@@ -37,7 +34,6 @@ export default function elapsed(pi: ExtensionAPI) {
   }
 
   pi.on('agent_start', (_event, ctx) => {
-    // Only the interactive loader renders a working message; elsewhere it is a no-op.
     if (ctx.mode !== 'tui') {
       return
     }
@@ -46,11 +42,10 @@ export default function elapsed(pi: ExtensionAPI) {
     const startedAt = performance.now()
     const show = () => {
       ctx.ui.setWorkingMessage(
-        `${WORKING_LABEL} ${formatElapsed(performance.now() - startedAt)}`,
+        `Working... ${formatElapsed(performance.now() - startedAt)}`,
       )
     }
 
-    // Each write repaints the loader, so the tick is what animates the clock.
     show()
     ticker = setInterval(show, TICK_MS)
     ticker.unref()

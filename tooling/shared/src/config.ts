@@ -4,11 +4,6 @@ import * as NodeServices from '@effect/platform-node/NodeServices'
 import { Effect, FileSystem, Path, PlatformError, Schema } from 'effect'
 import { runHandler } from './run'
 
-/**
- * A missing config file yields `defaults` silently. An unreadable or invalid
- * one warns and yields `defaults`, so a typo downgrades the extension rather
- * than breaking it.
- */
 export const loadExtensionConfig = Effect.fnUntraced(
   function* <S extends Schema.Codec<unknown>>(
     _ctx: ExtensionContext,

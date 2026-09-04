@@ -1,18 +1,13 @@
 import { Cause, Effect, Exit, Inspectable } from 'effect'
 
-// What pi's own tools throw for a cancelled run, so interrupted plugin runs
-// read like interrupted builtins.
-const ABORT_MESSAGE = 'Operation aborted'
-
 export interface RunOptions {
   readonly signal?: AbortSignal | undefined
 }
 
-// Defects keep their stack because they are bugs, and win over failures in a
-// mixed cause.
 function causeMessage(cause: Cause.Cause<unknown>): string {
   if (Cause.hasInterruptsOnly(cause)) {
-    return ABORT_MESSAGE
+    // What pi's own tools throw for a cancelled run.
+    return 'Operation aborted'
   }
   if (Cause.hasDies(cause)) {
     return Cause.pretty(cause)
@@ -28,10 +23,7 @@ function causeMessage(cause: Cause.Cause<unknown>): string {
     .join('\n')
 }
 
-/**
- * Failure rejects with an `Error` whose message is what the model reads back
- * as the tool result, so it is written for the model rather than for a log.
- */
+/** The rejection message is what the model reads back as the tool result. */
 export async function runTool<A, E>(
   effect: Effect.Effect<A, E>,
   options?: RunOptions,
@@ -47,12 +39,6 @@ export interface RunHandlerOptions<B> {
   readonly onError?: (message: string) => B
 }
 
-/**
- * For boundaries where pi reports rejections but expected failures should
- * degrade gracefully (event hooks, commands, background work). Expected
- * failures and interrupts never reject. Without `onError` they vanish, while
- * defects rethrow so pi's handler boundary reports the bug.
- */
 export async function runHandler<A, E, B = undefined>(
   effect: Effect.Effect<A, E>,
   options?: RunHandlerOptions<B>,

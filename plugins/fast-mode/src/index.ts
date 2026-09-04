@@ -15,13 +15,11 @@ import {
 
 const EXTENSION_ID = 'fast-mode'
 const COMMAND_ARGS = ['on', 'off', 'status'] as const
-/** Status-line segment shown above the editor while fast mode is active. */
 const SEGMENT_KEY = EXTENSION_ID
 const SEGMENT_LABEL = '[fast mode]'
 
 const FastModeConfig = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  /** `provider/model-id` keys that fast mode applies to. */
   models: Schema.Array(Schema.String).pipe(
     Schema.withDecodingDefault(
       Effect.succeed([
@@ -38,7 +36,6 @@ const FastModeConfig = Schema.Struct({
       ]),
     ),
   ),
-  /** Show a `fast mode` indicator above the editor while active. */
   showStatus: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 })
 type FastModeConfig = typeof FastModeConfig.Type
@@ -46,20 +43,11 @@ type FastModeConfig = typeof FastModeConfig.Type
 type ActiveModel = NonNullable<ExtensionContext['model']>
 type FastModeApi = 'openai-responses' | 'openai-codex-responses'
 
-function modelKey(model: ActiveModel): string {
-  return `${model.provider}/${model.id}`
-}
-
-/**
- * Rewrites a provider request payload to ask for fast inference, returning the
- * replacement payload — or `undefined` to leave the request untouched.
- */
 type Applicator = (
   payload: Record<string, unknown>,
   model: ActiveModel,
 ) => Record<string, unknown> | undefined
 
-/** Whether fast mode can apply to the active model. */
 type Eligibility = Data.TaggedEnum<{
   Eligible: { readonly apply: Applicator }
   Ineligible: { readonly message: string }
@@ -74,7 +62,6 @@ const FAST_APPLICATORS: Record<string, Applicator> = {
 function applyOpenAIPriorityTier(
   payload: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  // If the request already has a `service_tier`, leave it untouched.
   return Record.has(payload, 'service_tier')
     ? undefined
     : { ...payload, service_tier: 'priority' }
@@ -89,7 +76,7 @@ export default function fastMode(pi: ExtensionAPI) {
       return Eligibility.Ineligible({ message: 'no model is selected' })
     }
 
-    const key = modelKey(model)
+    const key = `${model.provider}/${model.id}`
     if (!config.models.includes(key)) {
       return Eligibility.Ineligible({
         message: `${key} is not in the configured models`,

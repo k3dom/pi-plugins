@@ -13,13 +13,6 @@ import {
 import type { Component } from '@earendil-works/pi-tui'
 import { Text, truncateToWidth } from '@earendil-works/pi-tui'
 
-function expandHint(hidden: number, theme: Theme): string {
-  return `${theme.fg('muted', `... (${hidden} more lines,`)} ${keyHint(
-    'app.tools.expand',
-    'to expand',
-  )})`
-}
-
 export interface TextPreviewOptions {
   text: string
   maxLines: number
@@ -28,10 +21,6 @@ export interface TextPreviewOptions {
   color?: ThemeColor
 }
 
-/**
- * Previews `text` capped at `maxLines` lines as the terminal wraps them at the
- * real render width, so a long paragraph does not preview as a wall of text.
- */
 export class TextPreview implements Component {
   private readonly body: Text
   private readonly maxLines: number
@@ -45,7 +34,7 @@ export class TextPreview implements Component {
     theme,
     color = 'dim',
   }: TextPreviewOptions) {
-    // Color per source line: wrapping re-emits the codes on each visual line.
+    // Styled per source line so wrapping re-emits the color on each visual line.
     const styled = text
       .split('\n')
       .map((line) => theme.fg(color, line))
@@ -66,14 +55,14 @@ export class TextPreview implements Component {
     if (this.expanded || hidden <= 0) {
       return lines
     }
-    return [
-      ...lines.slice(0, this.maxLines),
-      truncateToWidth(expandHint(hidden, this.theme), width, '...'),
-    ]
+    const hint = `${this.theme.fg('muted', `... (${hidden} more lines,`)} ${keyHint(
+      'app.tools.expand',
+      'to expand',
+    )})`
+    return [...lines.slice(0, this.maxLines), truncateToWidth(hint, width, '...')]
   }
 }
 
-/** Joins all text blocks of a tool result into one string, stripping carriage returns. */
 export function getTextOutput(
   result: Pick<AgentToolResult<unknown>, 'content'>,
 ): string {
@@ -92,11 +81,6 @@ export interface ExpandableTextOptions {
   truncation?: TruncationResult
 }
 
-/**
- * Renders a `header` above its `content`, previewed at `maxLines` unless
- * `expanded`. Trailing blank lines are dropped and a `truncation` notice footer
- * is added when provided.
- */
 export class ExpandableText implements Component {
   private readonly parts: Component[]
 
@@ -139,10 +123,6 @@ export class ExpandableText implements Component {
   }
 }
 
-/**
- * Builds a human-readable notice describing how a result was truncated (by line
- * or byte limit), or an empty string when it was not truncated.
- */
 export function formatTruncationNotice(truncation: TruncationResult): string {
   let result = ''
 

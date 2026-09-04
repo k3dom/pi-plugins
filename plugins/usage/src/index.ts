@@ -18,15 +18,12 @@ import {
 } from './widget'
 
 const EXTENSION_ID = 'usage'
-/** Minimum time between two background usage fetches for the widget. */
 const WIDGET_REFRESH_MS = 30_000
 
 const UsageConfig = Schema.Struct({
-  /** Show rate-limit bars above the editor for the active model's provider. */
   showWidget: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 })
 
-/** Subscription the widget reports on, derived from the active model. */
 type WidgetProvider = 'claude' | 'codex'
 
 function widgetProvider(
@@ -42,10 +39,6 @@ function widgetProvider(
   }
 }
 
-/**
- * Turns a provider fetch into a report section, mapping failures to an
- * inline message so one provider failing never hides the other.
- */
 function section<A>(
   title: string,
   fetch: Effect.Effect<A, UsageServiceError>,
@@ -59,7 +52,6 @@ function section<A>(
 
 export default function usage(pi: ExtensionAPI): void {
   let config = Schema.decodeUnknownSync(UsageConfig)({})
-  /** Latest widget limits per provider; kept across model switches. */
   const limitsCache = new Map<WidgetProvider, readonly WidgetLimit[]>()
   const fetchedAt = new Map<WidgetProvider, number>()
   const inFlight = new Set<WidgetProvider>()
@@ -72,7 +64,6 @@ export default function usage(pi: ExtensionAPI): void {
     fetchedAt.set(provider, Date.now())
   }
 
-  /** Redraws the segment from cache for the active model's provider. */
   function renderWidget(ctx: ExtensionContext): void {
     if (!ctx.hasUI) {
       return
@@ -89,7 +80,6 @@ export default function usage(pi: ExtensionAPI): void {
     )
   }
 
-  /** Redraws from cache, then refetches in the background when the data is stale. */
   async function refreshWidget(ctx: ExtensionContext): Promise<void> {
     renderWidget(ctx)
     if (!ctx.hasUI || !config.showWidget) {
@@ -113,14 +103,13 @@ export default function usage(pi: ExtensionAPI): void {
         : codexWidgetLimits(yield* service.codex(), new Date())
     }).pipe(Effect.provide(UsageService.layer(ctx.modelRegistry)))
 
-    // On failure keep whatever is shown. /usage reports errors explicitly.
     let limits: WidgetLimit[] | undefined
     try {
       limits = await runHandler(program)
     } finally {
       inFlight.delete(provider)
-      // Record the attempt time even on failure so a broken provider (e.g. not
-      // logged in) is not re-queried on every event.
+      // Stamped on failure too, so a broken provider (e.g. not logged in) is not
+      // re-queried on every event.
       fetchedAt.set(provider, Date.now())
     }
     if (limits !== undefined) {
@@ -181,9 +170,7 @@ export default function usage(pi: ExtensionAPI): void {
           ],
           { concurrency: 'unbounded' },
         )
-        // The UI only shows one message per severity, so group sections by
-        // outcome: all successes in one info message, all failures in one
-        // warning message.
+        // The UI shows one message per severity, so sections are grouped by outcome.
         const rendered = renderSections(sections, now)
         const grouped = { info: [] as string[], warning: [] as string[] }
         sections.forEach((usageSection, index) => {
@@ -208,7 +195,6 @@ export default function usage(pi: ExtensionAPI): void {
       for (const { report, severity } of messages) {
         ctx.ui.notify(report, severity)
       }
-      // The command fetched fresh data for both providers — reuse it.
       renderWidget(ctx)
     },
   })

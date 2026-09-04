@@ -28,18 +28,6 @@ const BROWSER_HEADERS = {
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
 }
 
-function shouldConvertToMarkdown(
-  contentType: string | undefined,
-  content: string,
-): boolean {
-  if (contentType !== undefined) {
-    const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase()
-    return mediaType === 'text/html' || mediaType === 'application/xhtml+xml'
-  }
-  const prefix = content.trimStart().slice(0, 1024)
-  return /^(?:<!doctype html|<html|<\?xml[\s\S]*<html)/i.test(prefix)
-}
-
 interface WebFetchService {
   fetch: (options: {
     url: string
@@ -78,17 +66,20 @@ export class WebFetch extends Context.Service<WebFetch, WebFetchService>()(
               Accept: ACCEPT_HEADERS[options.format],
             },
           })
-          const contentType = response.headers['content-type']
           const raw = yield* response.text
-
-          if (
-            options.format === 'markdown' &&
-            shouldConvertToMarkdown(contentType, raw)
-          ) {
-            return yield* converter.toMarkdown(raw, options.url)
+          if (options.format !== 'markdown') {
+            return raw
           }
 
-          return raw
+          const contentType = response.headers['content-type']
+          const mediaType = contentType?.split(';', 1)[0]?.trim().toLowerCase()
+          const isHtml =
+            contentType === undefined
+              ? /^(?:<!doctype html|<html|<\?xml[\s\S]*<html)/i.test(
+                  raw.trimStart().slice(0, 1024),
+                )
+              : mediaType === 'text/html' || mediaType === 'application/xhtml+xml'
+          return isHtml ? yield* converter.toMarkdown(raw, options.url) : raw
         },
         (_, options) =>
           _.pipe(

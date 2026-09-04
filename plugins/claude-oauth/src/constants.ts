@@ -4,23 +4,19 @@ export const CLAUDE_CODE_STAINLESS_PACKAGE_VERSION = '0.112.1'
 export const CLAUDE_CODE_STAINLESS_RUNTIME_VERSION = 'v26.3.0'
 export const CLAUDE_CODE_STAINLESS_TIMEOUT = 600
 
-// Claude Code fingerprints the billing header with
-// `SHA256(salt + msg[4] + msg[7] + msg[20] + version)[:3]`. The salt and indices
-// are pinned to the client and verified by `scripts/claude-trace.ts`.
+// Billing header fingerprint: `SHA256(salt + msg[4] + msg[7] + msg[20] + version)[:3]`.
+// Pinned to the client and verified by `scripts/claude-trace.ts`.
 export const CLAUDE_CODE_BILLING_FINGERPRINT_SALT = '59cf53e54c78'
 export const CLAUDE_CODE_BILLING_FINGERPRINT_INDICES = [4, 7, 20] as const
 
-// The billing header text prepended by the plugin. Its `cch` field starts as the
-// placeholder and the fetch wrapper patches in the real request-integrity value.
+// The fetch wrapper patches the real request-integrity value over the placeholder.
 export const CLAUDE_CODE_BILLING_HEADER_PREFIX = 'x-anthropic-billing-header:'
 export const CCH_PLACEHOLDER = 'cch=00000'
 
-// Seed for the XXH64 that produces the `cch` value; reverse-engineered from and
-// pinned to the client, verified by `scripts/claude-trace.ts`.
+// XXH64 seed for `cch`; pinned to the client and verified by `scripts/claude-trace.ts`.
 export const CCH_SEED = 0x4d659218e32a3268n
 
-// pi injects this exact block as system[0] on OAuth requests. Its presence is the
-// trigger to apply the rest of the Claude Code request details.
+// pi injects this exact block as system[0] on OAuth requests.
 export const PI_ANTHROPIC_OAUTH_SENTINEL =
   "You are Claude Code, Anthropic's official CLI for Claude."
 
@@ -43,6 +39,5 @@ export const CLAUDE_CODE_AGENT_BETAS = [
   'cache-diagnosis-2026-04-07',
 ] as const
 
-// Pi conditionally installs this beta alongside its model fallbacks. Preserve
-// that decision when replacing Pi's beta header with the captured baseline.
+// Installed by pi alongside its model fallbacks.
 export const CLAUDE_CODE_SERVER_FALLBACK_BETA = 'server-side-fallback-2026-07-01'

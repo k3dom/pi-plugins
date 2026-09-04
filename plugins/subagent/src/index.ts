@@ -1,5 +1,6 @@
 import * as path from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
+import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import { runTool } from '@pi-plugins/shared/run'
@@ -12,15 +13,9 @@ import {
   type SubagentResult,
   type SubagentUsage,
 } from './runner'
-import {
-  capToolOutput,
-  formatStats,
-  modelPattern,
-  subagentSessionDir,
-} from './utils'
+import { capToolOutput, formatStats } from './utils'
 
-// Wrapped terminal rows, not source lines, so a row's height is bounded whatever
-// the prompt and the output happen to be shaped like.
+// Wrapped terminal rows, not source lines, so a row's height stays bounded.
 const PROMPT_PREVIEW_LINES = 3
 const OUTPUT_PREVIEW_LINES = 5
 const METADATA_LABEL_WIDTH = 9
@@ -51,7 +46,6 @@ export type SubagentInput = Static<typeof subagentSchema>
 interface SubagentDetails extends SubagentResult {
   cwd?: string | undefined
   model?: string | undefined
-  /** Set on the final result when the run failed. */
   failed?: boolean | undefined
   errorMessage?: string | undefined
   stderr?: string | undefined
@@ -60,8 +54,9 @@ interface SubagentDetails extends SubagentResult {
 export default function subagent(pi: ExtensionAPI) {
   const pending: SubagentUsage[] = []
 
-  // Fold subagent cost back into the parent session so the footer's cumulative
-  // cost includes delegated work.
+  // Folds subagent cost into the parent session so the footer's cumulative cost
+  // includes delegated work. Only `cost.total`: the token fields feed pi's
+  // auto-compaction heuristics and must stay untouched.
   pi.on('message_end', ({ message }) => {
     if (
       message.role !== 'assistant' ||
@@ -72,9 +67,6 @@ export default function subagent(pi: ExtensionAPI) {
     }
     const cost = { ...message.usage.cost }
     for (const run of pending.splice(0)) {
-      // Only `cost.total` is folded. The per-request token fields (input, output,
-      // cacheRead, cacheWrite) must stay untouched as they are used by pi's auto-compaction heuristics.
-      // Cost is only ever summed for display, so it is safe to fold.
       cost.total += run.cost
     }
     return { message: { ...message, usage: { ...message.usage, cost } } }
@@ -92,26 +84,26 @@ export default function subagent(pi: ExtensionAPI) {
       'Delegate self-contained tasks to subagents (isolated headless pi instances).',
     parameters: subagentSchema,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      // An omitted `model` should mean "same model", not "child default".
       const model =
         params.model ??
-        (ctx.model !== undefined
-          ? modelPattern(ctx.model, pi.getThinkingLevel())
-          : undefined)
+        (ctx.model === undefined
+          ? undefined
+          : `${ctx.model.provider}/${ctx.model.id}:${pi.getThinkingLevel()}`)
 
-      // Resolve relative cwd against the parent session's cwd, not the process
-      // cwd (they can differ for resumed/cross-project sessions).
+      // Relative to the parent session's cwd, not the process cwd: they differ
+      // for resumed and cross-project sessions.
       const cwd =
         params.cwd !== undefined ? path.resolve(ctx.cwd, params.cwd) : ctx.cwd
 
-      // Inherit the parent's active tool set (minus subagent itself) so a
-      // restricted parent (e.g. `pi --tools read`) cannot be escaped by
-      // delegating to a child with default tools.
+      // Inheriting the parent's tool set keeps a restricted parent (e.g.
+      // `pi --tools read`) from being escaped through a child with default tools.
       const tools = pi.getActiveTools().filter((name) => name !== 'subagent')
 
       const program = runSubagent({
         prompt: params.prompt,
-        sessionDir: subagentSessionDir(),
+        // Beside pi's per-project `--<cwd>--` directories, so child sessions stay
+        // out of `pi -c` / `pi -r` but resolve by id from anywhere.
+        sessionDir: path.join(getAgentDir(), 'sessions', 'subagents'),
         name: params.description,
         model,
         cwd,
@@ -211,7 +203,6 @@ export default function subagent(pi: ExtensionAPI) {
         )
         .join('\n')
 
-      // No status line while running: the pending background tint is the indicator.
       if (isPartial) {
         return new Text(metadataBlock ? `\n${metadataBlock}` : '', 0, 0)
       }
@@ -229,15 +220,12 @@ export default function subagent(pi: ExtensionAPI) {
         '(no output)'
 
       let header = metadataBlock ? `\n${metadataBlock}\n\n${status}` : `\n${status}`
-      // Skip the error line when it would repeat the rendered content.
       if (failed && details.errorMessage && details.errorMessage !== content) {
         header += `\n${theme.fg('error', `Error: ${details.errorMessage}`)}`
       }
 
       return new ExpandableText({
         header,
-        // Keep the full output in details for explicit expansion, but bound what
-        // the collapsed row has to wrap to pi's standard tool-output limits.
         content: expanded ? content : capToolOutput(content),
         maxLines: OUTPUT_PREVIEW_LINES,
         expanded,

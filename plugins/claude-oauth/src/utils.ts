@@ -19,7 +19,6 @@ const mergeRound = (acc: bigint, val: bigint): bigint => {
   return (((merged * PRIME64_1) & MASK) + PRIME64_4) & MASK
 }
 
-/** XXH64, used to reproduce Claude Code's `cch` request-integrity value. */
 export function xxHash64(input: Uint8Array, seed: bigint): bigint {
   const len = input.length
   const dv = new DataView(input.buffer, input.byteOffset, input.byteLength)
@@ -81,11 +80,9 @@ export function xxHash64(input: Uint8Array, seed: bigint): bigint {
 
 type TextBlock = { type: 'text'; text: string }
 
-/** Narrows an unknown content block to an Anthropic `{ type: 'text', text }` block. */
 export const isTextBlock = (u: unknown): u is TextBlock =>
   Predicate.isObject(u) && u['type'] === 'text' && Predicate.isString(u['text'])
 
-/** Concatenated text of the first user message — the seed for the billing header. */
 export function firstUserMessageText(
   messages: ReadonlyArray<{ role?: string; content?: unknown }>,
 ): string {

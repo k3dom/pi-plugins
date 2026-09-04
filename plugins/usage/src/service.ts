@@ -55,53 +55,22 @@ const requestFailed = (cause: unknown) =>
     cause,
   })
 
-/** Subscription providers the service knows how to query. */
 export type UsageProvider = Data.TaggedEnum<{
   Anthropic: {}
   OpenAI: {}
 }>
 export const UsageProvider = Data.taggedEnum<UsageProvider>()
 
-/** OAuth credentials resolved from pi's auth store. */
 export type UsageCredentials = Data.TaggedEnum<{
   Anthropic: { readonly accessToken: string }
-  OpenAI: {
-    readonly accessToken: string
-    /** ChatGPT account/workspace id (JWT `chatgpt_account_id` claim). */
-    readonly accountId: string
-  }
+  OpenAI: { readonly accessToken: string; readonly accountId: string }
 }>
 export const UsageCredentials = Data.taggedEnum<UsageCredentials>()
 
-/** The credentials variant belonging to a provider variant. */
 type CredentialsFor<P extends UsageProvider> = Data.TaggedEnum.Value<
   UsageCredentials,
   P['_tag']
 >
-
-/** Extracts the ChatGPT account/workspace id from the access token JWT. */
-const accountIdFromToken = Effect.fnUntraced(function* (accessToken: string) {
-  const payload = yield* Effect.fromResult(
-    Encoding.decodeBase64UrlString(
-      pipe(
-        accessToken,
-        String.split('.'),
-        Array.get(1),
-        Option.getOrElse(() => ''),
-      ),
-    ),
-  )
-  const claims = yield* Schema.decodeEffect(
-    Schema.fromJsonString(
-      Schema.Struct({
-        'https://api.openai.com/auth': Schema.Struct({
-          chatgpt_account_id: Schema.String,
-        }),
-      }),
-    ),
-  )(payload)
-  return claims['https://api.openai.com/auth'].chatgpt_account_id
-})
 
 export class UsageService extends Context.Service<UsageService>()(
   '@pi-plugins/usage/UsageService',
@@ -116,11 +85,9 @@ export class UsageService extends Context.Service<UsageService>()(
         }),
       )
 
-      /** Resolves subscription OAuth credentials for `provider` from pi's auth store. */
       const credentials = Effect.fnUntraced(function* <P extends UsageProvider>(
         provider: P,
       ): Effect.fn.Return<CredentialsFor<P>, UsageServiceError> {
-        // Provider ids as stored in pi's auth store (`~/.pi/agent/auth.json`).
         const providerId = UsageProvider.$match(provider, {
           Anthropic: () => 'anthropic',
           OpenAI: () => 'openai-codex',
@@ -152,7 +119,7 @@ export class UsageService extends Context.Service<UsageService>()(
           Anthropic: () =>
             Effect.succeed(UsageCredentials.Anthropic({ accessToken })),
           OpenAI: Effect.fnUntraced(function* () {
-            // Re-read after auth resolution, which may have refreshed the stored credential.
+            // Re-read: resolving the token may have refreshed the stored credential.
             const credential = readStoredCredential(providerId)
             const storedAccountId =
               credential?.type === 'oauth' &&
@@ -161,9 +128,28 @@ export class UsageService extends Context.Service<UsageService>()(
                 : undefined
             const accountId =
               storedAccountId ??
-              (yield* accountIdFromToken(accessToken).pipe(
-                Effect.orElseSucceed(() => undefined),
-              ))
+              (yield* Effect.gen(function* () {
+                const payload = yield* Effect.fromResult(
+                  Encoding.decodeBase64UrlString(
+                    pipe(
+                      accessToken,
+                      String.split('.'),
+                      Array.get(1),
+                      Option.getOrElse(() => ''),
+                    ),
+                  ),
+                )
+                const claims = yield* Schema.decodeEffect(
+                  Schema.fromJsonString(
+                    Schema.Struct({
+                      'https://api.openai.com/auth': Schema.Struct({
+                        chatgpt_account_id: Schema.String,
+                      }),
+                    }),
+                  ),
+                )(payload)
+                return claims['https://api.openai.com/auth'].chatgpt_account_id
+              }).pipe(Effect.orElseSucceed(() => undefined)))
             if (!accountId) {
               return yield* new UsageServiceError({
                 kind: 'AccountIdMissing',

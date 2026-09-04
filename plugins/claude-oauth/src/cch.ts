@@ -92,7 +92,7 @@ function findNextIgnoredRange(body: Buffer, offset: number): ByteRange | undefin
   return earliest
 }
 
-// Claude excludes mutable routing fields and model values from the attestation.
+// Mutable routing fields and model values are excluded from the attestation.
 function canonicalizeForCch(body: Buffer): Buffer {
   const chunks: Buffer[] = []
   let length = 0
@@ -167,8 +167,7 @@ export function wrapFetchForCch(
     const inputHeaders =
       init?.headers ?? (input instanceof Request ? input.headers : undefined)
     const headers = new Headers(inputHeaders)
-    // Pi selects betas for the request fields it emitted. Preserve them when
-    // applying Claude Code's baseline so body and header capabilities stay aligned.
+    // Pi's betas match the request fields it emitted; keep them alongside the baseline.
     const incomingBetaHeader = headers.get('anthropic-beta') ?? ''
     for (const [name, value] of Object.entries(claudeHeaders)) {
       headers.set(name, value)

@@ -7,8 +7,6 @@ import { SpeedTracker } from './service'
 const SEGMENT_KEY = 'speed'
 
 export default function speed(pi: ExtensionAPI) {
-  // Plugin setup is synchronous. The shared run helpers cover only async
-  // boundaries.
   const tracker = Effect.runSync(SpeedTracker.make)
 
   function showWidget(ctx: ExtensionContext, text: string | undefined): void {
@@ -19,7 +17,6 @@ export default function speed(pi: ExtensionAPI) {
     )
   }
 
-  // Fires for every reason, including startup, where there is nothing to drop.
   pi.on('session_start', (_event, ctx) => {
     tracker.reset()
     showWidget(ctx, undefined)
