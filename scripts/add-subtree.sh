@@ -40,7 +40,7 @@ if [[ -e "$prefix" ]]; then
 fi
 
 if ! git diff-index --quiet HEAD --; then
-  echo "error: working tree has uncommitted changes; commit or stash first" >&2
+  echo "error: working tree has uncommitted changes — commit or stash first" >&2
   exit 1
 fi
 

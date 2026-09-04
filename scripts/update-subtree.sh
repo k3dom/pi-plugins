@@ -17,7 +17,7 @@ if [[ ! -f "$registry" ]]; then
 fi
 
 if ! git diff-index --quiet HEAD --; then
-  echo "error: working tree has uncommitted changes; commit or stash first" >&2
+  echo "error: working tree has uncommitted changes — commit or stash first" >&2
   exit 1
 fi
 
@@ -31,7 +31,7 @@ if [[ "${1:-}" == "--all" ]]; then
   selection="$entries"
 else
   if ! command -v fzf >/dev/null 2>&1; then
-    echo "error: fzf is required for interactive mode; use --all to pull everything" >&2
+    echo "error: fzf is required for interactive mode — use --all to pull everything" >&2
     exit 1
   fi
   selection="$(printf '%s\n' "$entries" | fzf \

@@ -20,14 +20,14 @@ const MIN_EFFECTIVE_SAMPLES = 5
 const SETTLED_RELATIVE_ERROR = 0.05
 const UNSETTLED_RELATIVE_ERROR = 0.15
 
-// Bartlett lags for the serial-correlation term; past two the weights are noise.
+// Bartlett lags for the serial-correlation term. Past two the weights are noise.
 const HAC_LAGS = 2
 
 // A sample carrying the whole window leaves no residual to correct against.
 const MAX_LEVERAGE = 0.99
 
 // Share of billed reasoning the streamed thinking must cover to count as streamed
-// whole. Chars-per-token varies ~20% between prose, code and JSON; anything under
+// whole. Chars-per-token varies ~20% between prose, code and JSON, so anything under
 // this gap is a summary, not measurement noise.
 const REASONING_STREAMED = 0.6
 
@@ -72,7 +72,7 @@ interface InflightRequest {
   thinkingChars: number
 }
 
-// Splits total weight rather than count; `NaN` when empty.
+// Splits total weight rather than count and is `NaN` when empty.
 function weightedMedian(
   entries: readonly { readonly value: number; readonly weight: number }[],
 ): number {
@@ -121,7 +121,7 @@ function streamedTokens(
         ? reasoning
         : implied
 
-  // The first delta predates the interval; its share is prorated out by
+  // The first delta predates the interval, so its share is prorated out by
   // characters since the opening chunk is routinely a fragment.
   return ((visible + streamedReasoning) * withinInterval) / chars
 }
@@ -182,7 +182,7 @@ function recentSpeed(
 
   // Requests in one turn share a provider node, queue position and context
   // length, so their residuals move together. Bartlett-weighted lags add that
-  // covariance back; the kernel can go negative under alternation, hence the floor.
+  // covariance back. The kernel can go negative under alternation, hence the floor.
   let variance = independent
   for (let lag = 1; lag <= HAC_LAGS; lag++) {
     let covariance = 0
@@ -267,7 +267,7 @@ export class SpeedTracker extends Context.Service<SpeedTracker>()(
           outcome.stopReason === 'aborted' ||
           outcome.outputTokens <= 0
         ) {
-          // A lone delta spans no interval; timing it would read as thousands of tok/s.
+          // A lone delta spans no interval. Timing it would read as thousands of tok/s.
           return
         }
 

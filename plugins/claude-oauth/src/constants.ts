@@ -13,7 +13,7 @@ export const CLAUDE_CODE_BILLING_FINGERPRINT_INDICES = [4, 7, 20] as const
 export const CLAUDE_CODE_BILLING_HEADER_PREFIX = 'x-anthropic-billing-header:'
 export const CCH_PLACEHOLDER = 'cch=00000'
 
-// XXH64 seed for `cch`; pinned to the client and verified by `scripts/claude-trace.ts`.
+// XXH64 seed for `cch`, pinned to the client and verified by `scripts/claude-trace.ts`.
 export const CCH_SEED = 0x4d659218e32a3268n
 
 // pi injects this exact block as system[0] on OAuth requests.

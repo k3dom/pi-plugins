@@ -9,7 +9,7 @@ export interface StatuslineSegment {
 
 const WIDGET_KEY = 'pi-plugins:statusline'
 
-// Each plugin bundles its own copy of this module; `Symbol.for` on
+// Each plugin bundles its own copy of this module, so `Symbol.for` on
 // `globalThis` gives them all the same registry inside one pi process.
 const REGISTRY_KEY = Symbol.for('@pi-plugins/statusline-registry')
 

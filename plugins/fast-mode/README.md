@@ -77,8 +77,8 @@ Optional config file at `<agent-dir>/extensions/fast-mode.json` (typically
 }
 ```
 
-- `enabled`: fast-mode state at session start (`/fast` overrides it for the session;
-  the toggle is not written back to the file).
+- `enabled`: fast-mode state at session start (`/fast` overrides it for the session
+  without writing the toggle back to the file).
 - `models`: the `provider/model-id` keys fast mode applies to. The defaults above are
   used when the file is absent. Models whose API has no fast-mode support are
   ignored.

@@ -9,7 +9,7 @@ const PI_REMOVAL_ANCHORS = [
 const PI_DOCUMENTATION_HEADING =
   'Pi documentation (read only when the user asks about pi itself,'
 
-// Standalone "pi"/"Pi" only; the lookarounds spare paths and identifiers
+// Standalone "pi"/"Pi" only. The lookarounds spare paths and identifiers
 // (`/pi/`, `pi-plugins`, `@pi`, `pi.mod`, `pi_x`, `pi:1`).
 const PI_WORD = /(?<![/\\.@:_-])\b[Pp]i\b(?![/\\.@:_-])/g
 

@@ -23,7 +23,7 @@ clone.
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as
-feature requests; `/triage` reads this flag.)_
+feature requests. `/triage` reads this flag.)_
 
 When set to `yes`, PRs run through the same labels and states as issues, using the
 `gh pr` equivalents:
@@ -71,7 +71,7 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 - **Frontier query**: list the map's open children (`gh issue list --state open`,
   scoped to the map's sub-issues / task list), drop any with an open blocker
   (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by`
-  line) or an assignee; first in map order wins.
+  line) or an assignee. First in map order wins.
 - **Claim**: `gh issue edit <n> --add-assignee @me` — the session's first write.
 - **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`,
   then append a context pointer (gist + link) to the map's Decisions-so-far.

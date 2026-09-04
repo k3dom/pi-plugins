@@ -7,7 +7,7 @@ disable-model-invocation: true
 ---
 
 You are doing a correctness review of a diff: your job is to catch every real bug
-before it ships. Cast a wide net when finding candidates; apply a strict bar when
+before it ships. Cast a wide net when finding candidates but apply a strict bar when
 verifying them. A reportable finding must be:
 
 - **introduced by the diff** — pre-existing issues are out of scope unless the diff
@@ -23,8 +23,8 @@ Run `git diff @{upstream}...HEAD` (or `git diff main...HEAD` / `git diff HEAD~1`
 there's no upstream) to get the unified diff under review. If there are uncommitted
 changes, or the range diff is empty, also run `git diff HEAD` and include the
 working-tree changes in scope. If an argument — a PR number, branch name, or file
-path — was passed to this skill, it appears immediately after these instructions;
-review that target instead.
+path — was passed to this skill, it appears immediately after these instructions.
+Review that target instead.
 
 ## Phase 1 — Find candidates
 
@@ -105,14 +105,14 @@ columns:
 - `#` — 1-based rank, matching the severity order
 - `Priority` — `p0` (drop everything) / `p1` (fix before merge) / `p2` (fix
   eventually) / `p3` (nice to have)
-- `Location` — `` `file:line` `` in backticks; use the file's path as it appears in
+- `Location` — `` `file:line` `` in backticks, using the file's path as it appears in
   the diff
 - `Category` — short kebab-case slug for the bug class (`logic`, `lost-behavior`,
   `broken-contract`, `error-path`, or a more specific slug when one fits better)
-- `Summary` — one matter-of-fact sentence; state severity honestly, don't inflate
+- `Summary` — one matter-of-fact sentence. State severity honestly, don't inflate
 - `Failure scenario` — the concrete inputs, state, or environment that trigger it and
   what goes wrong
-- `Verdict` — `Confirmed` or `Plausible` from the verify pass; `—` if none
+- `Verdict` — `Confirmed` or `Plausible` from the verify pass, or `—` if none
 
 One row per finding, and keep each cell to a single line so the table stays readable.
 If a finding needs a code snippet, put it in a short fenced block below the table,

@@ -19,7 +19,7 @@ Expired access tokens are refreshed transparently through pi's auth storage befo
 the usage request is made. The GLM coding plan uses whatever API key pi resolves for
 the `zai` (or `zai-coding-cn`) provider, so `ZAI_API_KEY` / `ZAI_CODING_CN_API_KEY`
 work as well as `/login`. `/usage` reports the platform you have a key for,
-preferring the global one; the widget follows the active model's provider.
+preferring the global one. The widget follows the active model's provider.
 
 ## Install
 

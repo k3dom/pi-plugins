@@ -154,7 +154,7 @@ export function wrapFetchForCch(
 
     if (placeholderIdx === -1 || placeholderIdx - searchFrom > CCH_SEARCH_WINDOW) {
       console.warn(
-        '[claude-oauth] cch placeholder present but not anchored; sending request with cch left unset',
+        '[claude-oauth] cch placeholder present but not anchored — sending request with cch left unset',
       )
       return base(input, init)
     }
@@ -167,7 +167,8 @@ export function wrapFetchForCch(
     const inputHeaders =
       init?.headers ?? (input instanceof Request ? input.headers : undefined)
     const headers = new Headers(inputHeaders)
-    // Pi's betas match the request fields it emitted; keep them alongside the baseline.
+    // Pi's betas match the request fields it emitted, so keep them alongside the
+    // baseline.
     const incomingBetaHeader = headers.get('anthropic-beta') ?? ''
     for (const [name, value] of Object.entries(claudeHeaders)) {
       headers.set(name, value)

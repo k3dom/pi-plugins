@@ -18,8 +18,8 @@ Run `git diff @{upstream}...HEAD` (or `git diff main...HEAD` / `git diff HEAD~1`
 there's no upstream) to get the unified diff under review. If there are uncommitted
 changes, or the range diff is empty, also run `git diff HEAD` and include the
 working-tree changes in scope. If an argument — a PR number, branch name, or file
-path — was passed to this skill, it appears immediately after these instructions;
-review that target instead.
+path — was passed to this skill, it appears immediately after these instructions.
+Review that target instead.
 
 ## Phase 1 — Review (4 cleanup agents in parallel)
 
@@ -45,7 +45,7 @@ that does the same job.
 Flag wasted work the diff introduces: redundant computation or repeated I/O,
 independent operations run sequentially, blocking work added to startup or hot paths.
 Also flag long-lived objects built from closures or captured environments — they pin
-the whole enclosing scope for their lifetime; prefer a class/struct that copies only
+the whole enclosing scope for their lifetime. Prefer a class/struct that copies only
 the fields it needs. Name the cheaper alternative.
 
 ### Altitude
@@ -71,11 +71,11 @@ most-impactful first, with these columns:
 | 1   | `src/api/client.ts:88` | reuse    | Re-implements retry-with-backoff that `withRetry()` already provides. | Second copy of the backoff policy to keep in sync with `src/lib/retry.ts`. | Call `withRetry(fn, { attempts: 3 })` instead of the hand-rolled loop. |
 
 - `#` — 1-based rank, matching the impact order
-- `Location` — `` `file:line` `` in backticks; use the file's path as it appears in
+- `Location` — `` `file:line` `` in backticks, using the file's path as it appears in
   the diff
 - `Category` — short kebab-case slug for the angle that produced it (`reuse`,
   `simplification`, `efficiency`, or `altitude`)
-- `Summary` — one matter-of-fact sentence; don't inflate the issue
+- `Summary` — one matter-of-fact sentence. Don't inflate the issue
 - `Cost` — what is concretely duplicated, wasted, or harder to maintain
 - `Suggestion` — the simpler or cheaper form that does the same job
 
