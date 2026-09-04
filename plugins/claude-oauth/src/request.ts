@@ -15,7 +15,6 @@ import {
   CLAUDE_CODE_BILLING_FINGERPRINT_INDICES,
   CLAUDE_CODE_BILLING_FINGERPRINT_SALT,
   CLAUDE_CODE_BILLING_HEADER_PREFIX,
-  CLAUDE_CODE_MAX_OUTPUT_TOKENS,
   CLAUDE_CODE_STAINLESS_PACKAGE_VERSION,
   CLAUDE_CODE_STAINLESS_RUNTIME_VERSION,
   CLAUDE_CODE_STAINLESS_TIMEOUT,
@@ -101,7 +100,6 @@ interface AnthropicPayload {
   messages?: Array<{ role?: string; content?: unknown }>
   system?: SystemBlock[]
   tools?: unknown[]
-  max_tokens?: number
   metadata?: { user_id?: unknown }
   thinking?: { type?: unknown }
   context_management?: unknown
@@ -212,13 +210,6 @@ export function rewriteForClaudeCode(
       account_uuid: accountUuid,
       session_id: sessionId,
     }),
-  }
-
-  if (
-    Predicate.isNumber(typed.max_tokens) &&
-    typed.max_tokens > CLAUDE_CODE_MAX_OUTPUT_TOKENS
-  ) {
-    typed.max_tokens = CLAUDE_CODE_MAX_OUTPUT_TOKENS
   }
 
   if (typed.thinking?.type === 'adaptive' || typed.thinking?.type === 'enabled') {

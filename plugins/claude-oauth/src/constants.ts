@@ -4,10 +4,6 @@ export const CLAUDE_CODE_STAINLESS_PACKAGE_VERSION = '0.112.1'
 export const CLAUDE_CODE_STAINLESS_RUNTIME_VERSION = 'v26.3.0'
 export const CLAUDE_CODE_STAINLESS_TIMEOUT = 600
 
-// Claude Code caps requested output at 64k even when the model ceiling is higher
-// (e.g. Opus 128k); OAuth requests clamp to match the client.
-export const CLAUDE_CODE_MAX_OUTPUT_TOKENS = 64000
-
 // Claude Code fingerprints the billing header with
 // `SHA256(salt + msg[4] + msg[7] + msg[20] + version)[:3]`. The salt and indices
 // are pinned to the client and verified by `scripts/claude-trace.ts`.

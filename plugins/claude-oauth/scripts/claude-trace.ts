@@ -746,10 +746,6 @@ function extract(request: CapturedRequest): Extracted {
   } catch {
     // leave body empty; extraction just skips body-derived values
   }
-  if (typeof body.max_tokens === 'number') {
-    values['CLAUDE_CODE_MAX_OUTPUT_TOKENS'] = String(body.max_tokens)
-  }
-
   const systemBlocks = body.system ?? []
   const billingText = systemBlocks.find((b) =>
     b.text?.startsWith(BILLING_PREFIX),
@@ -1112,10 +1108,7 @@ function writeBack(extracted: Extracted, request: CapturedRequest): void {
   }
 
   for (const [name, value] of Object.entries(extracted.values)) {
-    if (
-      name === 'CLAUDE_CODE_MAX_OUTPUT_TOKENS' ||
-      name === 'CLAUDE_CODE_STAINLESS_TIMEOUT'
-    ) {
+    if (name === 'CLAUDE_CODE_STAINLESS_TIMEOUT') {
       replaceNumber(name, value)
     } else {
       replaceString(name, value)
