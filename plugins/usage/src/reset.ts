@@ -43,5 +43,8 @@ export function formatCompactDuration(ms: number): string {
     return `${Math.max(minutes, 1)}m`
   }
   const hours = Math.floor(minutes / 60)
-  return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`
+  if (hours < 24) {
+    return `${hours}h${minutes % 60}m`
+  }
+  return `${Math.floor(hours / 24)}d`
 }
