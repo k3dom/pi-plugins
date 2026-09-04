@@ -1,5 +1,4 @@
 import type { RateLimitWindow } from './provider/openai'
-import type { QuotaLimit } from './provider/zai'
 
 export function parseResetsAt(
   value: string | number | null | undefined,
@@ -23,13 +22,6 @@ export function codexResetsAt(window: RateLimitWindow, now: Date): Date | null {
     return new Date(window.reset_at * 1000)
   }
   return null
-}
-
-export function glmResetsAt(limit: QuotaLimit): Date | null {
-  return typeof limit.nextResetTime === 'number' &&
-    Number.isFinite(limit.nextResetTime)
-    ? new Date(limit.nextResetTime)
-    : null
 }
 
 export function formatDuration(ms: number): string {

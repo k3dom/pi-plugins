@@ -145,7 +145,6 @@ export default function usage(pi: ExtensionAPI): void {
       'Show subscription usage/rate limits for Claude, OpenAI Codex, and GLM coding plans',
     handler: async (_args, ctx) => {
       const now = new Date()
-      // The GLM platforms are separate accounts; the global one wins when both have a key.
       const glmProvider =
         Record.keys(ZAI_BASE_URL).find(
           (id) => ctx.modelRegistry.getProviderAuthStatus(id).configured,

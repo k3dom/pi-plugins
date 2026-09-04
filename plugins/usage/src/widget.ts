@@ -1,12 +1,8 @@
+import { Array } from 'effect'
 import type { ClaudeUsage, UsageWindow } from './provider/anthropic'
 import type { CodexUsage } from './provider/openai'
 import { glmRateLimits, type GlmUsage } from './provider/zai'
-import {
-  codexResetsAt,
-  formatCompactDuration,
-  glmResetsAt,
-  parseResetsAt,
-} from './reset'
+import { codexResetsAt, formatCompactDuration, parseResetsAt } from './reset'
 
 export interface WidgetLimit {
   readonly label: string
@@ -106,11 +102,9 @@ export function codexWidgetLimits(usage: CodexUsage, now: Date): WidgetLimit[] {
 }
 
 export function glmWidgetLimits(usage: GlmUsage): WidgetLimit[] {
-  const labels = ['5h', 'wk']
-  return glmRateLimits(usage).flatMap((limit, index) => {
-    const label = labels[index]
-    return label !== undefined && typeof limit.percentage === 'number'
-      ? [{ label, percent: limit.percentage, resetsAt: glmResetsAt(limit) }]
-      : []
-  })
+  return Array.zip(['5h', 'wk'], glmRateLimits(usage)).flatMap(([label, limit]) =>
+    typeof limit.percentage === 'number'
+      ? [{ label, percent: limit.percentage, resetsAt: limit.nextResetTime }]
+      : [],
+  )
 }

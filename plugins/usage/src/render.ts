@@ -1,7 +1,8 @@
+import { Array } from 'effect'
 import type { ClaudeUsage, UnifiedLimit, UsageWindow } from './provider/anthropic'
 import type { CodexUsage, RateLimitDetails } from './provider/openai'
 import { glmRateLimits, type GlmUsage, type QuotaLimit } from './provider/zai'
-import { codexResetsAt, formatDuration, glmResetsAt, parseResetsAt } from './reset'
+import { codexResetsAt, formatDuration, parseResetsAt } from './reset'
 
 const MIN_LABEL_WIDTH = 22
 const BAR_WIDTH = 10
@@ -247,7 +248,7 @@ function glmRow(label: string, limit: QuotaLimit): UsageRow {
   return {
     label,
     percent: limit.percentage,
-    resetsAt: glmResetsAt(limit),
+    resetsAt: limit.nextResetTime,
     note:
       typeof limit.currentValue === 'number' &&
       typeof limit.usage === 'number' &&
@@ -258,12 +259,7 @@ function glmRow(label: string, limit: QuotaLimit): UsageRow {
 }
 
 export function glmSection(usage: GlmUsage): UsageSection {
-  const rows = glmRateLimits(usage).map((limit, index) =>
-    glmRow(
-      index === 0 ? 'Session (5h)' : index === 1 ? 'Week' : `Window ${index + 1}`,
-      limit,
-    ),
-  )
+  const rows = Array.zipWith(['Session (5h)', 'Week'], glmRateLimits(usage), glmRow)
 
   const mcp = usage.limits?.find((limit) => limit.type === 'TIME_LIMIT')
   if (mcp) {
