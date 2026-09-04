@@ -6,6 +6,7 @@ pnpm-debug.log*
 # Build/cache output
 dist
 coverage
+.vitest
 .turbo
 *.tsbuildinfo
 result

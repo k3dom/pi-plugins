@@ -42,7 +42,7 @@
     "check": "pnpm run lint && pnpm run check-types && pnpm run format:check && pnpm run test",
     "check-types": "tsc -b",
     "lint": "oxlint",
-    "test": "node --experimental-strip-types --import ./test/resolve-typescript.mjs --test ./test/*.test.mjs",
+    "test": "vitest run",
     "format": "oxfmt",
     "format:check": "oxfmt --check"
   },
@@ -58,7 +58,8 @@
     "oxfmt": "0.62.0",
     "oxlint": "1.77.0",
     "tsdown": "0.22.14",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vitest": "5.0.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
