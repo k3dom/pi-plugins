@@ -76,10 +76,12 @@ export default function subagent(pi: ExtensionAPI) {
     name: 'subagent',
     label: 'Subagent',
     description:
-      'Delegate a task to a subagent: a fresh headless pi instance with its own isolated context window. ' +
-      'The subagent receives only the given prompt (no conversation history) and returns its final response, ' +
-      'so include all necessary context in the prompt and describe exactly what it should report back. ' +
-      'Use it to keep large exploration or self-contained subtasks out of the main context.',
+      'Delegate a substantial, clearly scoped subtask with a concrete deliverable that can be completed independently. ' +
+      'Use direct tools for routine searches, file reads, and small changes. ' +
+      'The subagent runs as a separate headless pi instance without this conversation’s history. ' +
+      'Provide the necessary context, whether edits are allowed, and the expected output. ' +
+      'It shares the filesystem with the parent. ' +
+      'This call blocks until the subagent finishes, then returns its final response.',
     promptSnippet:
       'Delegate self-contained tasks to subagents (isolated headless pi instances).',
     parameters: subagentSchema,
