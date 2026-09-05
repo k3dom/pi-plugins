@@ -1,5 +1,11 @@
 # @pi-plugins/fast-mode
 
+## 0.1.11
+
+### Patch Changes
+
+- ec27e7e: Add GPT-6 Astra to the default fast-mode models for OpenAI and OpenAI Codex.
+
 ## 0.1.10
 
 ### Patch Changes
