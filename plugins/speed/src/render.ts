@@ -12,15 +12,15 @@ function formatMs(ms: number): string {
 }
 
 function recentTps(recent: RecentSpeed): string {
-  // Two significant figures: the standard error is a few percent, so more digits
-  // would be noise.
   const tps =
     recent.tps < 100 ? Math.round(recent.tps) : Math.round(recent.tps / 10) * 10
-  return `${recent.provisional ? '~' : ''}${tps} tok/s`
+  return `~${tps} tok/s`
 }
 
-export function recentText(recent: RecentSpeed): string {
-  return `${recentTps(recent)} · TTFT ${formatMs(recent.ttftMs)}`
+export function recentText(recent: RecentSpeed | undefined): string | undefined {
+  return recent === undefined
+    ? undefined
+    : `${recentTps(recent)} · TTFT ${formatMs(recent.ttftMs)}`
 }
 
 export function streamingText(

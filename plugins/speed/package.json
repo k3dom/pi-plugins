@@ -39,9 +39,10 @@
   "scripts": {
     "prepack": "pnpm run build",
     "build": "tsdown",
-    "check": "pnpm run lint && pnpm run check-types && pnpm run format:check",
+    "check": "pnpm run lint && pnpm run check-types && pnpm run format:check && pnpm run test",
     "check-types": "tsc -b",
     "lint": "oxlint",
+    "test": "node --test test/*.test.ts",
     "format": "oxfmt",
     "format:check": "oxfmt --check"
   },

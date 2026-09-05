@@ -1,15 +1,22 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { setStatuslineSegment } from '@pi-plugins/shared/statusline'
-import { Effect } from 'effect'
 import { recentText, streamingText } from './render'
-import { SpeedTracker } from './service'
+import { createSpeedTracker, type FirstToken } from './service'
 
 const SEGMENT_KEY = 'speed'
 
 export default function speed(pi: ExtensionAPI) {
-  const tracker = Effect.runSync(SpeedTracker.make)
+  const tracker = createSpeedTracker()
 
-  function showWidget(ctx: ExtensionContext, text: string | undefined): void {
+  function showWidget(ctx: ExtensionContext, firstToken?: FirstToken): void {
+    const recent =
+      ctx.model === undefined
+        ? undefined
+        : tracker.recent(`${ctx.model.provider}/${ctx.model.id}`)
+    const text =
+      firstToken === undefined
+        ? recentText(recent)
+        : streamingText(recent, firstToken)
     setStatuslineSegment(
       ctx,
       SEGMENT_KEY,
@@ -19,7 +26,15 @@ export default function speed(pi: ExtensionAPI) {
 
   pi.on('session_start', (_event, ctx) => {
     tracker.reset()
-    showWidget(ctx, undefined)
+    showWidget(ctx)
+  })
+
+  pi.on('model_select', (_event, ctx) => {
+    showWidget(ctx)
+  })
+
+  pi.on('turn_start', (_event, ctx) => {
+    showWidget(ctx)
   })
 
   pi.on('before_provider_request', () => {
@@ -35,8 +50,12 @@ export default function speed(pi: ExtensionAPI) {
       streamEvent.type === 'thinking_delta' ? 'thinking' : 'visible',
       streamEvent.delta.length,
     )
-    if (firstToken !== undefined) {
-      showWidget(ctx, streamingText(tracker.recent(), firstToken))
+    if (
+      firstToken !== undefined &&
+      streamEvent.partial.provider === ctx.model?.provider &&
+      streamEvent.partial.model === ctx.model?.id
+    ) {
+      showWidget(ctx, firstToken)
     }
   })
 
@@ -51,7 +70,6 @@ export default function speed(pi: ExtensionAPI) {
       outputTokens: message.usage.output,
       reasoningTokens: message.usage.reasoning,
     })
-    const recent = tracker.recent()
-    showWidget(ctx, recent === undefined ? undefined : recentText(recent))
+    showWidget(ctx)
   })
 }

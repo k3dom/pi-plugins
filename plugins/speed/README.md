@@ -27,5 +27,5 @@ pi -e ./plugins/speed
 There is nothing to run. The status line keeps itself up to date:
 
 ```text
-48 tok/s · TTFT 920ms
+~48 tok/s · TTFT 920ms
 ```
