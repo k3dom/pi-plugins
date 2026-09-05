@@ -52,10 +52,6 @@ export function createSpeedTracker() {
 
   return {
     beginRequest(): void {
-      // Compaction and branch summaries share this hook, but not message events.
-      if (inflight?.firstTokenAt !== undefined) {
-        return
-      }
       inflight = {
         requestStart: performance.now(),
         firstDeltaChars: 0,

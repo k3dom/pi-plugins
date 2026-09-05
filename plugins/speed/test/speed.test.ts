@@ -19,8 +19,6 @@ test('times nonempty chunks, excludes the opening chunk and ignores teardown', (
   assert.equal(tracker.recordDelta('thinking', 0), undefined)
   now = 1000
   assert.deepEqual(tracker.recordDelta('visible', 4), { ttftMs: 1000 })
-  now = 1500
-  tracker.beginRequest()
   now = 2000
   tracker.recordDelta('visible', 396)
   now = 3000
