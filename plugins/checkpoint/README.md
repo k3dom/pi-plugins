@@ -1,8 +1,7 @@
 # `@pi-plugins/checkpoint`
 
-A [pi-agent](https://github.com/earendil-works/pi) extension that keeps `/tree`
-conversation navigation and the files on disk in sync via lightweight file
-checkpoints.
+Restore files alongside session history in [pi](https://github.com/earendil-works/pi)
+using lightweight checkpoints.
 
 ## Install
 
@@ -10,37 +9,38 @@ checkpoints.
 pi install npm:@pi-plugins/checkpoint
 ```
 
-For a one-off run without adding it to settings:
+To try it for one session without changing your settings:
 
 ```bash
 pi -e npm:@pi-plugins/checkpoint
 ```
 
-For local development, load it straight from this directory:
+## Usage
 
-```bash
-pi -e ./plugins/checkpoint
+Requires Git and a Git repository. Checkpoints are created automatically, with no
+configuration.
+
+Use `/tree` to navigate session history. When the destination's files differ from
+those on disk, choose whether to navigate with or without restoring files, or cancel.
+Restoring files replaces the current worktree contents with the selected checkpoint.
+
+- Navigating to a user message restores the files that prompt originally ran against,
+  including manual edits made between turns.
+- Navigating to the end of a turn restores the files as that turn left them.
+- Checkpoints remain available after resuming a session with `pi --resume`.
+
+### Cleanup
+
+```text
+/checkpoint-cleanup
 ```
 
-## How it works
+After confirmation, this deletes checkpoint history for all sessions in the current
+worktree and records the current files as a fresh baseline. Conversation history is
+not deleted, but older conversation points can no longer restore their files.
 
-Snapshots use a shadow git repository (a separate `GIT_DIR` under
-`<agent-dir>/checkpoints/`) pointed at your worktree.
+## Notes
 
-- A snapshot is just a `git write-tree` of the shadow index — no commits, no refs,
-  and your real `.git` is never touched.
-- Every turn is bracketed by a before/after snapshot pair: navigating to a user
-  message restores the files the prompt originally ran against (including manual
-  edits made between turns), while navigating to the end of a turn restores the files
-  as that turn left them.
-- Your `.gitignore` files are respected, so `node_modules` and build output never
-  enter the shadow repository.
-- Tree hashes are persisted as hidden custom entries in the pi session file, so
-  restore works across `pi --resume`.
-
-## Cleanup
-
-Run `/checkpoint-cleanup` to delete the stored file checkpoint history for the
-current worktree. After confirmation, the plugin records the current files as a fresh
-baseline and continues checkpointing normally. Conversation history is not deleted,
-but older conversation points can no longer restore their files.
+- Checkpoints do not change your Git history or staging area.
+- New, untracked files are included unless ignored. Files excluded by `.gitignore`
+  are not checkpointed or restored.

@@ -1,12 +1,7 @@
 # `@pi-plugins/fast-mode`
 
-A [pi-agent](https://github.com/earendil-works/pi) extension that requests a
-provider's fast (priority) service tier for configured models — faster inference at a
-higher token cost.
-
-Fast mode is a per-model opt-in: you decide which `provider/model-id` pairs it
-applies to, and a single session toggle turns it on and off. Requests for any other
-model are left untouched.
+Request priority inference for selected models in
+[pi](https://github.com/earendil-works/pi) with a session toggle.
 
 ## Install
 
@@ -14,49 +9,45 @@ model are left untouched.
 pi install npm:@pi-plugins/fast-mode
 ```
 
-For a one-off run without adding it to settings:
+To try it for one session without changing your settings:
 
 ```bash
 pi -e npm:@pi-plugins/fast-mode
 ```
 
-For local development, load it straight from this directory:
-
-```bash
-pi -e ./plugins/fast-mode
-```
-
-## Supported providers
-
-| Provider       | Mechanism                          |
-| -------------- | ---------------------------------- |
-| `openai`       | `service_tier: "priority"` payload |
-| `openai-codex` | `service_tier: "priority"` payload |
-
 ## Usage
 
-```text
-/fast          # toggle fast mode for this session
-/fast on       # enable
-/fast off      # disable
-/fast status   # show the current state and why it is (in)active
-```
+Use `/fast` to control fast mode for the current session:
 
-Start a session with fast mode already enabled:
+| Command        | Action                                                                       |
+| -------------- | ---------------------------------------------------------------------------- |
+| `/fast`        | Toggle fast mode.                                                            |
+| `/fast on`     | Enable fast mode.                                                            |
+| `/fast off`    | Disable fast mode.                                                           |
+| `/fast status` | Show the current state and explain whether it applies to the selected model. |
+
+To start a session with fast mode enabled:
 
 ```bash
 pi --fast
 ```
 
-While fast mode is on and the current model is configured for it, a dim `[fast mode]`
-indicator is shown at the right of a status line right above the editor, shared with
-other pi-plugins extensions (e.g. `@pi-plugins/speed` renders its measurements at the
-left of the same line).
+Fast mode applies only to models listed in the configuration. Other models are left
+unchanged. A `[fast mode]` indicator appears above the editor while active.
+
+## Supported providers
+
+| Provider     | Pi provider    |
+| ------------ | -------------- |
+| OpenAI       | `openai`       |
+| OpenAI Codex | `openai-codex` |
+
+Priority availability depends on the provider and model.
 
 ## Configuration
 
-Optional config file at `<agent-dir>/extensions/fast-mode.json` (typically
-`~/.pi/agent/extensions/fast-mode.json`):
+Optionally create `<agent-dir>/extensions/fast-mode.json`, typically
+`~/.pi/agent/extensions/fast-mode.json`. The defaults are:
 
 ```json
 {
@@ -79,16 +70,12 @@ Optional config file at `<agent-dir>/extensions/fast-mode.json` (typically
 }
 ```
 
-- `enabled`: fast-mode state at session start (`/fast` overrides it for the session
-  without writing the toggle back to the file).
-- `models`: the `provider/model-id` keys fast mode applies to. The defaults above are
-  used when the file is absent. Models whose API has no fast-mode support are
-  ignored.
-- `showStatus`: show the `[fast mode]` indicator above the editor while active.
+| Setting      | Description                                                                                                 |
+| ------------ | ----------------------------------------------------------------------------------------------------------- |
+| `enabled`    | Enable fast mode at session start. `/fast` changes only the current session and does not write to the file. |
+| `models`     | The exact `provider/model-id` pairs fast mode applies to.                                                   |
+| `showStatus` | Show the status indicator while fast mode is active.                                                        |
 
 ## Notes
 
-- The priority service tier bills at a higher rate than the default tier — check your
-  provider's pricing before leaving it enabled.
-- If another extension already set a `service_tier` on the payload, this extension
-  leaves it alone.
+Priority inference can cost more. Check your provider's pricing before enabling it.

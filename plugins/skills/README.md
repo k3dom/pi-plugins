@@ -1,6 +1,7 @@
 # `@pi-plugins/skills`
 
-A collection of skills for [pi-agent](https://github.com/earendil-works/pi).
+Review code for bugs and opportunities to simplify with on-demand skills for
+[pi](https://github.com/earendil-works/pi).
 
 ## Install
 
@@ -8,31 +9,32 @@ A collection of skills for [pi-agent](https://github.com/earendil-works/pi).
 pi install npm:@pi-plugins/skills
 ```
 
-For a one-off run without adding it to settings:
+To try it for one session without changing your settings:
 
 ```bash
 pi -e npm:@pi-plugins/skills
 ```
 
-For local development, load it straight from this directory:
+## Usage
 
-```bash
-pi -e ./plugins/skills
-```
+Run a skill with an optional PR number, branch name, or file path:
 
-## Skills
-
-| Skill                                        | What it does                                                                                                    |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| [`simplify`](skills/simplify/SKILL.md)       | Reviews the changed code — reuse, simplification, efficiency, altitude — and reports improvement opportunities. |
-| [`code-review`](skills/code-review/SKILL.md) | High-recall correctness review of a diff, ranked by severity. Catches bugs, not just style.                     |
-
-Both accept an optional target — a PR number, branch name, or file path:
-
-```
+```text
 /skill:code-review 1234
 /skill:simplify src/api
 ```
 
-Without an argument they review the current diff against upstream, including
-uncommitted changes.
+Without an argument, both review the current diff against upstream, including
+uncommitted changes. Both report findings without editing files.
+
+## Available skills
+
+| Skill                                        | What it does                                                                 |
+| -------------------------------------------- | ---------------------------------------------------------------------------- |
+| [`code-review`](skills/code-review/SKILL.md) | Find correctness bugs in a diff and rank findings by severity.               |
+| [`simplify`](skills/simplify/SKILL.md)       | Suggest ways to simplify code, reuse existing logic, and improve efficiency. |
+
+## Notes
+
+Both skills require a `subagent` tool. Install [`subagent`](../subagent) if you do
+not already have a compatible tool.

@@ -1,9 +1,7 @@
 # `@pi-plugins/speed`
 
-A [pi-agent](https://github.com/earendil-works/pi) extension that shows how fast the
-current model is generating — tokens per second and time to first token — on a shared
-status line above the editor. The rate is a smoothed estimate from recent completed
-responses for the selected model.
+See estimated generation speed and time to first token in
+[pi](https://github.com/earendil-works/pi), above the editor.
 
 ## Install
 
@@ -11,22 +9,24 @@ responses for the selected model.
 pi install npm:@pi-plugins/speed
 ```
 
-For a one-off run without adding it to settings:
+To try it for one session without changing your settings:
 
 ```bash
 pi -e npm:@pi-plugins/speed
 ```
 
-For local development, load it straight from this directory:
-
-```bash
-pi -e ./plugins/speed
-```
-
 ## Usage
 
-There is nothing to run. The status line keeps itself up to date:
+Send a prompt. The status line updates automatically as measurements become
+available:
 
 ```text
 ~48 tok/s · TTFT 920ms
 ```
+
+- `~48 tok/s` means approximately 48 tokens per second, based on recent responses
+  from the selected model.
+- `TTFT` means time to first token: how long the model takes to start responding.
+
+There are no commands or settings. Use [`elapsed`](../elapsed) to track the full
+agent run, including tool calls.

@@ -1,8 +1,7 @@
 # `@pi-plugins/claude-oauth`
 
-A [pi-agent](https://github.com/earendil-works/pi) extension that makes pi's
-Anthropic OAuth requests match the current Claude Code client, so signing in with a
-Claude subscription (OAuth) works correctly.
+Compatibility fixes for using a Claude subscription in
+[pi](https://github.com/earendil-works/pi).
 
 ## Install
 
@@ -10,20 +9,16 @@ Claude subscription (OAuth) works correctly.
 pi install npm:@pi-plugins/claude-oauth
 ```
 
-For a one-off run without adding it to settings:
+To try it for one session without changing your settings:
 
 ```bash
 pi -e npm:@pi-plugins/claude-oauth
 ```
 
-For local development, load it straight from this directory:
-
-```bash
-pi -e ./plugins/claude-oauth
-```
-
 ## Usage
 
-There is no new provider to add and no setup required. Once installed, the extension
-automatically augments pi's existing built-in `anthropic` provider and applies to its
-OAuth requests. Keep using the `anthropic` provider exactly as you normally would.
+Sign in to Anthropic with `/login`, then select a Claude model from the built-in
+`anthropic` provider. The plugin works automatically, with no additional provider or
+configuration.
+
+This plugin is for subscription sign-ins, not API-key access.

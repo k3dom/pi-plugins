@@ -1,61 +1,74 @@
 # pi-plugins
 
-High-quality, single-purpose plugins for the
-[pi-agent](https://github.com/earendil-works/pi) harness, built on
-[Effect-TS](https://effect.website) primitives.
+Focused plugins for everyday work in [pi](https://github.com/earendil-works/pi).
 
-Each plugin does one thing well: clear inputs, predictable outputs, and an
-implementation that leans on Effect for typed errors, resource safety, and composable
-concurrency.
+Fetch web pages, delegate tasks, restore files as you navigate session history, and
+keep an eye on speed and usage. Each package adds a specific capability. Install only
+the pieces you need.
 
-## Packages
+## Plugins
 
-| Package                                | Description                                                                                              | Tools / commands      |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------- | --------------------- |
-| [`webfetch`](plugins/webfetch)         | Fetches content over HTTP(S) and returns them as Markdown or raw HTML.                                   | `web_fetch`           |
-| [`subagent`](plugins/subagent)         | Delegates a task to a fresh, headless pi instance with an isolated context window.                       | `subagent`            |
-| [`checkpoint`](plugins/checkpoint)     | Keeps `/tree` conversation navigation and files on disk in sync with lightweight file checkpoints.       | `/checkpoint-cleanup` |
-| [`fast-mode`](plugins/fast-mode)       | Toggles fast, priority inference for configured models on supported providers.                           | `/fast`, `--fast`     |
-| [`speed`](plugins/speed)               | Measures inference speed per request — tokens/sec and time to first token.                               | `/speed`              |
-| [`elapsed`](plugins/elapsed)           | Shows how long the agent has been working on the current prompt in the working indicator.                | —                     |
-| [`claude-oauth`](plugins/claude-oauth) | Makes pi's Anthropic OAuth requests match the current Claude Code client so OAuth login works correctly. | —                     |
-| [`exit`](plugins/exit)                 | Exits pi when `exit` or `quit` is submitted as the whole prompt.                                         | —                     |
-| [`skills`](plugins/skills)             | A collection of skills the agent loads on demand.                                                        | —                     |
-| [`usage`](plugins/usage)               | Shows subscription usage/rate limits for Claude and OpenAI Codex plans.                                  | `/usage`              |
+| Package                                | What it does                                                       | Entry point                             |
+| -------------------------------------- | ------------------------------------------------------------------ | --------------------------------------- |
+| [`checkpoint`](plugins/checkpoint)     | Restore files when navigating session history.                     | `/tree`, `/checkpoint-cleanup`          |
+| [`claude-oauth`](plugins/claude-oauth) | Adapt Anthropic OAuth requests for use with a Claude subscription. | Automatic                               |
+| [`elapsed`](plugins/elapsed)           | Show a live timer in the working indicator.                        | Automatic                               |
+| [`exit`](plugins/exit)                 | Quit pi with a plain-text prompt.                                  | `exit`, `quit`                          |
+| [`fast-mode`](plugins/fast-mode)       | Request priority inference for selected models.                    | `/fast`, `--fast`                       |
+| [`skills`](plugins/skills)             | Review code for bugs and opportunities to simplify.                | `/skill:code-review`, `/skill:simplify` |
+| [`speed`](plugins/speed)               | Show estimated generation speed and time to first token.           | Automatic                               |
+| [`subagent`](plugins/subagent)         | Delegate a self-contained task to a separate pi session.           | `subagent`                              |
+| [`usage`](plugins/usage)               | Check Claude, OpenAI Codex, and GLM Coding plan limits.            | `/usage`                                |
+| [`webfetch`](plugins/webfetch)         | Fetch web pages as Markdown or raw HTML.                           | `web_fetch`                             |
 
 ## Requirements
 
-Pi **0.80.10 or newer** is required.
+Pi **0.80.10 or newer** is required. Check each plugin's README for any additional
+requirements.
 
-## Usage
+## Install
 
-Install a published plugin with pi-agent:
+Install a package by name:
 
 ```bash
 pi install npm:@pi-plugins/webfetch
 ```
 
-Or try it for a single run without adding it to settings:
+To try it for one session without changing your settings:
 
 ```bash
 pi -e npm:@pi-plugins/webfetch
 ```
 
-For local development, load a plugin directly from its package directory:
+Replace `webfetch` with any package listed above.
 
-```bash
-pi -e ./plugins/webfetch
+## Usage
+
+Some plugins add tools the agent can call, others add commands or update the
+interface automatically. Each plugin's README explains how to use it.
+
+For example, after installing `webfetch`, ask pi:
+
+```text
+Fetch https://example.com and summarize the page.
 ```
 
-Then ask pi to use the tool it registers — for example, to fetch a URL.
+## Development
 
-## Nix
-
-This repo contains a Nix flake with a development shell for local checks.
+From the repository root, enter the Nix development shell and run the checks:
 
 ```bash
 nix develop
 ci
+```
+
+The `ci` command installs workspace dependencies, then runs formatting, lint, type
+checks, builds, and tests.
+
+After building, load a local package for one session:
+
+```bash
+pi -e ./plugins/webfetch
 ```
 
 ## License

@@ -1,18 +1,8 @@
 # `@pi-plugins/usage`
 
-A [pi-agent](https://github.com/earendil-works/pi) extension that surfaces
-subscription plan usage / rate limits via a `/usage` command and a compact
-status-line widget.
-
-Credentials are read from pi's auth store, so anything you have logged into with
-`/login` works out of the box — no extra configuration required:
-
-| Provider           | Endpoint                                                     | Credential                                      |
-| ------------------ | ------------------------------------------------------------ | ----------------------------------------------- |
-| Claude             | `GET https://api.anthropic.com/api/oauth/usage`              | `anthropic` OAuth token                         |
-| OpenAI Codex       | `GET https://chatgpt.com/backend-api/wham/usage`             | `openai-codex` OAuth token + ChatGPT account id |
-| GLM Coding         | `GET https://api.z.ai/api/monitor/usage/quota/limit`         | `zai` API key                                   |
-| GLM Coding (China) | `GET https://open.bigmodel.cn/api/monitor/usage/quota/limit` | `zai-coding-cn` API key                         |
+Check subscription usage and rate limits in
+[pi](https://github.com/earendil-works/pi) with a command and a compact status
+widget.
 
 ## Install
 
@@ -20,37 +10,41 @@ Credentials are read from pi's auth store, so anything you have logged into with
 pi install npm:@pi-plugins/usage
 ```
 
-For a one-off run without adding it to settings:
+To try it for one session without changing your settings:
 
 ```bash
 pi -e npm:@pi-plugins/usage
 ```
 
-For local development, load it straight from this directory:
-
-```bash
-pi -e ./plugins/usage
-```
-
 ## Usage
+
+Authenticate a supported provider in pi, then run:
 
 ```text
 /usage
 ```
 
-Prints one section per provider with a progress bar, percentage and reset countdown
-for each rate-limit window.
+The command shows provider sections with usage bars, percentages, and reset times
+where available. Missing credentials or failed requests appear as warnings.
 
-## Widget
+When the selected model belongs to a supported provider, a compact widget shows its
+limits above the editor.
 
-While the active model belongs to one of the providers above, the session and weekly
-rate limits are shown as small progress bars, each with the time left until it
-resets, on the shared status line above the editor.
+## Supported providers
+
+The plugin uses the credentials you have already configured in pi.
+
+| Provider           | Pi provider     | Authentication                      |
+| ------------------ | --------------- | ----------------------------------- |
+| Claude             | `anthropic`     | Subscription sign-in with `/login`. |
+| OpenAI Codex       | `openai-codex`  | Subscription sign-in with `/login`. |
+| GLM Coding         | `zai`           | API key.                            |
+| GLM Coding (China) | `zai-coding-cn` | API key.                            |
 
 ## Configuration
 
-Optional config file at `<agent-dir>/extensions/usage.json` (typically
-`~/.pi/agent/extensions/usage.json`):
+Optionally create `<agent-dir>/extensions/usage.json`, typically
+`~/.pi/agent/extensions/usage.json`. The defaults are:
 
 ```json
 {
@@ -58,4 +52,6 @@ Optional config file at `<agent-dir>/extensions/usage.json` (typically
 }
 ```
 
-- `showWidget`: show the rate-limit bars above the editor (default `true`).
+| Setting      | Description                                                                                     |
+| ------------ | ----------------------------------------------------------------------------------------------- |
+| `showWidget` | Show rate-limit bars above the editor. Set to `false` to hide them; `/usage` remains available. |

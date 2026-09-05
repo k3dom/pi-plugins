@@ -1,13 +1,7 @@
 # `@pi-plugins/subagent`
 
-A minimal subagent tool for [pi-agent](https://github.com/earendil-works/pi):
-delegate a task to a fresh, headless pi instance with an isolated context window.
-
-No agent presets, no orchestration modes — just a `subagent` tool that spawns another
-instance of the running pi harness (`pi --mode json -p`) and returns its final
-response. Child processes inherit the parent environment with
-`PI_CACHE_RETENTION=short`, so they keep pi's standard provider cache retention
-instead of inheriting a process-wide or OAuth-plugin extended setting.
+Delegate a self-contained task to a separate
+[pi](https://github.com/earendil-works/pi) session with its own context window.
 
 ## Install
 
@@ -15,31 +9,46 @@ instead of inheriting a process-wide or OAuth-plugin extended setting.
 pi install npm:@pi-plugins/subagent
 ```
 
-For a one-off run without adding it to settings:
+To try it for one session without changing your settings:
 
 ```bash
 pi -e npm:@pi-plugins/subagent
 ```
 
-For local development, load it straight from this directory:
+## Usage
 
-```bash
-pi -e ./plugins/subagent
+Ask pi to delegate a clearly scoped task with a concrete result:
+
+```text
+Use a subagent to review src/auth for correctness issues. Do not edit files.
+Return findings with file paths and line numbers.
 ```
 
-## Tool parameters
+Pi waits for the subagent to finish, then returns its final response. Each subagent
+starts without your conversation history, so give it a specific task and the context
+it needs.
 
-| Parameter     | Required | Description                                                            |
-| ------------- | -------- | ---------------------------------------------------------------------- |
-| `description` | yes      | A short (3-5 word) description of the task                             |
-| `prompt`      | yes      | The task for the agent to perform                                      |
-| `model`       | no       | Model override for this agent (passed to `pi --model`)                 |
-| `cwd`         | no       | Working directory for the agent process (defaults to the parent's cwd) |
+### Parameters
+
+| Parameter     | Type     | Required | Description                                                                                        |
+| ------------- | -------- | -------- | -------------------------------------------------------------------------------------------------- |
+| `description` | `string` | Yes      | A short task label of 3 to 5 words.                                                                |
+| `prompt`      | `string` | Yes      | The task, relevant context, whether edits are allowed, and the expected result.                    |
+| `model`       | `string` | No       | A model override. Defaults to the current model and thinking level.                                |
+| `cwd`         | `string` | No       | Working directory. Defaults to the current session's directory; relative paths resolve from there. |
 
 ## Sessions
 
-Children persist a session named after the call's `description`, so
-`pi --session <id>` opens what a subagent did. They live in
-`~/.pi/agent/sessions/subagents/`, outside any project directory, so they never
-appear in `pi -c` or `pi -r` — pi offers to fork them into the current directory
-instead. Nothing prunes them.
+To inspect delegated work, open the session ID shown in the tool result:
+
+```bash
+pi --session <id>
+```
+
+Subagent sessions are separate from your main session list. Pi offers to fork the
+selected session into your current directory when you open it.
+
+## Notes
+
+Subagents can edit the same files as your main session. Explicitly ask for a
+read-only task when you do not want changes.
