@@ -1,5 +1,11 @@
 # @pi-plugins/speed
 
+## 0.1.7
+
+### Patch Changes
+
+- 6715b48: Simplify speed estimates and fix timing, stale samples, and model switching.
+
 ## 0.1.6
 
 ### Patch Changes

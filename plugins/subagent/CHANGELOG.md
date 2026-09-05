@@ -1,5 +1,11 @@
 # @pi-plugins/subagent
 
+## 0.2.3
+
+### Patch Changes
+
+- e547137: Clarify when to delegate subtasks and that calls block until the subagent finishes.
+
 ## 0.2.2
 
 ### Patch Changes
