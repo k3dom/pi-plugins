@@ -18,8 +18,8 @@ cannot be inferred from the code itself. If unsure, it is not needed.
 ### Functions
 
 **Default to inlining logic.** Reading straight down and having logic be co-located
-beats jumping between definitions, so a function that exists only to name a few lines
-is a cost, not a cleanup.
+beats jumping between definitions. A function that is e.g. only used once or twice
+and exists only to name a few lines is a cost, not a cleanup.
 
 ## Vendored Repositories
 
