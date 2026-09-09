@@ -101,11 +101,17 @@ export default function subagent(pi: ExtensionAPI) {
       // `pi --tools read`) from being escaped through a child with default tools.
       const tools = pi.getActiveTools().filter((name) => name !== 'subagent')
 
+      // Beside pi's per-project `--<cwd>--` directories, so child sessions stay
+      // out of `pi -c` / `pi -r` but resolve by id from anywhere. A harness
+      // that archives a run points the variable at a directory it keeps.
+      const configured = process.env['PI_SUBAGENT_SESSION_DIR']
+      const sessionDir = configured
+        ? path.resolve(configured)
+        : path.join(getAgentDir(), 'sessions', 'subagents')
+
       const program = runSubagent({
         prompt: params.prompt,
-        // Beside pi's per-project `--<cwd>--` directories, so child sessions stay
-        // out of `pi -c` / `pi -r` but resolve by id from anywhere.
-        sessionDir: path.join(getAgentDir(), 'sessions', 'subagents'),
+        sessionDir,
         name: params.description,
         model,
         cwd,
