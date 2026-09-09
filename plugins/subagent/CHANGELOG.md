@@ -1,5 +1,13 @@
 # @pi-plugins/subagent
 
+## 0.3.0
+
+### Minor Changes
+
+- 22b4612: Honour `PI_SUBAGENT_SESSION_DIR` as the directory subagent sessions are written
+  to. Unset, they land in `sessions/subagents/` under pi's agent directory as
+  before.
+
 ## 0.2.3
 
 ### Patch Changes
