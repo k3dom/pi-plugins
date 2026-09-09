@@ -102,8 +102,7 @@ export default function subagent(pi: ExtensionAPI) {
       const tools = pi.getActiveTools().filter((name) => name !== 'subagent')
 
       // Beside pi's per-project `--<cwd>--` directories, so child sessions stay
-      // out of `pi -c` / `pi -r` but resolve by id from anywhere. A harness
-      // that archives a run points the variable at a directory it keeps.
+      // out of `pi -c` / `pi -r` but resolve by id from anywhere.
       const configured = process.env['PI_SUBAGENT_SESSION_DIR']
       const sessionDir = configured
         ? path.resolve(configured)
