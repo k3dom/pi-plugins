@@ -48,6 +48,14 @@ pi --session <id>
 Subagent sessions are separate from your main session list. Pi offers to fork the
 selected session into your current directory when you open it.
 
+They are written to `sessions/subagents/` under pi's agent directory. Set
+`PI_SUBAGENT_SESSION_DIR` to write them somewhere else, for example next to the
+parent session when a harness archives a run:
+
+```bash
+PI_SUBAGENT_SESSION_DIR=./run-1/subagents pi -p --session ./run-1/session.jsonl "..."
+```
+
 ## Notes
 
 Subagents can edit the same files as your main session. Explicitly ask for a
