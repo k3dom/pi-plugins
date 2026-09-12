@@ -1,5 +1,14 @@
 # @pi-plugins/usage
 
+## 0.6.0
+
+### Minor Changes
+
+- 3bfd320: Render the `/usage` report in the chat like pi's built-in `/session` output: a bold
+  heading, dim labels, and one section per provider instead of a dim notification.
+  The report is stored as a session entry, so it stays in the transcript and is
+  never sent to the model.
+
 ## 0.5.1
 
 ### Patch Changes
