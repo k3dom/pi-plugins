@@ -1,5 +1,12 @@
 # @pi-plugins/usage
 
+## 0.7.0
+
+### Minor Changes
+
+- 733c133: Show the account email in the Claude and OpenAI Codex section headings of the
+  `/usage` report, and the Claude plan tier (e.g. Max 5x, Max 20x, Pro).
+
 ## 0.6.0
 
 ### Minor Changes
