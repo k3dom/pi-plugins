@@ -26,8 +26,10 @@ Authenticate a supported provider in pi, then run:
 
 The command prints a report in the chat with one section per provider: usage bars,
 percentages, and reset times where available. Missing credentials or failed requests
-are shown inline in the provider's section. The report is kept in the session
-transcript and is not sent to the model.
+are shown inline in the provider's section. For Claude and OpenAI Codex, the section
+heading also shows the plan and the signed-in account's email, so it is easy to tell
+which account is active when switching between several. The report is kept in the
+session transcript and is not sent to the model.
 
 When the selected model belongs to a supported provider, a compact widget shows its
 limits above the editor.

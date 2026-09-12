@@ -1,11 +1,17 @@
 import type { Theme } from '@earendil-works/pi-coding-agent'
-import { Array } from 'effect'
-import type { ClaudeUsage, UnifiedLimit, UsageWindow } from './provider/anthropic'
+import { Array, Match } from 'effect'
+import type {
+  ClaudeAccountUsage,
+  UnifiedLimit,
+  UsageWindow,
+} from './provider/anthropic'
 import type { CodexUsage, RateLimitDetails } from './provider/openai'
 import { glmRateLimits, type GlmUsage, type QuotaLimit } from './provider/zai'
 import { codexResetsAt, formatDuration, parseResetsAt } from './reset'
 
 const BAR_WIDTH = 10
+// e.g. default_claude_max_5x, default_claude_max_20x, default_claude_pro
+const CLAUDE_PLAN_TIER = /^default_claude_(max|pro)(?:_(\d+x))?$/
 const numberFormat = new Intl.NumberFormat('en-US')
 
 export interface UsageRow {
@@ -110,7 +116,16 @@ function unifiedLimitLabel(limit: UnifiedLimit): string {
   }
 }
 
-export function claudeSection(usage: ClaudeUsage): UsageSection {
+function sectionTitle(
+  name: string,
+  plan: string | null | undefined,
+  email: string | null | undefined,
+): string {
+  const title = plan ? `${name} (${plan})` : name
+  return email ? `${title} — ${email}` : title
+}
+
+export function claudeSection({ usage, profile }: ClaudeAccountUsage): UsageSection {
   const rows: UsageRow[] = []
 
   const limits = usage.limits ?? []
@@ -173,7 +188,25 @@ export function claudeSection(usage: ClaudeUsage): UsageSection {
     }
   }
 
-  return { title: 'Claude', rows }
+  const plan = Match.value(profile).pipe(
+    Match.when(
+      {
+        organization: {
+          rate_limit_tier: (tier: string) => CLAUDE_PLAN_TIER.test(tier),
+        },
+      },
+      ({ organization }) => {
+        const [, kind, multiplier] =
+          organization.rate_limit_tier.match(CLAUDE_PLAN_TIER)!
+        const plan = kind === 'max' ? 'Max' : 'Pro'
+        return multiplier ? `${plan} ${multiplier}` : plan
+      },
+    ),
+    Match.when({ account: { has_claude_max: true } }, () => 'Max'),
+    Match.when({ account: { has_claude_pro: true } }, () => 'Pro'),
+    Match.orElse(() => undefined),
+  )
+  return { title: sectionTitle('Claude', plan, profile?.account?.email), rows }
 }
 
 function codexWindowName(seconds: number | null | undefined): string {
@@ -242,10 +275,10 @@ export function codexSection(usage: CodexUsage, now: Date): UsageSection {
     })
   }
 
-  const title = usage.plan_type
-    ? `OpenAI Codex (${usage.plan_type})`
-    : 'OpenAI Codex'
-  return { title, rows }
+  return {
+    title: sectionTitle('OpenAI Codex', usage.plan_type, usage.email),
+    rows,
+  }
 }
 
 function glmRow(label: string, limit: QuotaLimit): UsageRow {

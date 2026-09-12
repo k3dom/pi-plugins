@@ -33,6 +33,7 @@ export const AdditionalRateLimit = S.Struct({
 export type AdditionalRateLimit = typeof AdditionalRateLimit.Type
 
 export const CodexUsage = S.Struct({
+  email: S.optional(S.NullOr(S.String)),
   plan_type: S.optional(S.NullOr(S.String)),
   rate_limit: S.optional(S.NullOr(RateLimitDetails)),
   credits: S.optional(S.NullOr(CreditStatus)),

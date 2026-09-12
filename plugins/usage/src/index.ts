@@ -108,7 +108,7 @@ export default function usage(pi: ExtensionAPI): void {
     const program = Effect.gen(function* () {
       const service = yield* UsageService
       return provider === 'claude'
-        ? claudeWidgetLimits(yield* service.claude())
+        ? claudeWidgetLimits((yield* service.claude()).usage)
         : provider === 'codex'
           ? codexWidgetLimits(yield* service.codex(), new Date())
           : glmWidgetLimits(yield* service.glm(provider))
@@ -170,7 +170,7 @@ export default function usage(pi: ExtensionAPI): void {
                 .pipe(
                   Effect.tap((data) =>
                     Effect.sync(() =>
-                      recordLimits('claude', claudeWidgetLimits(data)),
+                      recordLimits('claude', claudeWidgetLimits(data.usage)),
                     ),
                   ),
                 ),

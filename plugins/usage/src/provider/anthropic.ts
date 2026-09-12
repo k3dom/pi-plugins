@@ -54,8 +54,39 @@ export const ClaudeUsage = S.Struct({
 })
 export type ClaudeUsage = typeof ClaudeUsage.Type
 
-export const ClaudeUsageApi = HttpApi.make('ClaudeUsage').add(
-  HttpApiGroup.make('oauth', { topLevel: true }).add(
-    HttpApiEndpoint.get('usage', '/api/oauth/usage', { success: ClaudeUsage }),
+export const ClaudeProfile = S.Struct({
+  account: S.optional(
+    S.NullOr(
+      S.Struct({
+        email: S.optional(S.NullOr(S.String)),
+        has_claude_max: S.optional(S.NullOr(S.Boolean)),
+        has_claude_pro: S.optional(S.NullOr(S.Boolean)),
+      }),
+    ),
   ),
+  organization: S.optional(
+    S.NullOr(
+      S.Struct({
+        name: S.optional(S.NullOr(S.String)),
+        organization_type: S.optional(S.NullOr(S.String)),
+        rate_limit_tier: S.optional(S.NullOr(S.String)),
+      }),
+    ),
+  ),
+})
+export type ClaudeProfile = typeof ClaudeProfile.Type
+
+export interface ClaudeAccountUsage {
+  readonly usage: ClaudeUsage
+  readonly profile: ClaudeProfile | undefined
+}
+
+export const ClaudeUsageApi = HttpApi.make('ClaudeUsage').add(
+  HttpApiGroup.make('oauth', { topLevel: true })
+    .add(HttpApiEndpoint.get('usage', '/api/oauth/usage', { success: ClaudeUsage }))
+    .add(
+      HttpApiEndpoint.get('profile', '/api/oauth/profile', {
+        success: ClaudeProfile,
+      }),
+    ),
 )

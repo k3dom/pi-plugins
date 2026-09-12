@@ -21,6 +21,7 @@ import { HttpApiClient } from 'effect/unstable/httpapi'
 import {
   ANTHROPIC_BASE_URL,
   ANTHROPIC_OAUTH_BETA,
+  type ClaudeAccountUsage,
   ClaudeUsageApi,
 } from './provider/anthropic'
 import { CHATGPT_BASE_URL, CodexUsageApi } from './provider/openai'
@@ -191,9 +192,20 @@ export class UsageService extends Context.Service<UsageService>()(
             ),
           ),
         })
-        return yield* client
-          .usage()
-          .pipe(Effect.timeout(REQUEST_TIMEOUT), Effect.mapError(requestFailed))
+        const [usage, profile] = yield* Effect.all(
+          [
+            client
+              .usage()
+              .pipe(Effect.timeout(REQUEST_TIMEOUT), Effect.mapError(requestFailed)),
+            // Only decorates the report, so it must never fail the usage fetch.
+            client.profile().pipe(
+              Effect.timeout(REQUEST_TIMEOUT),
+              Effect.orElseSucceed(() => undefined),
+            ),
+          ],
+          { concurrency: 'unbounded' },
+        )
+        return { usage, profile } satisfies ClaudeAccountUsage
       })
 
       const codex = Effect.fn('UsageService.codex')(function* () {
