@@ -1,17 +1,17 @@
+import type { Theme } from '@earendil-works/pi-coding-agent'
 import { Array } from 'effect'
 import type { ClaudeUsage, UnifiedLimit, UsageWindow } from './provider/anthropic'
 import type { CodexUsage, RateLimitDetails } from './provider/openai'
 import { glmRateLimits, type GlmUsage, type QuotaLimit } from './provider/zai'
 import { codexResetsAt, formatDuration, parseResetsAt } from './reset'
 
-const MIN_LABEL_WIDTH = 22
 const BAR_WIDTH = 10
 const numberFormat = new Intl.NumberFormat('en-US')
 
 export interface UsageRow {
   readonly label: string
   readonly percent?: number | null | undefined
-  readonly resetsAt?: Date | null | undefined
+  readonly resetsAt?: number | null | undefined
   readonly note?: string | undefined
 }
 
@@ -19,52 +19,62 @@ export type UsageSection =
   | { readonly title: string; readonly rows: readonly UsageRow[] }
   | { readonly title: string; readonly error: string }
 
-function formatRow(row: UsageRow, now: Date, labelWidth: number): string {
-  const parts = [`  ${row.label.padEnd(labelWidth)}`]
-
-  if (typeof row.percent === 'number') {
-    const clamped = Math.min(Math.max(row.percent, 0), 100)
-    const filled = Math.round((clamped / 100) * BAR_WIDTH)
-    parts.push(
-      `[${'█'.repeat(filled)}${'░'.repeat(BAR_WIDTH - filled)}]`,
-      `${Math.round(row.percent)}%`.padStart(4),
-    )
-  }
-
-  if (row.resetsAt) {
-    const delta = row.resetsAt.getTime() - now.getTime()
-    parts.push(delta > 0 ? `· resets in ${formatDuration(delta)}` : '· resets soon')
-  }
-
-  if (row.note) {
-    parts.push(parts.length > 1 ? `· ${row.note}` : row.note)
-  }
-
-  return parts.join(' ')
+export interface UsageReport {
+  readonly fetchedAt: number
+  readonly sections: readonly UsageSection[]
 }
 
-export function renderSections(
-  sections: readonly UsageSection[],
-  now: Date,
-): string[] {
-  const labelWidth = Math.max(
-    MIN_LABEL_WIDTH,
-    ...sections.flatMap((section) =>
-      'rows' in section ? section.rows.map((row) => row.label.length) : [],
-    ),
-  )
-  return sections.map((section) => {
+export function renderReport(report: UsageReport, theme: Theme): string {
+  const labelWidth =
+    Math.max(
+      0,
+      ...report.sections.flatMap((section) =>
+        'rows' in section ? section.rows.map((row) => row.label.length) : [],
+      ),
+    ) + 1
+
+  let info = `${theme.bold('Usage')}\n\n`
+  info += `${theme.fg('dim', 'Fetched:')} ${new Date(report.fetchedAt).toLocaleString()}\n`
+
+  for (const section of report.sections) {
+    info += `\n${theme.bold(section.title)}\n`
     if ('error' in section) {
-      return `${section.title}\n  ${section.error}`
+      info += `${theme.fg('warning', section.error)}\n`
+      continue
     }
     if (section.rows.length === 0) {
-      return `${section.title}\n  (no usage data reported)`
+      info += `${theme.fg('dim', 'No usage data reported')}\n`
+      continue
     }
-    return [
-      section.title,
-      ...section.rows.map((row) => formatRow(row, now, labelWidth)),
-    ].join('\n')
-  })
+    for (const row of section.rows) {
+      const details: string[] = []
+      if (row.resetsAt) {
+        const delta = row.resetsAt - report.fetchedAt
+        details.push(
+          delta > 0 ? `resets in ${formatDuration(delta)}` : 'resets soon',
+        )
+      }
+      if (row.note) {
+        details.push(row.note)
+      }
+
+      info += theme.fg('dim', `${row.label}:`.padEnd(labelWidth))
+      if (typeof row.percent === 'number') {
+        const clamped = Math.min(Math.max(row.percent, 0), 100)
+        const filled = Math.round((clamped / 100) * BAR_WIDTH)
+        info += ` [${'█'.repeat(filled)}${'░'.repeat(BAR_WIDTH - filled)}]`
+        info += `${Math.round(row.percent)}%`.padStart(5)
+        if (details.length > 0) {
+          info += ` ${theme.fg('dim', `(${details.join(', ')})`)}`
+        }
+      } else {
+        info += ` ${details.join(', ')}`
+      }
+      info += '\n'
+    }
+  }
+
+  return info.trimEnd()
 }
 
 function formatMinorAmount(
@@ -111,7 +121,7 @@ export function claudeSection(usage: ClaudeUsage): UsageSection {
       rows.push({
         label: unifiedLimitLabel(limit),
         percent: limit.percent,
-        resetsAt: parseResetsAt(limit.resets_at),
+        resetsAt: parseResetsAt(limit.resets_at)?.getTime(),
       })
     }
   } else {
@@ -126,7 +136,7 @@ export function claudeSection(usage: ClaudeUsage): UsageSection {
         rows.push({
           label,
           percent: window.utilization,
-          resetsAt: parseResetsAt(window.resets_at),
+          resetsAt: parseResetsAt(window.resets_at)?.getTime(),
         })
       }
     }
@@ -192,7 +202,7 @@ function codexWindowRows(
     rows.push({
       label: labelFor(codexWindowName(window.limit_window_seconds)),
       percent: window.used_percent,
-      resetsAt: codexResetsAt(window, now),
+      resetsAt: codexResetsAt(window, now)?.getTime(),
     })
   }
   return rows
@@ -248,7 +258,7 @@ function glmRow(label: string, limit: QuotaLimit): UsageRow {
   return {
     label,
     percent: limit.percentage,
-    resetsAt: limit.nextResetTime,
+    resetsAt: limit.nextResetTime?.getTime(),
     note:
       typeof limit.currentValue === 'number' &&
       typeof limit.usage === 'number' &&

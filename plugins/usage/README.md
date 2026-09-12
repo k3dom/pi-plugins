@@ -24,8 +24,10 @@ Authenticate a supported provider in pi, then run:
 /usage
 ```
 
-The command shows provider sections with usage bars, percentages, and reset times
-where available. Missing credentials or failed requests appear as warnings.
+The command prints a report in the chat with one section per provider: usage bars,
+percentages, and reset times where available. Missing credentials or failed requests
+are shown inline in the provider's section. The report is kept in the session
+transcript and is not sent to the model.
 
 When the selected model belongs to a supported provider, a compact widget shows its
 limits above the editor.

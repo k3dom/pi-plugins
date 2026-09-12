@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import { Text } from '@earendil-works/pi-tui'
 import { loadExtensionConfig } from '@pi-plugins/shared/config'
 import { runHandler } from '@pi-plugins/shared/run'
 import { setStatuslineSegment } from '@pi-plugins/shared/statusline'
@@ -8,7 +9,8 @@ import {
   claudeSection,
   codexSection,
   glmSection,
-  renderSections,
+  renderReport,
+  type UsageReport,
   type UsageSection,
 } from './render'
 import { UsageService, type UsageServiceError } from './service'
@@ -21,6 +23,7 @@ import {
 } from './widget'
 
 const EXTENSION_ID = 'usage'
+const REPORT_ENTRY_TYPE = 'usage-report'
 const WIDGET_REFRESH_MS = 30_000
 
 const UsageConfig = Schema.Struct({
@@ -140,6 +143,14 @@ export default function usage(pi: ExtensionAPI): void {
     await refreshWidget(ctx)
   })
 
+  pi.registerEntryRenderer<UsageReport>(
+    REPORT_ENTRY_TYPE,
+    (entry, _options, theme) =>
+      entry.data === undefined
+        ? undefined
+        : new Text(renderReport(entry.data, theme), 1, 0),
+  )
+
   pi.registerCommand('usage', {
     description: 'Show subscription plan usage and rate limits',
     handler: async (_args, ctx) => {
@@ -194,30 +205,17 @@ export default function usage(pi: ExtensionAPI): void {
           ],
           { concurrency: 'unbounded' },
         )
-        // The UI shows one message per severity, so sections are grouped by outcome.
-        const rendered = renderSections(sections, now)
-        const grouped = { info: [] as string[], warning: [] as string[] }
-        sections.forEach((usageSection, index) => {
-          grouped['error' in usageSection ? 'warning' : 'info'].push(
-            rendered[index] ?? '',
-          )
-        })
-        return (['info', 'warning'] as const)
-          .filter((severity) => grouped[severity].length > 0)
-          .map((severity) => ({
-            report: grouped[severity].join('\n\n'),
-            severity,
-          }))
+        return { fetchedAt: now.getTime(), sections } satisfies UsageReport
       }).pipe(Effect.provide(UsageService.layer(ctx.modelRegistry)))
 
-      const messages = await runHandler(program, {
+      const report = await runHandler(program, {
         onError: (message) => {
           ctx.ui.notify(`Failed to fetch usage: ${message}`, 'error')
-          return []
+          return undefined
         },
       })
-      for (const { report, severity } of messages) {
-        ctx.ui.notify(report, severity)
+      if (report !== undefined) {
+        pi.appendEntry(REPORT_ENTRY_TYPE, report)
       }
       renderWidget(ctx)
     },
