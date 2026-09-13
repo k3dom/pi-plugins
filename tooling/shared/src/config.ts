@@ -25,8 +25,13 @@ export const loadExtensionConfig = Effect.fnUntraced(
     runHandler(
       load.pipe(
         Effect.catchIf(
-          (error) =>
-            error._tag === 'PlatformError' && error.reason._tag === 'NotFound',
+          (error): error is PlatformError.PlatformError =>
+            typeof error === 'object' &&
+            error !== null &&
+            (((error as { _tag?: unknown })._tag === 'PlatformError' &&
+              (error as { reason?: { _tag?: unknown } }).reason?._tag ===
+                'NotFound') ||
+              (error as { _tag?: unknown })._tag === 'NotFound'),
           () => Effect.succeed(defaults),
         ),
         Effect.provide(NodeServices.layer),
