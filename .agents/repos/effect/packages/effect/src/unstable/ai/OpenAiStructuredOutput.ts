@@ -9,7 +9,7 @@
  *
  * @since 4.0.0
  */
-import * as JsonSchema from "../../JsonSchema.ts"
+import type * as JsonSchema from "../../JsonSchema.ts"
 import * as Rec from "../../Record.ts"
 import * as Schema from "../../Schema.ts"
 import * as InternalStructuredOutput from "./internal/structured-output.ts"
@@ -62,8 +62,11 @@ export function toCodecOpenAI<T, E, RD, RE>(
   jsonSchema: JsonSchema.JsonSchema
 } {
   const codec = InternalStructuredOutput.toCodec(schema)
-  const document = JsonSchema.resolveTopLevel$ref(
-    Schema.toJsonSchemaDocument(codec, { generateDescriptions: true })
+  const document = InternalStructuredOutput.resolveTopLevelReference(
+    Schema.toJsonSchemaDocument(codec, {
+      generateDescriptions: true,
+      onExcessProperty: "error"
+    })
   )
   const jsonSchema = rewriteOpenAI(document.schema)
   if (jsonSchema.type !== "object" || jsonSchema.anyOf !== undefined) {

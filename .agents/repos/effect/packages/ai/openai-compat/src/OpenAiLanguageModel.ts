@@ -572,13 +572,12 @@ export const model = (
 export const make = Effect.fnUntraced(function*({ model, config: providerConfig }: {
   readonly model: string
   readonly config?: ModelConfig | undefined
-}): Effect.fn.Return<LanguageModel.Service, never, OpenAiClient> {
+}): Effect.fn.Return<LanguageModel.LanguageModel, never, OpenAiClient> {
   const client = yield* OpenAiClient
 
-  const makeConfig = Effect.gen(function*() {
-    const services = yield* Effect.context<never>()
-    return { model, ...providerConfig, ...services.mapUnsafe.get(Config.key) }
-  })
+  const makeConfig = Effect.contextWith((services: Context.Context<never>) =>
+    Effect.succeed({ model, ...providerConfig, ...Context.getOrUndefined(services, Config) })
+  )
 
   const makeRequest = Effect.fnUntraced(
     function*<Tools extends ReadonlyArray<Tool.Any>>({ config, options, toolNameMapper }: {
@@ -788,15 +787,14 @@ const prepareMessages = Effect.fnUntraced(
 
                   if (typeof part.data === "string" && isFileId(part.data, config)) {
                     content.push({ type: "input_image", file_id: part.data, detail })
-                  }
-
-                  if (part.data instanceof URL) {
-                    content.push({ type: "input_image", image_url: part.data.toString(), detail })
-                  }
-
-                  if (part.data instanceof Uint8Array) {
-                    const base64 = Encoding.encodeBase64(part.data)
-                    const imageUrl = `data:${mediaType};base64,${base64}`
+                  } else {
+                    const imageUrl = part.data instanceof URL
+                      ? part.data.toString()
+                      : part.data instanceof Uint8Array
+                      ? `data:${mediaType};base64,${Encoding.encodeBase64(part.data)}`
+                      : /^(data:|https?:\/\/)/i.test(part.data)
+                      ? part.data
+                      : `data:${mediaType};base64,${part.data}`
                     content.push({ type: "input_image", image_url: imageUrl, detail })
                   }
                 } else if (part.mediaType === "application/pdf") {
@@ -1097,7 +1095,6 @@ const makeResponse = Effect.fnUntraced(
                 method: "makeResponse",
                 reason: new AiError.ToolParameterValidationError({
                   toolName,
-                  toolParams: {},
                   description: `Failed to securely JSON parse tool parameters: ${cause}`
                 })
               })
@@ -1190,7 +1187,6 @@ const makeStreamResponse = Effect.fnUntraced(
                   method: "makeStreamResponse",
                   reason: new AiError.ToolParameterValidationError({
                     toolName: toolCall.name,
-                    toolParams: {},
                     description: `Failed to securely JSON parse tool parameters: ${cause}`
                   })
                 })
@@ -1285,7 +1281,7 @@ const makeStreamResponse = Effect.fnUntraced(
           parts.push({ type: "text-delta", id: textId, delta: choice.delta.content })
         }
 
-        if (choice.delta?.tool_calls !== undefined) {
+        if (Predicate.isNotNullish(choice.delta?.tool_calls)) {
           hasToolCalls = hasToolCalls || choice.delta.tool_calls.length > 0
           choice.delta.tool_calls.forEach((deltaTool, indexInChunk) => {
             const toolIndex = deltaTool.index ?? indexInChunk
@@ -1450,21 +1446,16 @@ const transformToolCallParams = Effect.fnUntraced(function*<Tools extends Readon
   }
 
   const { codec } = yield* tryCodecTransform(tool.parametersSchema, "makeResponse")
-  const transform = Schema.decodeEffect(codec)
 
+  // Normalize valid parameters; leave invalid ones for Toolkit.
   return yield* (
-    transform(toolParams) as Effect.Effect<unknown, Schema.SchemaError>
-  ).pipe(Effect.mapError((error) =>
-    AiError.make({
-      module: "OpenAiLanguageModel",
-      method: "makeResponse",
-      reason: new AiError.ToolParameterValidationError({
-        toolName,
-        toolParams,
-        description: error.issue.toString()
-      })
-    })
-  ))
+    Schema.decodeEffect(codec)(toolParams) as Effect.Effect<unknown, Schema.SchemaError>
+  ).pipe(
+    Effect.flatMap((decoded) =>
+      Schema.encodeUnknownEffect(tool.parametersSchema)(decoded) as Effect.Effect<unknown, Schema.SchemaError>
+    ),
+    Effect.orElseSucceed(() => toolParams)
+  )
 })
 
 const prepareTools = Effect.fnUntraced(function*<Tools extends ReadonlyArray<Tool.Any>>({

@@ -11,6 +11,7 @@
  *
  * @since 4.0.0
  */
+import * as Arr from "./Array.ts"
 import * as DateTime from "./DateTime.ts"
 import * as Effect from "./Effect.ts"
 import * as Encoding from "./Encoding.ts"
@@ -56,12 +57,32 @@ import * as Str from "./String.ts"
  *
  * @see {@link transform} to create a getter from a pure function
  * @see {@link passthrough} for the identity getter
- * @see {@link transformOrFail} for fallible transformation
+ * @see {@link transformEffect} for effectful transformation
  *
  * @category models
  * @since 4.0.0
  */
-export class Getter<out T, in E, R = never> extends Pipeable.Class {
+export interface Getter<out T, in E, R = never> extends Pipeable.Pipeable {
+  readonly run: (
+    input: Option.Option<E>,
+    options: SchemaAST.ParseOptions
+  ) => Effect.Effect<Option.Option<T>, SchemaIssue.Issue, R>
+  map<T2>(f: (t: T) => T2): Getter<T2, E, R>
+  compose<T2, R2>(other: Getter<T2, T, R2>): Getter<T2, E, R | R2>
+}
+
+/**
+ * Constructs a composable schema getter.
+ *
+ * @category constructors
+ * @since 4.0.0
+ */
+export const Getter: new<T, E, R = never>(
+  run: (
+    input: Option.Option<E>,
+    options: SchemaAST.ParseOptions
+  ) => Effect.Effect<Option.Option<T>, SchemaIssue.Issue, R>
+) => Getter<T, E, R> = class<out T, in E, R = never> extends Pipeable.Class {
   readonly run: (
     input: Option.Option<E>,
     options: SchemaAST.ParseOptions
@@ -133,7 +154,8 @@ export function succeed<const T, E>(t: T): Getter<T, E> {
  * **Details**
  *
  * - Always fails with the `Issue` returned by `f`.
- * - The failure function receives the original `Option<E>` input for error context.
+ * - The failure function receives the original `Option<E>` input and the
+ *   effective `ParseOptions` for error context.
  *
  * **Example** (Defining an always-failing getter)
  *
@@ -153,8 +175,10 @@ export function succeed<const T, E>(t: T): Getter<T, E> {
  * @category constructors
  * @since 4.0.0
  */
-export function fail<T, E>(f: (oe: Option.Option<E>) => SchemaIssue.Issue): Getter<T, E> {
-  return new Getter((oe) => Effect.fail(f(oe)))
+export function fail<T, E>(
+  f: (oe: Option.Option<E>, options: SchemaAST.ParseOptions) => SchemaIssue.Issue
+): Getter<T, E> {
+  return new Getter((oe, options) => Effect.fail(f(oe, options)))
 }
 
 /**
@@ -189,8 +213,43 @@ export function fail<T, E>(f: (oe: Option.Option<E>) => SchemaIssue.Issue): Gett
  * @since 4.0.0
  */
 export function forbidden<T, E>(message: (oe: Option.Option<E>) => string): Getter<T, E> {
-  return fail<T, E>((oe) => new SchemaIssue.Forbidden({ message: message(oe) }))
+  return fail<T, E>((oe, options) => {
+    const annotations = { message: message(oe) }
+    return Option.isSome(oe)
+      ? new SchemaIssue.Forbidden(annotations, oe.value, options)
+      : new SchemaIssue.Forbidden(annotations)
+  })
 }
+
+/**
+ * Getter that always fails with a `Forbidden` issue indicating that encoding is unsupported.
+ *
+ * **When to use**
+ *
+ * Use as the encode side of a decode-only Schema transformation.
+ *
+ * **Details**
+ *
+ * Its `Getter<never, unknown>` type is assignable to every encoding getter because it accepts any input and never
+ * produces an output value.
+ *
+ * **Example** (Rejecting encoding)
+ *
+ * ```ts import.meta.vitest
+ * import { Effect, Option, SchemaGetter } from "effect"
+ *
+ * const issue = await Effect.runPromise(
+ *   Effect.flip(SchemaGetter.forbiddenEncoding.run(Option.some("value"), {}))
+ * )
+ * issue._tag // => "Forbidden"
+ * ```
+ *
+ * @see {@link forbidden} for a forbidden getter with a custom message
+ *
+ * @category constructors
+ * @since 4.0.0
+ */
+export const forbiddenEncoding: Getter<never, unknown> = forbidden(() => "Encoding is not supported")
 
 const passthrough_ = new Getter<any, any>(Effect.succeed)
 
@@ -408,7 +467,7 @@ export function required<T, E extends T = T>(annotations?: Schema.Annotations.Ke
  *
  * @see {@link onNone} to handle only absent values
  * @see {@link transform} for a simpler pure transformation of present values
- * @see {@link transformOrFail} for fallible transformation of present values
+ * @see {@link transformEffect} for effectful transformation of present values
  *
  * @category transforming
  * @since 4.0.0
@@ -465,7 +524,7 @@ export function checkEffect<T, R = never>(
 ): Getter<T, T, R> {
   return onSome((t, options) => {
     return f(t, options).pipe(Effect.flatMapEager((out) => {
-      const issue = SchemaIssue.makeSingle(out)
+      const issue = SchemaIssue.makeSingle(out, t, options)
       return issue ?
         Effect.fail(issue) :
         Effect.succeed(Option.some(t))
@@ -503,7 +562,7 @@ export function checkEffect<T, R = never>(
  * Schema.decodeSync(NumberFromString)("42") // => 42
  * ```
  *
- * @see {@link transformOrFail} when the transformation can fail
+ * @see {@link transformEffect} when the transformation returns an `Effect`
  * @see {@link transformOptional} when you need to handle `None` inputs
  * @see {@link passthrough} when no transformation is needed
  *
@@ -515,7 +574,7 @@ export function transform<T, E>(f: (e: E) => T): Getter<T, E> {
 }
 
 /**
- * Creates a getter that applies a fallible, effectful transformation to present values.
+ * Creates a getter that applies an effectful transformation to present values.
  *
  * **When to use**
  *
@@ -533,11 +592,11 @@ export function transform<T, E>(f: (e: E) => T): Getter<T, E> {
  * ```ts import.meta.vitest
  * import { Effect, Option, SchemaGetter, SchemaIssue } from "effect"
  *
- * const safeParseInt = SchemaGetter.transformOrFail<number, string>(
- *   (s) => {
+ * const safeParseInt = SchemaGetter.transformEffect<number, string>(
+ *   (s, options) => {
  *     const n = parseInt(s, 10)
  *     return isNaN(n)
- *       ? Effect.fail(new SchemaIssue.InvalidValue({ message: "not an integer" }))
+ *       ? Effect.fail(new SchemaIssue.InvalidValue({ message: "not an integer" }, s, options))
  *       : Effect.succeed(n)
  *   }
  * )
@@ -550,7 +609,7 @@ export function transform<T, E>(f: (e: E) => T): Getter<T, E> {
  * @category transforming
  * @since 4.0.0
  */
-export function transformOrFail<T, E, R = never>(
+export function transformEffect<T, E, R = never>(
   f: (e: E, options: SchemaAST.ParseOptions) => Effect.Effect<T, SchemaIssue.Issue, R>
 ): Getter<T, E, R> {
   return onSome((e, options) => f(e, options).pipe(Effect.mapEager(Option.some)))
@@ -712,7 +771,7 @@ export function String<E>(): Getter<string, E> {
  * await Effect.runPromise(toNumber.run(Option.some("42"), {})) // => Option.some(42)
  * ```
  *
- * @see {@link transformOrFail} for validated number parsing
+ * @see {@link transformEffect} for effectful or validated number parsing
  *
  * @category converting
  * @since 4.0.0
@@ -996,7 +1055,9 @@ type ParseJsonOptions = {
  * - Skips `None` inputs.
  * - Without `reviver`: returns `Schema.MutableJson` (typed JSON).
  * - With `reviver`: returns `unknown` (reviver may produce arbitrary values).
- * - On parse failure, fails with `SchemaIssue.InvalidValue` containing a static message.
+ * - On parse failure, fails with `SchemaIssue.InvalidValue` whose `expected`
+ *   annotation is `"a valid JSON string"`. Its default message includes the
+ *   reported input when `reportInput` is enabled.
  *
  * **Example** (Parsing JSON)
  *
@@ -1015,10 +1076,15 @@ type ParseJsonOptions = {
 export function parseJson<E extends string>(): Getter<Schema.MutableJson, E>
 export function parseJson<E extends string>(options: ParseJsonOptions): Getter<unknown, E>
 export function parseJson<E extends string>(options?: ParseJsonOptions | undefined): Getter<unknown, E> {
-  return onSome((input) =>
+  return onSome((input, parseOptions) =>
     Effect.try({
       try: () => Option.some(JSON.parse(input, options?.reviver)),
-      catch: () => new SchemaIssue.InvalidValue({ message: "Expected a valid JSON string" })
+      catch: () =>
+        new SchemaIssue.InvalidValue(
+          { expected: "a valid JSON string" },
+          input,
+          parseOptions
+        )
     })
   )
 }
@@ -1070,7 +1136,7 @@ type StringifyJsonOptions = {
  * @since 4.0.0
  */
 export function stringifyJson(options?: StringifyJsonOptions): Getter<string, unknown> {
-  return onSome((input) =>
+  return onSome((input, parseOptions) =>
     Effect.try({
       try: () => {
         const output = JSON.stringify(input, options?.replacer as any, options?.space)
@@ -1079,7 +1145,12 @@ export function stringifyJson(options?: StringifyJsonOptions): Getter<string, un
         }
         return Option.some(output)
       },
-      catch: () => new SchemaIssue.InvalidValue({ message: "Expected a JSON-serializable value" })
+      catch: () =>
+        new SchemaIssue.InvalidValue(
+          { expected: "a JSON-serializable value" },
+          input,
+          parseOptions
+        )
     })
   )
 }
@@ -1307,10 +1378,15 @@ export function encodeHex<E extends Uint8Array | string>(): Getter<string, E> {
  * @since 4.0.0
  */
 export function decodeBase64<E extends string>(): Getter<Uint8Array, E> {
-  return transformOrFail((input) =>
+  return transformEffect((input, options) =>
     Effect.mapErrorEager(
       Effect.fromResult(Encoding.decodeBase64(input)),
-      () => new SchemaIssue.InvalidValue({ message: "Expected a valid Base64 string" })
+      () =>
+        new SchemaIssue.InvalidValue(
+          { expected: "a valid Base64 string" },
+          input,
+          options
+        )
     )
   )
 }
@@ -1338,9 +1414,16 @@ export function decodeBase64<E extends string>(): Getter<Uint8Array, E> {
  * @since 4.0.0
  */
 export function decodeBase64String<E extends string>(): Getter<string, E> {
-  return transformOrFail((input) =>
+  return transformEffect((input, options) =>
     Result.match(Encoding.decodeBase64String(input), {
-      onFailure: () => Effect.fail(new SchemaIssue.InvalidValue({ message: "Expected a valid Base64 string" })),
+      onFailure: () =>
+        Effect.fail(
+          new SchemaIssue.InvalidValue(
+            { expected: "a valid Base64 string" },
+            input,
+            options
+          )
+        ),
       onSuccess: Effect.succeed
     })
   )
@@ -1370,9 +1453,16 @@ export function decodeBase64String<E extends string>(): Getter<string, E> {
  * @since 4.0.0
  */
 export function decodeBase64Url<E extends string>(): Getter<Uint8Array, E> {
-  return transformOrFail((input) =>
+  return transformEffect((input, options) =>
     Result.match(Encoding.decodeBase64Url(input), {
-      onFailure: () => Effect.fail(new SchemaIssue.InvalidValue({ message: "Expected a valid Base64Url string" })),
+      onFailure: () =>
+        Effect.fail(
+          new SchemaIssue.InvalidValue(
+            { expected: "a valid Base64Url string" },
+            input,
+            options
+          )
+        ),
       onSuccess: Effect.succeed
     })
   )
@@ -1401,9 +1491,16 @@ export function decodeBase64Url<E extends string>(): Getter<Uint8Array, E> {
  * @since 4.0.0
  */
 export function decodeBase64UrlString<E extends string>(): Getter<string, E> {
-  return transformOrFail((input) =>
+  return transformEffect((input, options) =>
     Result.match(Encoding.decodeBase64UrlString(input), {
-      onFailure: () => Effect.fail(new SchemaIssue.InvalidValue({ message: "Expected a valid Base64Url string" })),
+      onFailure: () =>
+        Effect.fail(
+          new SchemaIssue.InvalidValue(
+            { expected: "a valid Base64Url string" },
+            input,
+            options
+          )
+        ),
       onSuccess: Effect.succeed
     })
   )
@@ -1433,11 +1530,15 @@ export function decodeBase64UrlString<E extends string>(): Getter<string, E> {
  * @since 4.0.0
  */
 export function decodeHex<E extends string>(): Getter<Uint8Array, E> {
-  return transformOrFail((input) =>
+  return transformEffect((input, options) =>
     Result.match(Encoding.decodeHex(input), {
       onFailure: () =>
         Effect.fail(
-          new SchemaIssue.InvalidValue({ message: "Expected a valid hexadecimal string" })
+          new SchemaIssue.InvalidValue(
+            { expected: "a valid hexadecimal string" },
+            input,
+            options
+          )
         ),
       onSuccess: Effect.succeed
     })
@@ -1467,11 +1568,15 @@ export function decodeHex<E extends string>(): Getter<Uint8Array, E> {
  * @since 4.0.0
  */
 export function decodeHexString<E extends string>(): Getter<string, E> {
-  return transformOrFail((input) =>
+  return transformEffect((input, options) =>
     Result.match(Encoding.decodeHexString(input), {
       onFailure: () =>
         Effect.fail(
-          new SchemaIssue.InvalidValue({ message: "Expected a valid hexadecimal string" })
+          new SchemaIssue.InvalidValue(
+            { expected: "a valid hexadecimal string" },
+            input,
+            options
+          )
         ),
       onSuccess: Effect.succeed
     })
@@ -1527,14 +1632,16 @@ export function encodeUriComponent<E extends string>(): Getter<string, E> {
  * @since 4.0.0
  */
 export function decodeUriComponent<E extends string>(): Getter<string, E> {
-  return transformOrFail((input) => {
+  return transformEffect((input, options) => {
     try {
       return Effect.succeed(globalThis.decodeURIComponent(input))
     } catch {
       return Effect.fail(
-        new SchemaIssue.InvalidValue({
-          message: "Expected a valid URI component"
-        })
+        new SchemaIssue.InvalidValue(
+          { expected: "a valid URI component" },
+          input,
+          options
+        )
       )
     }
   })
@@ -1573,9 +1680,12 @@ export function decodeUriComponent<E extends string>(): Getter<string, E> {
  * @since 4.0.0
  */
 export function dateTimeUtcFromInput<E extends DateTime.DateTime.Input>(): Getter<DateTime.Utc, E> {
-  return transformOrFail((input) => {
+  return transformEffect((input, options) => {
     return Option.match(DateTime.make(input), {
-      onNone: () => Effect.fail(new SchemaIssue.InvalidValue({ message: "Invalid DateTime input" })),
+      onNone: () =>
+        Effect.fail(
+          new SchemaIssue.InvalidValue({ message: "Invalid DateTime input" }, input, options)
+        ),
       onSome: (dt) => Effect.succeed(DateTime.toUtc(dt))
     })
   })
@@ -1741,8 +1851,6 @@ export function encodeURLSearchParams(): Getter<URLSearchParams, unknown> {
   })
 }
 
-const INDEX_REGEXP = /^\d+$/
-
 function bracketPathToTokens(bracketPath: string): Array<string | number> {
   // real empty path (from append("", value))
   if (bracketPath === "") {
@@ -1756,7 +1864,7 @@ function bracketPathToTokens(bracketPath: string): Array<string | number> {
 
   return parts
     .slice(start)
-    .map((part) => (INDEX_REGEXP.test(part) ? globalThis.Number(part) : part))
+    .map((part) => (Arr.isCanonicalArrayIndex(part) ? globalThis.Number(part) : part))
 }
 
 /**
@@ -1780,6 +1888,8 @@ function bracketPathToTokens(bracketPath: string): Array<string | number> {
  *   - `"foo[0]"` → array index `{ foo: [value] }`
  *   - `"foo[]"` → append to array `foo`
  *   - `""` → real empty key
+ * - Numeric bracket segments become array indices only when they are valid
+ *   JavaScript array-index strings; otherwise they remain object keys.
  * - Duplicate keys for the same path are merged into arrays.
  * - If a structural path conflicts with a previous leaf or a different container
  *   type, the later structural path replaces the conflicting value.
@@ -1810,6 +1920,7 @@ export function makeTreeRecord<A>(
 ): Schema.TreeRecord<A> {
   const out: any = {}
   const containers = new WeakSet<object>()
+  const duplicates = new WeakSet<object>()
 
   function getOrCreateContainer(self: any, key: PropertyKey, shouldBeArray: boolean): any {
     const current = Object.hasOwn(self, key) ? self[key] : undefined
@@ -1843,10 +1954,12 @@ export function makeTreeRecord<A>(
         // If we're setting a value at a path that already exists
         // convert it to an array to support multiple values for the same key
         const hasOwn = Object.hasOwn(cur, token)
-        if (hasOwn && Array.isArray(cur[token])) {
+        if (hasOwn && Array.isArray(cur[token]) && (containers.has(cur[token]) || duplicates.has(cur[token]))) {
           cur[token].push(value)
         } else if (hasOwn) {
-          InternalRecord.assignProperty(cur, token, [cur[token], value])
+          const values = [cur[token], value]
+          duplicates.add(values)
+          InternalRecord.assignProperty(cur, token, values)
         } else {
           InternalRecord.assignProperty(cur, token, value)
         }

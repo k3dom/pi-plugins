@@ -144,6 +144,8 @@ const await_: <Success extends Schema.Constraint, Error extends Schema.Constrain
 >(self: DurableDeferred<Success, Error>) {
   const engine = yield* EngineTag
   const instance = yield* InstanceTag
+  // Register before the read so any later completion can preempt the run.
+  instance.awaitedDeferreds.add(self.name)
   const exit = yield* Workflow.wrapActivityResult(
     engine.deferredResult(self),
     Option.isNone
@@ -185,6 +187,8 @@ export const into: {
     | WorkflowInstance
     | Success["DecodingServices"]
     | Error["DecodingServices"]
+    | Success["EncodingServices"]
+    | Error["EncodingServices"]
   >
   <Success extends Schema.Constraint, Error extends Schema.Constraint, R>(
     effect: Effect.Effect<Success["Type"], Error["Type"], R>,
@@ -197,6 +201,8 @@ export const into: {
     | WorkflowInstance
     | Success["DecodingServices"]
     | Error["DecodingServices"]
+    | Success["EncodingServices"]
+    | Error["EncodingServices"]
   >
 } = dual(
   2,
@@ -211,6 +217,8 @@ export const into: {
     | WorkflowInstance
     | Success["DecodingServices"]
     | Error["DecodingServices"]
+    | Success["EncodingServices"]
+    | Error["EncodingServices"]
   > =>
     Effect.contextWith(
       (context: Context.Context<WorkflowEngine | WorkflowInstance>) => {
@@ -225,9 +233,12 @@ export const into: {
                 exit.cause.reasons,
                 Filter.fromPredicate(Cause.isInterruptReason)
               )
-              const hasInterruptsOnly = interrupts.length === exit.cause.reasons.length
-              if (hasInterruptsOnly && instance.suspended) {
-                parentInstance.suspended = true
+              if (interrupts.length === exit.cause.reasons.length) {
+                // An interrupt-only exit is never a result: the effect was
+                // suspended, preempted or interrupted, so record nothing.
+                if (instance.suspended) {
+                  parentInstance.suspended = true
+                }
                 return
               } else if (interrupts.length > 0) {
                 exit = Exit.failCause(Cause.fromReasons(reasons))

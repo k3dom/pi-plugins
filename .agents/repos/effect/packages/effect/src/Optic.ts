@@ -12,17 +12,17 @@
  * @since 4.0.0
  */
 
-import { format } from "./Formatter.ts"
-import { identity } from "./Function.ts"
+import * as Arr from "./Array.ts"
+import { dual, identity } from "./Function.ts"
 import * as InternalRecord from "./internal/record.ts"
 import * as Option from "./Option.ts"
 import * as Predicate from "./Predicate.ts"
 import * as Result from "./Result.ts"
 import type * as Schema from "./Schema.ts"
 import * as SchemaAST from "./SchemaAST.ts"
-import type * as SchemaIssue from "./SchemaIssue.ts"
+import * as SchemaIssue from "./SchemaIssue.ts"
 import * as Struct from "./Struct.ts"
-import type { IsUnion } from "./Types.ts"
+import type { IsUnion, NoInfer } from "./Types.ts"
 
 /**
  * A lossless, reversible conversion between types `S` and `A`.
@@ -192,7 +192,7 @@ export function makeLens<S, A>(get: (s: S) => A, replace: (a: A, s: S) => S): Le
  * **Details**
  *
  * - `getResult(s)` returns `Result.Success<A>` when the focus matches, or
- *   `Result.Failure<string>` with an error message.
+ *   `Result.Failure<SchemaIssue.Issue>` with a structured issue.
  * - `set(a)` always succeeds and returns a new `S`.
  * - Extends {@link Optional}.
  * - Composing two Prisms produces a Prism; composing a Prism with a
@@ -235,17 +235,20 @@ export interface Prism<in out S, in out A> extends Optional<S, A> {
  *
  * **Details**
  *
- * - `getResult` should return `Result.fail(message)` on mismatch.
+ * - `getResult` should return `Result.fail(issue)` on mismatch.
+ * - Issues are not formatted automatically; callers choose how to render them.
  *
  * **Example** (Parsing a string to a number)
  *
  * ```ts import.meta.vitest
- * import { Optic, Result } from "effect"
+ * import { Optic, Result, SchemaIssue } from "effect"
  *
  * const numeric = Optic.makePrism<string, number>(
  *   (s) => {
  *     const n = Number(s)
- *     return Number.isNaN(n) ? Result.fail("not a number") : Result.succeed(n)
+ *     return Number.isNaN(n)
+ *       ? Result.fail(new SchemaIssue.InvalidValue({ message: "not a number" }))
+ *       : Result.succeed(n)
  *   },
  *   String
  * )
@@ -261,7 +264,10 @@ export interface Prism<in out S, in out A> extends Optional<S, A> {
  * @category constructors
  * @since 4.0.0
  */
-export function makePrism<S, A>(getResult: (s: S) => Result.Result<A, string>, set: (a: A) => S): Prism<S, A> {
+export function makePrism<S, A>(
+  getResult: (s: S) => Result.Result<A, SchemaIssue.Issue>,
+  set: (a: A) => S
+): Prism<S, A> {
   return make(primitiveNode("Prism", getResult, set))
 }
 
@@ -276,7 +282,7 @@ export function makePrism<S, A>(getResult: (s: S) => Result.Result<A, string>, s
  *
  * **Details**
  *
- * - `getResult` runs all checks; fails with a combined error message when
+ * - `getResult` runs all checks and preserves their structured issues when
  *   any check fails.
  * - `set` is identity — the value passes through unchanged.
  *
@@ -366,12 +372,12 @@ class CheckNode<T> {
   readonly _tag = "CheckNode"
   readonly kind = "Prism"
   readonly checks: readonly [SchemaAST.Check<T>, ...Array<SchemaAST.Check<T>>]
-  readonly get: (s: T) => Result.Result<T, string>
+  readonly get: (s: T) => Result.Result<T, SchemaIssue.Issue>
   readonly set = identity
 
   constructor(checks: readonly [SchemaAST.Check<T>, ...Array<SchemaAST.Check<T>>]) {
     this.checks = checks
-    this.get = (s) => Result.mapError(SchemaAST.runChecks(checks, s), String)
+    this.get = (s) => SchemaAST.runChecks(checks, s)
   }
 }
 
@@ -407,9 +413,9 @@ type ForbidUnion<A, Message extends string> = IsUnion<A> extends true ? [Message
  *
  * **Details**
  *
- * - `getResult(s)` returns `Result.Success<A>` or `Result.Failure<string>`.
+ * - `getResult(s)` returns `Result.Success<A>` or `Result.Failure<SchemaIssue.Issue>`.
  * - `replaceResult(a, s)` returns `Result.Success<S>` or
- *   `Result.Failure<string>`.
+ *   `Result.Failure<SchemaIssue.Issue>`.
  * - `replace(a, s)` returns the original `s` on failure (never throws).
  * - `modify(f)` returns the original `s` on failure (never throws).
  * - All operations are pure; inputs are never mutated.
@@ -441,9 +447,9 @@ export interface Optional<in out S, in out A> {
   /**
    * Attempts to read the focus `A` from the whole `S`. Returns
    * `Result.Success<A>` when the focus exists, or
-   * `Result.Failure<string>` with a descriptive error otherwise.
+   * `Result.Failure<SchemaIssue.Issue>` with a structured issue otherwise.
    */
-  readonly getResult: (s: S) => Result.Result<A, string>
+  readonly getResult: (s: S) => Result.Result<A, SchemaIssue.Issue>
   /**
    * Replaces the focus in `S` with a new `A`. Returns the original `s`
    * unchanged when the optic cannot focus (never throws).
@@ -453,7 +459,7 @@ export interface Optional<in out S, in out A> {
    * Like {@link replace}, but returns an explicit `Result` so callers can
    * detect and handle failure.
    */
-  readonly replaceResult: (a: A, s: S) => Result.Result<S, string>
+  readonly replaceResult: (a: A, s: S) => Result.Result<S, SchemaIssue.Issue>
   /**
    * Composes this optic with another. The result type is the weakest of
    * the two: Iso + Iso = Iso, Lens + Prism = Optional, etc.
@@ -635,6 +641,8 @@ export interface Optional<in out S, in out A> {
    * - On a {@link Prism}, returns a Prism.
    * - On an {@link Optional}, returns an Optional.
    * - Shorthand for `.refine(s => s._tag === tag)`.
+   * - A non-matching value fails with {@link SchemaIssue.InvalidValue} whose
+   *   `expected` annotation is `"<tag> tag"`.
    *
    * **Example** (Focusing a tagged variant)
    *
@@ -674,6 +682,9 @@ export interface Optional<in out S, in out A> {
    *
    * - Always returns an {@link Optional}.
    * - Does **not** work on union types (compile error).
+   * - A missing key fails with a {@link SchemaIssue.Pointer} at that key whose
+   *   inner issue is {@link SchemaIssue.MissingKey}, for both `getResult` and
+   *   `replaceResult`.
    *
    * **Example** (Accessing records safely)
    *
@@ -800,7 +811,9 @@ export interface Optional<in out S, in out A> {
    *   element. Non-focusable elements are skipped.
    * - **replaceResult** expects exactly as many values as were collected by
    *   `getResult` and writes them back in order. Fails with a
-   *   length-mismatch error if counts differ.
+   *   {@link SchemaIssue.InvalidValue} if counts differ. If an inner replacement
+   *   fails, its issue is wrapped in a {@link SchemaIssue.Pointer} at the element
+   *   index.
    *
    * **Example** (Incrementing liked posts)
    *
@@ -871,26 +884,29 @@ export interface Optional<in out S, in out A> {
  *
  * **Details**
  *
- * - `getResult` should return `Result.fail(message)` on mismatch.
- * - `set` should return `Result.fail(message)` when the update cannot be
+ * - `getResult` should return `Result.fail(issue)` on mismatch.
+ * - `set` should return `Result.fail(issue)` when the update cannot be
  *   applied.
+ * - Issues are not formatted automatically; callers choose how to render them.
  *
  * **Example** (Accessing record keys safely)
  *
  * ```ts import.meta.vitest
- * import { Optic, Result } from "effect"
+ * import { Optic, Result, SchemaIssue } from "effect"
  *
- * const atKey = (key: string) =>
- *   Optic.makeOptional<Record<string, number>, number>(
+ * const atKey = (key: string) => {
+ *   const issue = new SchemaIssue.Pointer([key], new SchemaIssue.MissingKey(undefined))
+ *   return Optic.makeOptional<Record<string, number>, number>(
  *     (s) =>
  *       Object.hasOwn(s, key)
  *         ? Result.succeed(s[key])
- *         : Result.fail(`Key "${key}" not found`),
+ *         : Result.fail(issue),
  *     (a, s) =>
  *       Object.hasOwn(s, key)
  *         ? Result.succeed({ ...s, [key]: a })
- *         : Result.fail(`Key "${key}" not found`)
+ *         : Result.fail(issue)
  *   )
+ * }
  *
  * atKey("x").getResult({ x: 1 }) // => Result.succeed(1)
  * ```
@@ -903,8 +919,8 @@ export interface Optional<in out S, in out A> {
  * @since 4.0.0
  */
 export function makeOptional<S, A>(
-  getResult: (s: S) => Result.Result<A, string>,
-  set: (a: A, s: S) => Result.Result<S, string>
+  getResult: (s: S) => Result.Result<A, SchemaIssue.Issue>,
+  set: (a: A, s: S) => Result.Result<S, SchemaIssue.Issue>
 ): Optional<S, A> {
   return make(primitiveNode("Optional", getResult, set))
 }
@@ -953,12 +969,12 @@ export interface Traversal<in out S, in out A> extends Optional<S, ReadonlyArray
 class OptionalImpl<S, A> implements Optional<S, A> {
   /** @internal */
   readonly node: Node
-  readonly getResult: (s: S) => Result.Result<A, string>
-  readonly replaceResult: (a: A, s: S) => Result.Result<S, string>
+  readonly getResult: (s: S) => Result.Result<A, SchemaIssue.Issue>
+  readonly replaceResult: (a: A, s: S) => Result.Result<S, SchemaIssue.Issue>
   constructor(
     node: Node,
-    getResult: (s: S) => Result.Result<A, string>,
-    replaceResult: (a: A, s: S) => Result.Result<S, string>
+    getResult: (s: S) => Result.Result<A, SchemaIssue.Issue>,
+    replaceResult: (a: A, s: S) => Result.Result<S, SchemaIssue.Issue>
   ) {
     this.node = node
     this.getResult = getResult
@@ -986,8 +1002,11 @@ class OptionalImpl<S, A> implements Optional<S, A> {
           (a, s) => {
             const copy = cloneShallow(s)
             if (a === undefined) {
-              if (Array.isArray(copy) && typeof key === "number") {
-                copy.splice(key, 1)
+              if (
+                Array.isArray(copy) &&
+                (typeof key === "number" || (typeof key === "string" && Arr.isCanonicalArrayIndex(key)))
+              ) {
+                copy.splice(Number(key), 1)
               } else {
                 delete copy[key]
               }
@@ -1007,22 +1026,22 @@ class OptionalImpl<S, A> implements Optional<S, A> {
     return make(compose(this.node, [new CheckNode([SchemaAST.makeFilterByGuard(refinement, annotations)])]))
   }
   tag(tag: string): any {
+    const err = Result.fail(new SchemaIssue.InvalidValue({ expected: `${JSON.stringify(tag)} tag` }))
     return make(
       compose(
         this.node,
         primitiveNode(
           "Prism",
-          (s) =>
-            s._tag === tag
-              ? Result.succeed(s)
-              : Result.fail(`Expected ${format(tag)} tag, got ${format(s._tag)}`),
+          (s) => s._tag === tag ? Result.succeed(s) : err,
           identity
         )
       )
     )
   }
   at(key: PropertyKey, ..._rest: Array<any>): any {
-    const err = Result.fail(`Key ${format(key)} not found`)
+    const err = Result.fail(
+      new SchemaIssue.Pointer([key], new SchemaIssue.MissingKey(undefined))
+    )
     return make(
       compose(
         this.node,
@@ -1043,10 +1062,10 @@ class OptionalImpl<S, A> implements Optional<S, A> {
     )
   }
   pick(keys: any) {
-    return this.compose(makeLens(Struct.pick(keys), (p, a) => ({ ...a, ...p })))
+    return this.compose(makeLens(Struct.pick(keys), (p, a) => ({ ...Struct.omit(a, keys), ...p })))
   }
   omit(keys: any) {
-    return this.compose(makeLens(Struct.omit(keys), (o, a) => ({ ...a, ...o })))
+    return this.compose(makeLens(Struct.omit(keys), (o, a) => ({ ...Struct.pick(a, keys), ...o })))
   }
   notUndefined(): any {
     return this.refine(Predicate.isNotUndefined, { expected: "a value other than `undefined`" })
@@ -1076,7 +1095,9 @@ class OptionalImpl<S, A> implements Optional<S, A> {
           // 2) arity check
           if (bs.length !== idxs.length) {
             return Result.fail(
-              `each: replacement length mismatch: ${bs.length} !== ${idxs.length}`
+              new SchemaIssue.InvalidValue({
+                message: `each: replacement length mismatch: ${bs.length} !== ${idxs.length}`
+              })
             )
           }
 
@@ -1086,7 +1107,7 @@ class OptionalImpl<S, A> implements Optional<S, A> {
             const i = idxs[k]
             const r = inner.replaceResult(bs[k], as[i])
             if (Result.isFailure(r)) {
-              return Result.fail(`each: could not set element ${i}`)
+              return Result.fail(new SchemaIssue.Pointer([i], r.failure))
             }
             out[i] = r.success
           }
@@ -1133,7 +1154,7 @@ class LensImpl<S, A> extends OptionalImpl<S, A> implements Lens<S, A> {
 
 class PrismImpl<S, A> extends OptionalImpl<S, A> implements Prism<S, A> {
   readonly set: (a: A) => S
-  constructor(node: Node, getResult: (s: S) => Result.Result<A, string>, set: (a: A) => S) {
+  constructor(node: Node, getResult: (s: S) => Result.Result<A, SchemaIssue.Issue>, set: (a: A) => S) {
     super(node, getResult, (a, _) => Result.succeed(set(a)))
     this.set = set
   }
@@ -1258,8 +1279,180 @@ function composeKind(a: Kind, b: Kind): Kind {
 // ---------------------------------------------
 
 /**
- * Returns a function that extracts all elements focused by a
- * {@link Traversal} as a plain mutable array.
+ * Reads the focused value from a `Lens`.
+ *
+ * **When to use**
+ *
+ * Use when the optic always focuses exactly one value.
+ *
+ * **Details**
+ *
+ * Supports both data-first and data-last forms.
+ *
+ * @see {@link getResult} for optics whose focus may be absent
+ *
+ * @category getters
+ * @since 4.0.0
+ */
+export const get: {
+  <S, A>(optic: Lens<S, A>): (self: NoInfer<S>) => A
+  <S, A>(self: NoInfer<S>, optic: Lens<S, A>): A
+} = dual<
+  <S, A>(optic: Lens<S, A>) => (self: NoInfer<S>) => A,
+  <S, A>(self: NoInfer<S>, optic: Lens<S, A>) => A
+>(2, (self, optic) => optic.get(self))
+
+/**
+ * Attempts to read the focused value from an `Optional`.
+ *
+ * **When to use**
+ *
+ * Use when the optic may not focus and you need the failure as a `Result`.
+ *
+ * **Details**
+ *
+ * Supports both data-first and data-last forms.
+ *
+ * @see {@link get} for optics that always focus
+ *
+ * @category getters
+ * @since 4.0.0
+ */
+export const getResult: {
+  <S, A>(optic: Optional<S, A>): (self: NoInfer<S>) => Result.Result<A, SchemaIssue.Issue>
+  <S, A>(self: NoInfer<S>, optic: Optional<S, A>): Result.Result<A, SchemaIssue.Issue>
+} = dual<
+  <S, A>(optic: Optional<S, A>) => (self: NoInfer<S>) => Result.Result<A, SchemaIssue.Issue>,
+  <S, A>(self: NoInfer<S>, optic: Optional<S, A>) => Result.Result<A, SchemaIssue.Issue>
+>(2, (self, optic) => optic.getResult(self))
+
+/**
+ * Builds a source value from a focused value using a `Prism`.
+ *
+ * **When to use**
+ *
+ * Use when the optic can construct the source without an existing source value.
+ *
+ * **Details**
+ *
+ * Supports both data-first and data-last forms. The focused value is `self`.
+ *
+ * @see {@link replace} for updates that use an existing source
+ *
+ * @category transforming
+ * @since 4.0.0
+ */
+export const set: {
+  <S, A>(optic: Prism<S, A>): (self: NoInfer<A>) => S
+  <S, A>(self: NoInfer<A>, optic: Prism<S, A>): S
+} = dual<
+  <S, A>(optic: Prism<S, A>) => (self: NoInfer<A>) => S,
+  <S, A>(self: NoInfer<A>, optic: Prism<S, A>) => S
+>(2, (self, optic) => optic.set(self))
+
+/**
+ * Replaces the focused value in a source.
+ *
+ * **When to use**
+ *
+ * Use when a failed focus should leave the source unchanged.
+ *
+ * **Details**
+ *
+ * Supports both data-first and data-last forms.
+ *
+ * @see {@link replaceResult} for an explicit replacement failure
+ *
+ * @category transforming
+ * @since 4.0.0
+ */
+export const replace: {
+  <S, A>(optic: Optional<S, A>, value: NoInfer<A>): (self: NoInfer<S>) => S
+  <S, A>(self: NoInfer<S>, optic: Optional<S, A>, value: NoInfer<A>): S
+} = dual<
+  <S, A>(optic: Optional<S, A>, value: NoInfer<A>) => (self: NoInfer<S>) => S,
+  <S, A>(self: NoInfer<S>, optic: Optional<S, A>, value: NoInfer<A>) => S
+>(3, (self, optic, value) => optic.replace(value, self))
+
+/**
+ * Attempts to replace the focused value in a source.
+ *
+ * **When to use**
+ *
+ * Use when you need an explicit `Result` for a replacement failure.
+ *
+ * **Details**
+ *
+ * Supports both data-first and data-last forms.
+ *
+ * @see {@link replace} for returning the original source on failure
+ *
+ * @category transforming
+ * @since 4.0.0
+ */
+export const replaceResult: {
+  <S, A>(
+    optic: Optional<S, A>,
+    value: NoInfer<A>
+  ): (self: NoInfer<S>) => Result.Result<S, SchemaIssue.Issue>
+  <S, A>(
+    self: NoInfer<S>,
+    optic: Optional<S, A>,
+    value: NoInfer<A>
+  ): Result.Result<S, SchemaIssue.Issue>
+} = dual<
+  <S, A>(
+    optic: Optional<S, A>,
+    value: NoInfer<A>
+  ) => (self: NoInfer<S>) => Result.Result<S, SchemaIssue.Issue>,
+  <S, A>(
+    self: NoInfer<S>,
+    optic: Optional<S, A>,
+    value: NoInfer<A>
+  ) => Result.Result<S, SchemaIssue.Issue>
+>(3, (self, optic, value) => optic.replaceResult(value, self))
+
+/**
+ * Transforms the focused value in a source.
+ *
+ * **When to use**
+ *
+ * Use when you want to update a focus with a function.
+ *
+ * **Details**
+ *
+ * Supports both data-first and data-last forms. A failed focus leaves the
+ * source unchanged.
+ *
+ * @see {@link modifyAll} for transforming every value in a traversal
+ *
+ * @category transforming
+ * @since 4.0.0
+ */
+export const modify: {
+  <S, A>(
+    optic: Optional<S, A>,
+    f: (value: NoInfer<A>) => NoInfer<A>
+  ): (self: NoInfer<S>) => S
+  <S, A>(
+    self: NoInfer<S>,
+    optic: Optional<S, A>,
+    f: (value: NoInfer<A>) => NoInfer<A>
+  ): S
+} = dual<
+  <S, A>(
+    optic: Optional<S, A>,
+    f: (value: NoInfer<A>) => NoInfer<A>
+  ) => (self: NoInfer<S>) => S,
+  <S, A>(
+    self: NoInfer<S>,
+    optic: Optional<S, A>,
+    f: (value: NoInfer<A>) => NoInfer<A>
+  ) => S
+>(3, (self, optic, f) => optic.modify(f)(self))
+
+/**
+ * Extracts all values focused by a `Traversal` as a plain mutable array.
  *
  * **When to use**
  *
@@ -1270,6 +1463,7 @@ function composeKind(a: Kind, b: Kind): Kind {
  *
  * - Returns an empty array when the traversal cannot focus.
  * - Always returns a fresh array (safe to mutate).
+ * - Supports both data-first and data-last forms.
  *
  * **Example** (Collecting positive numbers)
  *
@@ -1294,13 +1488,57 @@ function composeKind(a: Kind, b: Kind): Kind {
  * @category getters
  * @since 4.0.0
  */
-export function getAll<S, A>(traversal: Traversal<S, A>): (s: S) => Array<A> {
-  return (s) =>
-    Result.match(traversal.getResult(s), {
-      onFailure: () => [],
-      onSuccess: (as) => [...as]
-    })
-}
+export const getAll: {
+  <S, A>(traversal: Traversal<S, A>): (self: NoInfer<S>) => Array<A>
+  <S, A>(self: NoInfer<S>, traversal: Traversal<S, A>): Array<A>
+} = dual<
+  <S, A>(traversal: Traversal<S, A>) => (self: NoInfer<S>) => Array<A>,
+  <S, A>(self: NoInfer<S>, traversal: Traversal<S, A>) => Array<A>
+>(2, (self, traversal) =>
+  Result.match(traversal.getResult(self), {
+    onFailure: () => [],
+    onSuccess: (as) => [...as]
+  }))
+
+/**
+ * Transforms every value focused by a `Traversal`.
+ *
+ * **When to use**
+ *
+ * Use when you want to update each value selected by a traversal.
+ *
+ * **Details**
+ *
+ * Supports both data-first and data-last forms. A failed traversal leaves the
+ * source unchanged.
+ *
+ * @see {@link modify} for transforming the focus as a whole
+ * @see {@link getAll} for reading every focused value
+ *
+ * @category transforming
+ * @since 4.0.0
+ */
+export const modifyAll: {
+  <S, A>(
+    traversal: Traversal<S, A>,
+    f: (value: NoInfer<A>) => NoInfer<A>
+  ): (self: NoInfer<S>) => S
+  <S, A>(
+    self: NoInfer<S>,
+    traversal: Traversal<S, A>,
+    f: (value: NoInfer<A>) => NoInfer<A>
+  ): S
+} = dual<
+  <S, A>(
+    traversal: Traversal<S, A>,
+    f: (value: NoInfer<A>) => NoInfer<A>
+  ) => (self: NoInfer<S>) => S,
+  <S, A>(
+    self: NoInfer<S>,
+    traversal: Traversal<S, A>,
+    f: (value: NoInfer<A>) => NoInfer<A>
+  ) => S
+>(3, (self, traversal, f) => traversal.modifyAll(f)(self))
 
 // ---------------------------------------------
 // Built-in Optics
@@ -1390,7 +1628,7 @@ export function entries<A>(): Iso<Record<string, A>, ReadonlyArray<readonly [str
  *
  * **Details**
  *
- * - `getResult` fails with an error message when the option is `None`.
+ * - `getResult` fails with a structured issue when the option is `None`.
  * - `set(a)` wraps `a` in `Option.some(a)`.
  *
  * **Example** (Accessing Some value)
@@ -1416,11 +1654,7 @@ export function entries<A>(): Iso<Record<string, A>, ReadonlyArray<readonly [str
 export function some<A>(): Prism<Option.Option<A>, A> {
   const run = runRefinement(Option.isSome, { expected: "a Some value" })
   return makePrism(
-    (s) =>
-      Result.mapBoth(run(s), {
-        onFailure: String,
-        onSuccess: (s) => s.value
-      }),
+    (s) => Result.map(run(s), (s) => s.value),
     Option.some
   )
 }
@@ -1459,11 +1693,7 @@ export function some<A>(): Prism<Option.Option<A>, A> {
 export function none<A>(): Prism<Option.Option<A>, undefined> {
   const run = runRefinement(Option.isNone, { expected: "a None value" })
   return makePrism(
-    (s) =>
-      Result.mapBoth(run(s), {
-        onFailure: String,
-        onSuccess: () => undefined
-      }),
+    (s) => Result.map(run(s), () => undefined),
     () => Option.none()
   )
 }
@@ -1502,11 +1732,7 @@ export function none<A>(): Prism<Option.Option<A>, undefined> {
 export function success<A, E>(): Prism<Result.Result<A, E>, A> {
   const run = runRefinement(Result.isSuccess, { expected: "a Result.Success value" })
   return makePrism(
-    (s) =>
-      Result.mapBoth(run(s), {
-        onFailure: String,
-        onSuccess: (s) => s.success
-      }),
+    (s) => Result.map(run(s), (s) => s.success),
     Result.succeed
   )
 }
@@ -1545,11 +1771,7 @@ export function success<A, E>(): Prism<Result.Result<A, E>, A> {
 export function failure<A, E>(): Prism<Result.Result<A, E>, E> {
   const run = runRefinement(Result.isFailure, { expected: "a Result.Failure value" })
   return makePrism(
-    (s) =>
-      Result.mapBoth(run(s), {
-        onFailure: String,
-        onSuccess: (s) => s.failure
-      }),
+    (s) => Result.map(run(s), (s) => s.failure),
     Result.fail
   )
 }

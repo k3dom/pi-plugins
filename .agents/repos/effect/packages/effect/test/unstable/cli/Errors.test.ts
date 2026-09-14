@@ -1,6 +1,6 @@
 // @effect-diagnostics floatingEffect:skip-file
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, FileSystem, Layer, Path, Stdio } from "effect"
+import { Effect, FileSystem, Layer, Path, Runtime, Stdio } from "effect"
 import { Argument, CliError, CliOutput, Command, Flag } from "effect/unstable/cli"
 import { toImpl } from "effect/unstable/cli/internal/command"
 import * as Lexer from "effect/unstable/cli/internal/lexer"
@@ -25,11 +25,20 @@ const TestLayer = Layer.mergeAll(
 )
 
 describe("Command errors", () => {
+  it("uses the UnknownSubcommand class name as its runtime tag", () => {
+    const error = new CliError.UnknownSubcommand({
+      subcommand: "deplyo",
+      suggestions: ["deploy"]
+    })
+
+    assert.strictEqual(error._tag as string, "UnknownSubcommand")
+  })
+
   describe("parse", () => {
     it.effect("fails with MissingOption when a required flag is absent", () =>
       Effect.gen(function*() {
         const command = Command.make("needs-value", {
-          value: Flag.string("value")
+          value: Flag.String("value")
         })
 
         const parsedInput = yield* Parser.parseArgs(Lexer.lex([]), command)
@@ -41,12 +50,12 @@ describe("Command errors", () => {
     it("throws DuplicateOption when shared parent and child flags reuse a name", () => {
       const parent = Command.make("parent").pipe(
         Command.withSharedFlags({
-          shared: Flag.string("shared")
+          shared: Flag.String("shared")
         })
       )
 
       const child = Command.make("child", {
-        shared: Flag.string("shared")
+        shared: Flag.String("shared")
       })
 
       try {
@@ -63,11 +72,11 @@ describe("Command errors", () => {
 
     it("allows parent local flags to reuse child flag names", () => {
       const parent = Command.make("parent", {
-        shared: Flag.string("shared")
+        shared: Flag.String("shared")
       })
 
       const child = Command.make("child", {
-        shared: Flag.string("shared")
+        shared: Flag.String("shared")
       })
 
       try {
@@ -80,7 +89,7 @@ describe("Command errors", () => {
     it.effect("accumulates multiple UnrecognizedOption errors", () =>
       Effect.gen(function*() {
         const command = Command.make("test", {
-          verbose: Flag.boolean("verbose")
+          verbose: Flag.Boolean("verbose")
         })
 
         const parsedInput = yield* Parser.parseArgs(
@@ -118,7 +127,7 @@ describe("Command errors", () => {
     it.effect("fails with UnexpectedArgument when a bounded variadic leaves operands", () =>
       Effect.gen(function*() {
         const command = Command.make("test", {
-          values: Argument.string("value").pipe(Argument.variadic({ max: 2 }))
+          values: Argument.String("value").pipe(Argument.variadic({ max: 2 }))
         })
 
         const parsedInput = yield* Parser.parseArgs(
@@ -134,8 +143,8 @@ describe("Command errors", () => {
     it.effect("allows a bounded variadic to leave an operand for a following argument", () =>
       Effect.gen(function*() {
         const command = Command.make("test", {
-          values: Argument.string("value").pipe(Argument.variadic({ max: 2 })),
-          destination: Argument.string("destination")
+          values: Argument.String("value").pipe(Argument.variadic({ max: 2 })),
+          destination: Argument.String("destination")
         })
 
         const parsedInput = yield* Parser.parseArgs(
@@ -153,7 +162,7 @@ describe("Command errors", () => {
     it.effect("fails with UnexpectedArgument when a fixed argument leaves operands", () =>
       Effect.gen(function*() {
         const command = Command.make("test", {
-          value: Argument.string("value")
+          value: Argument.String("value")
         })
 
         const parsedInput = yield* Parser.parseArgs(
@@ -283,6 +292,74 @@ describe("Command errors", () => {
       const formatter = CliOutput.defaultFormatter({ colors: false })
       const output = formatter.formatErrors([])
       assert.strictEqual(output, "")
+    })
+  })
+
+  describe("UserError", () => {
+    it("prefers the user-facing message over the cause", () => {
+      const error = new CliError.UserError({
+        cause: new Error("internal details"),
+        userMessage: "Could not deploy the application"
+      })
+
+      assert.strictEqual(error.message, "Could not deploy the application")
+    })
+
+    it("uses an Error cause message as the fallback", () => {
+      const error = new CliError.UserError({
+        cause: new Error("Connection refused")
+      })
+
+      assert.strictEqual(error.message, "Connection refused")
+    })
+
+    it("uses a string cause as the fallback", () => {
+      const error = new CliError.UserError({ cause: "Connection refused" })
+
+      assert.strictEqual(error.message, "Connection refused")
+    })
+
+    it("uses a generic fallback for causes without a message", () => {
+      const error = new CliError.UserError({ cause: { status: 503 } })
+
+      assert.strictEqual(error.message, "An error occurred")
+    })
+
+    it("falls back past empty user-facing and cause messages", () => {
+      const emptyUserMessage = new CliError.UserError({
+        cause: new Error("Connection refused"),
+        userMessage: ""
+      })
+      const emptyCause = new CliError.UserError({ cause: "" })
+
+      assert.strictEqual(emptyUserMessage.message, "Connection refused")
+      assert.strictEqual(emptyCause.message, "An error occurred")
+    })
+
+    it("allows runtime reporting before the CLI runner renders it", () => {
+      const error = new CliError.UserError({ cause: "failed" })
+
+      assert.isTrue(Runtime.getErrorReported(error))
+    })
+
+    it("escapes control characters in the user-facing message", () => {
+      const formatter = CliOutput.defaultFormatter({ colors: false })
+      const error = new CliError.UserError({
+        cause: "internal details",
+        userMessage: "Deployment failed\x1b]52;c;bWFsaWNpb3Vz\x07"
+      })
+
+      assert.strictEqual(
+        formatter.formatError(error),
+        "\nERROR\n  Deployment failed\\x1b]52;c;bWFsaWNpb3Vz\\x07"
+      )
+    })
+
+    it("formats the resolved fallback message with other CLI errors", () => {
+      const formatter = CliOutput.defaultFormatter({ colors: false })
+      const error = new CliError.UserError({ cause: new Error("Connection refused") })
+
+      assert.strictEqual(formatter.formatErrors([error]), "\nERROR\n  Connection refused")
     })
   })
 

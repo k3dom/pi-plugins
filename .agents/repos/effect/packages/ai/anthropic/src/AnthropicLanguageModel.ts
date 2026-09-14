@@ -86,6 +86,12 @@ export class Config extends Context.Service<
        */
       readonly disableParallelToolCalls?: boolean | undefined
       /**
+       * Whether the model supports native structured outputs.
+       *
+       * Overrides automatic capability detection based on the model identifier.
+       */
+      readonly structuredOutputs?: boolean | undefined
+      /**
        * Whether to use strict JSON schema validation for tool calls.
        *
        * **Details**
@@ -313,13 +319,23 @@ declare module "effect/unstable/ai/Prompt" {
    *
    * **Details**
    *
-   * Controls Anthropic prompt caching for tool result content.
+   * Carries Anthropic MCP metadata and controls prompt caching for tool result
+   * content.
    *
    * @category models
    * @since 4.0.0
    */
   export interface ToolResultPartOptions extends ProviderOptions {
     readonly anthropic?: {
+      /**
+       * Contains details about the MCP tool that produced the result.
+       */
+      readonly mcp_tool?: {
+        /**
+         * The name of the MCP server
+         */
+        readonly server: string
+      } | null
       /**
        * A breakpoint which marks the end of reusable content eligible for caching.
        */
@@ -644,7 +660,7 @@ export const model = (
  *
  * **When to use**
  *
- * Use when you need to construct a `LanguageModel.Service` value backed by
+ * Use when you need to construct a `LanguageModel` value backed by
  * `AnthropicClient` inside an Effect.
  *
  * **Details**
@@ -662,13 +678,16 @@ export const model = (
 export const make = Effect.fnUntraced(function*({ model, config: providerConfig }: {
   readonly model: (string & {}) | Model
   readonly config?: Omit<typeof Config.Service, "model"> | undefined
-}): Effect.fn.Return<LanguageModel.Service, never, AnthropicClient> {
+}): Effect.fn.Return<LanguageModel.LanguageModel, never, AnthropicClient> {
   const client = yield* AnthropicClient
 
-  const makeConfig: Effect.Effect<typeof Config.Service & { readonly model: string }> = Effect.gen(function*() {
-    const services = yield* Effect.context<never>()
-    return { model, ...providerConfig, ...services.mapUnsafe.get(Config.key) }
-  })
+  const makeConfig: Effect.Effect<typeof Config.Service & { readonly model: string }> = Effect.contextWith((services) =>
+    Effect.succeed({
+      model,
+      ...providerConfig,
+      ...Context.getOrUndefined(services, Config)
+    })
+  )
 
   const makeRequest = Effect.fnUntraced(
     function*<Tools extends ReadonlyArray<Tool.Any>>({ config, options, toolNameMapper }: {
@@ -680,7 +699,10 @@ export const make = Effect.fnUntraced(function*({ model, config: providerConfig 
       readonly payload: typeof Generated.BetaCreateMessageParams.Encoded
     }, AiError.AiError> {
       const betas = new Set<string>()
-      const capabilities = getModelCapabilities(config.model!)
+      const modelCapabilities = getModelCapabilities(config.model!)
+      const capabilities = Predicate.isNotUndefined(config.structuredOutputs)
+        ? { ...modelCapabilities, supportsStructuredOutput: config.structuredOutputs }
+        : modelCapabilities
       const { messages, system } = yield* prepareMessages({ betas, options, toolNameMapper })
       const outputFormat = yield* getOutputFormat({ capabilities, options })
       const { tools, toolChoice } = yield* prepareTools({ betas, capabilities, config, options })
@@ -688,7 +710,13 @@ export const make = Effect.fnUntraced(function*({ model, config: providerConfig 
       if (betas.size > 0) {
         params["anthropic-beta"] = Array.from(betas).join(",")
       }
-      const { disableParallelToolCalls: _, output_config, ...requestConfig } = config
+      const {
+        disableParallelToolCalls: _,
+        output_config,
+        strictJsonSchema: _strictJsonSchema,
+        structuredOutputs: _structuredOutputs,
+        ...requestConfig
+      } = config
       const payload: Mutable<typeof Generated.BetaCreateMessageParams.Encoded> = {
         ...requestConfig,
         max_tokens: requestConfig.max_tokens ?? capabilities.maxOutputTokens,
@@ -866,7 +894,13 @@ const prepareMessages = Effect.fnUntraced(
 
                         const source = isUrlData(part.data)
                           ? { type: "url", url: getUrlString(part.data) } as const
-                          : { type: "base64", media_type: mediaType, data: Encoding.encodeBase64(part.data) } as const
+                          : {
+                            type: "base64",
+                            media_type: mediaType,
+                            data: typeof part.data === "string"
+                              ? part.data.replace(/^data:[^;]+;base64,/, "")
+                              : Encoding.encodeBase64(part.data)
+                          } as const
 
                         content.push({ type: "image", source, cache_control: cacheControl })
                       } else if (part.mediaType === "application/pdf" || part.mediaType === "text/plain") {
@@ -889,7 +923,7 @@ const prepareMessages = Effect.fnUntraced(
                           : {
                             type: "text",
                             media_type: "text/plain",
-                            data: typeof part.data === "string" ? part.data : Encoding.encodeBase64(part.data)
+                            data: typeof part.data === "string" ? part.data : new TextDecoder().decode(part.data)
                           } as const
 
                         content.push({
@@ -939,7 +973,7 @@ const prepareMessages = Effect.fnUntraced(
                   content.push({
                     type: "tool_result",
                     tool_use_id: part.id,
-                    content: JSON.stringify(part.result),
+                    content: typeof part.result === "string" ? part.result : JSON.stringify(part.result),
                     is_error: part.isFailure,
                     cache_control: cacheControl
                   })
@@ -1264,10 +1298,6 @@ const prepareTools = Effect.fnUntraced(
     readonly tools: ReadonlyArray<AnthropicUserDefinedTool | AnthropicProviderDefinedTool> | undefined
     readonly toolChoice: typeof Generated.BetaToolChoice.Encoded | undefined
   }, AiError.AiError> {
-    if (options.tools.length === 0 || options.toolChoice === "none") {
-      return { tools: undefined, toolChoice: undefined }
-    }
-
     // Return a JSON response tool when using non-native structured outputs
     if (options.responseFormat.type === "json" && !capabilities.supportsStructuredOutput) {
       const input_schema = yield* tryJsonSchema(options.responseFormat.schema, "prepareTools")
@@ -1285,6 +1315,10 @@ const prepareTools = Effect.fnUntraced(
           disable_parallel_tool_use: true
         }
       }
+    }
+
+    if (options.tools.length === 0 || options.toolChoice === "none") {
+      return { tools: undefined, toolChoice: undefined }
     }
 
     const userTools: Array<AnthropicUserDefinedTool> = []
@@ -1541,6 +1575,9 @@ const makeResponse = Effect.fnUntraced(
     const mcpToolCalls: Map<string, Response.ToolCallPartEncoded> = new Map()
     const serverToolCalls: Map<string, string> = new Map()
     const citableDocuments = extractCitableDocuments(options.prompt)
+    const responseFormat = options.responseFormat
+    const hasStructuredOutputTool = responseFormat.type === "json" &&
+      rawResponse.content.some((part) => part.type === "tool_use" && part.name === responseFormat.objectName)
 
     parts.push({
       type: "response-metadata",
@@ -1553,10 +1590,12 @@ const makeResponse = Effect.fnUntraced(
     for (const part of rawResponse.content) {
       switch (part.type) {
         case "text": {
-          // Text parts are added for both text and json response formats.
-          // For native structured output (json_schema), the JSON comes directly
-          // in a text content block. For tool-based structured output, text may
-          // also be present alongside the tool_use.
+          // The response tool supplies the JSON payload. Accompanying prose
+          // must not be concatenated with it during structured output decoding.
+          if (hasStructuredOutputTool) {
+            break
+          }
+
           parts.push({
             type: "text",
             text: part.text
@@ -1603,7 +1642,7 @@ const makeResponse = Effect.fnUntraced(
         case "tool_use": {
           // When the `"json"` response format is requested, the JSON we need
           // is returned by a tool call injected into the request
-          if (options.responseFormat.type === "json") {
+          if (responseFormat.type === "json" && part.name === responseFormat.objectName) {
             parts.push({
               type: "text",
               text: JSON.stringify(part.input)
@@ -2960,11 +2999,11 @@ const processCitation = Effect.fnUntraced(
 interface ModelCapabilities {
   readonly maxOutputTokens: number
   readonly supportsStructuredOutput: boolean
-  readonly isKnownModel: boolean
 }
 
 /**
  * Returns the capabilities of a Claude model that are used for defaults and feature selection.
+ * Legacy models are listed as exceptions so newly released models inherit modern defaults.
  *
  * @see https://docs.claude.com/en/docs/about-claude/models/overview#model-comparison-table
  * @see https://platform.claude.com/docs/en/build-with-claude/structured-outputs
@@ -2973,55 +3012,48 @@ const getModelCapabilities = (modelId: string): ModelCapabilities => {
   if (
     modelId.includes("claude-sonnet-4-5") ||
     modelId.includes("claude-opus-4-5") ||
-    modelId.includes("claude-haiku-4-5") ||
-    modelId.includes("claude-opus-4-6") ||
-    modelId.includes("claude-sonnet-4-6") ||
-    modelId.includes("claude-opus-4-7") ||
-    modelId.includes("claude-opus-4-8")
+    modelId.includes("claude-haiku-4-5")
   ) {
     return {
       maxOutputTokens: 64000,
-      supportsStructuredOutput: true,
-      isKnownModel: true
+      supportsStructuredOutput: true
     }
   } else if (modelId.includes("claude-opus-4-1")) {
     return {
       maxOutputTokens: 32000,
-      supportsStructuredOutput: true,
-      isKnownModel: true
+      supportsStructuredOutput: true
     }
   } else if (
-    modelId.includes("claude-sonnet-4-") ||
+    modelId.includes("claude-sonnet-4-0") ||
+    modelId.includes("claude-sonnet-4-20250514") ||
     modelId.includes("claude-3-7-sonnet")
   ) {
     return {
       maxOutputTokens: 64000,
-      supportsStructuredOutput: false,
-      isKnownModel: true
+      supportsStructuredOutput: false
     }
-  } else if (modelId.includes("claude-opus-4-")) {
+  } else if (
+    modelId.includes("claude-opus-4-0") ||
+    modelId.includes("claude-opus-4-20250514")
+  ) {
     return {
       maxOutputTokens: 32000,
-      supportsStructuredOutput: false,
-      isKnownModel: true
+      supportsStructuredOutput: false
     }
   } else if (modelId.includes("claude-3-5-haiku")) {
     return {
       maxOutputTokens: 8192,
-      supportsStructuredOutput: false,
-      isKnownModel: true
+      supportsStructuredOutput: false
     }
-  } else if (modelId.includes("claude-3-haiku")) {
+  } else if (modelId.includes("claude-3-")) {
     return {
       maxOutputTokens: 4096,
-      supportsStructuredOutput: false,
-      isKnownModel: true
+      supportsStructuredOutput: false
     }
   } else {
     return {
-      maxOutputTokens: 4096,
-      supportsStructuredOutput: false,
-      isKnownModel: false
+      maxOutputTokens: 128000,
+      supportsStructuredOutput: true
     }
   }
 }
@@ -3087,19 +3119,13 @@ const transformToolCallParams = Effect.fnUntraced(function*<Tools extends Readon
 
   const { codec } = yield* tryCodecTransform(tool.parametersSchema, "makeResponse")
 
-  const transform = Schema.decodeEffect(codec)
-
+  // Normalize valid parameters; leave invalid ones for Toolkit.
   return yield* (
-    transform(toolParams) as Effect.Effect<unknown, Schema.SchemaError>
-  ).pipe(Effect.mapError((error) =>
-    AiError.make({
-      module: "AnthropicLanguageModel",
-      method: "makeResponse",
-      reason: new AiError.ToolParameterValidationError({
-        toolName,
-        toolParams,
-        description: error.issue.toString()
-      })
-    })
-  ))
+    Schema.decodeEffect(codec)(toolParams) as Effect.Effect<unknown, Schema.SchemaError>
+  ).pipe(
+    Effect.flatMap((decoded) =>
+      Schema.encodeUnknownEffect(tool.parametersSchema)(decoded) as Effect.Effect<unknown, Schema.SchemaError>
+    ),
+    Effect.orElseSucceed(() => toolParams)
+  )
 })

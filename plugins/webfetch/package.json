@@ -43,7 +43,6 @@
   },
   "dependencies": {
     "defuddle": "0.19.2",
-    "effect": "4.0.0-beta.103",
     "linkedom": "0.18.13",
     "turndown": "7.2.4"
   },
@@ -56,6 +55,7 @@
     "@pi-plugins/shared": "workspace:*",
     "@pi-plugins/tsconfig": "workspace:*",
     "@types/node": "26.1.2",
+    "effect": "4.0.0-rc.115",
     "oxfmt": "0.62.0",
     "oxlint": "1.77.0",
     "tsdown": "0.22.14",

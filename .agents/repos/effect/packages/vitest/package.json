@@ -1,6 +1,6 @@
 {
   "name": "@effect/vitest",
-  "version": "4.0.0-beta.103",
+  "version": "4.0.0-rc.115",
   "type": "module",
   "license": "MIT",
   "description": "A set of helpers for testing Effects with vitest",
@@ -27,7 +27,10 @@
     "dist/**/*.js",
     "dist/**/*.js.map",
     "dist/**/*.d.ts",
-    "dist/**/*.d.ts.map"
+    "dist/**/*.d.ts.map",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "ai-docs/**/*"
   ],
   "publishConfig": {
     "access": "public",
@@ -48,11 +51,11 @@
   },
   "peerDependencies": {
     "effect": "workspace:^",
-    "vitest": "^4.1.0"
+    "vitest": ">=5.0.0 <6.0.0"
   },
   "devDependencies": {
-    "@types/node": "^26.1.2",
+    "@types/node": "^26.4.1",
     "effect": "workspace:^",
-    "vitest": "4.1.10"
+    "vitest": "5.0.0"
   }
 }

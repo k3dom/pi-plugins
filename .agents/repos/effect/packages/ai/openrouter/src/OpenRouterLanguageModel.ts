@@ -516,7 +516,7 @@ export const model = (
  *
  * **When to use**
  *
- * Use when you need to construct a `LanguageModel.Service` value backed by
+ * Use when you need to construct a `LanguageModel` value backed by
  * `OpenRouterClient` inside an Effect.
  *
  * **Details**
@@ -541,14 +541,13 @@ export const model = (
 export const make = Effect.fnUntraced(function*({ model, config: providerConfig }: {
   readonly model: string
   readonly config?: Omit<typeof Config.Service, "model"> | undefined
-}): Effect.fn.Return<LanguageModel.Service, never, OpenRouterClient> {
+}): Effect.fn.Return<LanguageModel.LanguageModel, never, OpenRouterClient> {
   const client = yield* OpenRouterClient
   const codecTransformer = getCodecTransformer(model)
 
-  const makeConfig = Effect.gen(function*() {
-    const services = yield* Effect.context<never>()
-    return { model, ...providerConfig, ...services.mapUnsafe.get(Config.key) }
-  })
+  const makeConfig = Effect.contextWith((services: Context.Context<never>) =>
+    Effect.succeed({ model, ...providerConfig, ...Context.getOrUndefined(services, Config) })
+  )
 
   const makeRequest = Effect.fnUntraced(
     function*({ config, options }: {
@@ -558,8 +557,9 @@ export const make = Effect.fnUntraced(function*({ model, config: providerConfig 
       const messages = yield* prepareMessages({ options })
       const { tools, toolChoice } = yield* prepareTools({ options, transformer: codecTransformer })
       const responseFormat = yield* getResponseFormat({ config, options, transformer: codecTransformer })
+      const { strictJsonSchema: _sjs, ...apiConfig } = config
       const request: typeof Generated.ChatRequest.Encoded = {
-        ...config,
+        ...apiConfig,
         messages,
         ...(Predicate.isNotUndefined(responseFormat) ? { response_format: responseFormat } : undefined),
         ...(Predicate.isNotUndefined(tools) ? { tools } : undefined),
@@ -900,7 +900,7 @@ const prepareMessages = Effect.fnUntraced(
             messages.push({
               role: "tool",
               tool_call_id: part.id,
-              content: JSON.stringify(part.result)
+              content: typeof part.result === "string" ? part.result : JSON.stringify(part.result)
             })
           }
 
@@ -1047,7 +1047,6 @@ const makeResponse = Effect.fnUntraced(
               method: "makeResponse",
               reason: new AiError.ToolParameterValidationError({
                 toolName,
-                toolParams: {},
                 description: `Failed to securely JSON parse tool parameters: ${cause}`
               })
             })
@@ -1320,7 +1319,7 @@ const makeStreamResponse = Effect.fnUntraced(
                 // The signature typically arrives in the last reasoning delta,
                 // but reasoning-start only carries the first delta's metadata.
                 metadata: accumulatedReasoningDetails.length > 0
-                  ? { openRouter: { reasoningDetails: accumulatedReasoningDetails } }
+                  ? { openrouter: { reasoningDetails: accumulatedReasoningDetails } }
                   : undefined
               })
               reasoningStarted = false
@@ -1361,7 +1360,7 @@ const makeStreamResponse = Effect.fnUntraced(
                         ? { startIndex: annotation.url_citation.start_index }
                         : undefined),
                       ...(Predicate.isNotUndefined(annotation.url_citation.end_index)
-                        ? { startIndex: annotation.url_citation.end_index }
+                        ? { endIndex: annotation.url_citation.end_index }
                         : undefined)
                     }
                   }
@@ -1377,6 +1376,7 @@ const makeStreamResponse = Effect.fnUntraced(
             for (const toolCall of toolCalls) {
               const index = toolCall.index ?? toolCalls.length - 1
               let activeToolCall = activeToolCalls[index]
+              const argumentsDelta = toolCall.function?.arguments ?? ""
 
               // Tool call start - OpenRouter returns all information except the
               // tool call parameters in the first chunk
@@ -1415,7 +1415,7 @@ const makeStreamResponse = Effect.fnUntraced(
                   id: toolCall.id,
                   type: "function",
                   name: toolCall.function.name,
-                  params: toolCall.function.arguments ?? ""
+                  params: argumentsDelta
                 }
 
                 activeToolCalls[index] = activeToolCall
@@ -1425,23 +1425,16 @@ const makeStreamResponse = Effect.fnUntraced(
                   id: activeToolCall.id,
                   name: activeToolCall.name
                 })
-
-                // Emit a tool call delta part if parameters were also sent
-                if (activeToolCall.params.length > 0) {
-                  parts.push({
-                    type: "tool-params-delta",
-                    id: activeToolCall.id,
-                    delta: activeToolCall.params
-                  })
-                }
               } else {
-                // If an active tool call was found, update and emit the delta for
-                // the tool call's parameters
-                activeToolCall.params += toolCall.function?.arguments ?? ""
+                activeToolCall.params += argumentsDelta
+              }
+
+              // Emit a tool call delta part if parameters were also sent
+              if (argumentsDelta.length > 0) {
                 parts.push({
                   type: "tool-params-delta",
                   id: activeToolCall.id,
-                  delta: activeToolCall.params
+                  delta: argumentsDelta
                 })
               }
 
@@ -1502,7 +1495,7 @@ const makeStreamResponse = Effect.fnUntraced(
             (detail) => detail.type === "reasoning.encrypted" && detail.data.length > 0
           )
           if (totalToolCalls > 0 && hasEncryptedReasoning && finishReason === "stop") {
-            finishReason = resolveFinishReason("tool-calls")
+            finishReason = "tool-calls"
           }
 
           // Forward any unsent tool calls if finish reason is 'tool-calls'
@@ -1851,16 +1844,21 @@ const getUsage = (usage: Generated.ChatUsage | undefined): Response.Usage => {
   const cacheReadTokens = usage.prompt_tokens_details?.cached_tokens ?? 0
   const cacheWriteTokens = usage.prompt_tokens_details?.cache_write_tokens ?? 0
   const reasoningTokens = usage.completion_tokens_details?.reasoning_tokens ?? 0
+  // Some providers report cached or reasoning tokens separately from their parent counts.
+  // Treat details exceeding the parent as disjoint to avoid negative remainders.
+  // Otherwise, retain subset accounting.
+  const inputTotal = cacheReadTokens > promptTokens ? promptTokens + cacheReadTokens : promptTokens
+  const outputTotal = reasoningTokens > completionTokens ? completionTokens + reasoningTokens : completionTokens
   return {
     inputTokens: {
-      uncached: promptTokens - cacheReadTokens,
-      total: promptTokens,
+      uncached: inputTotal - cacheReadTokens,
+      total: inputTotal,
       cacheRead: cacheReadTokens,
       cacheWrite: cacheWriteTokens
     },
     outputTokens: {
-      total: completionTokens,
-      text: completionTokens - reasoningTokens,
+      total: outputTotal,
+      text: outputTotal - reasoningTokens,
       reasoning: reasoningTokens
     }
   }

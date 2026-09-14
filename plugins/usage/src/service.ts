@@ -30,7 +30,7 @@ import { GlmUsageApi, ZAI_BASE_URL, type ZaiProvider } from './provider/zai'
 const REQUEST_TIMEOUT = '10 seconds'
 const LOGIN_HINT = 'run /login to (re-)authenticate'
 
-export class UsageServiceError extends Schema.TaggedErrorClass<UsageServiceError>()(
+export class UsageServiceError extends Schema.TaggedError<UsageServiceError>()(
   '@pi-plugins/usage/UsageServiceError',
   {
     kind: Schema.Literals([

@@ -30,7 +30,7 @@ const SearchResponse = Schema.Struct({
   ),
 })
 
-class TavilyError extends Schema.ErrorClass<TavilyError>(
+class TavilyError extends Schema.Error<TavilyError>(
   '@pi-plugins/websearch/TavilyError',
 )({
   _tag: Schema.tagDefaultOmit('TavilyError'),
@@ -44,7 +44,7 @@ class TavilyError extends Schema.ErrorClass<TavilyError>(
 export const layer = Layer.effect(
   WebSearch,
   Effect.gen(function* () {
-    const apiKey = yield* Config.option(Config.redacted('TAVILY_API_KEY'))
+    const apiKey = yield* Config.option(Config.Redacted('TAVILY_API_KEY'))
     const http = (yield* HttpClient.HttpClient).pipe(
       HttpClient.mapRequest((request) =>
         request.pipe(
