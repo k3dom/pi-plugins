@@ -2,7 +2,7 @@ import { Defuddle } from 'defuddle/node'
 import { Context, Effect, Layer, Schema } from 'effect'
 import { parseHTML } from 'linkedom'
 
-export class HtmlConverterError extends Schema.TaggedErrorClass<HtmlConverterError>()(
+export class HtmlConverterError extends Schema.TaggedError<HtmlConverterError>()(
   '@pi-plugins/webfetch/HtmlConverterError',
   {
     message: Schema.String,

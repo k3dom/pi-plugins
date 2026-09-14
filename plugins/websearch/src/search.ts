@@ -7,7 +7,7 @@ export class SearchResult extends Schema.Class<SearchResult>('SearchResult')({
   publishedAt: Schema.optional(Schema.DateTimeUtc),
 }) {}
 
-export class WebSearchError extends Schema.TaggedErrorClass<WebSearchError>()(
+export class WebSearchError extends Schema.TaggedError<WebSearchError>()(
   '@pi-plugins/websearch/WebSearchError',
   {
     message: Schema.String,

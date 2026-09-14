@@ -17,7 +17,7 @@ import {
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 import * as FileLock from './file-lock'
 
-export class SnapshotterError extends Schema.TaggedErrorClass<SnapshotterError>()(
+export class SnapshotterError extends Schema.TaggedError<SnapshotterError>()(
   'SnapshotterError',
   {
     kind: Schema.Literals(['GitError', 'GitTimeout', 'NotAWorktree']),

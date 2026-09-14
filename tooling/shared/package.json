@@ -21,11 +21,11 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.83.0",
     "@earendil-works/pi-tui": "0.83.0",
-    "@effect/platform-node": "4.0.0-beta.103",
+    "@effect/platform-node": "4.0.0-rc.115",
     "@pi-plugins/fmt": "workspace:*",
     "@pi-plugins/lint": "workspace:*",
     "@pi-plugins/tsconfig": "workspace:*",
-    "effect": "4.0.0-beta.103",
+    "effect": "4.0.0-rc.115",
     "oxfmt": "0.62.0",
     "oxlint": "1.77.0",
     "typescript": "7.0.2"
