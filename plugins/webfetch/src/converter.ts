@@ -22,29 +22,25 @@ export class HtmlConverter extends Context.Service<
   HtmlConverterService
 >()('@pi-plugins/webfetch/HtmlConverter', {
   make: Effect.succeed({
-    toMarkdown: Effect.fn(
-      function* (html: string, url: string) {
-        const response = yield* Effect.tryPromise({
-          try: () => {
-            const { document } = parseHTML(html)
-            // defuddle reads the page URL from `location`, which linkedom leaves unset.
-            Object.assign(document, { location: { href: url } })
-            return Defuddle(document, url, { markdown: true })
-          },
-          catch: (cause) =>
-            new HtmlConverterError({
-              message: 'Failed to convert HTML to Markdown',
-              cause,
-            }),
-        })
-        return response.content
-      },
-      Effect.withSpan('HtmlConverter.toMarkdown', (_, url) => ({
-        attributes: {
-          url: url,
+    toMarkdown: Effect.fn('HtmlConverter.toMarkdown')(function* (
+      html: string,
+      url: string,
+    ) {
+      const response = yield* Effect.tryPromise({
+        try: () => {
+          const { document } = parseHTML(html)
+          // defuddle reads the page URL from `location`, which linkedom leaves unset.
+          Object.assign(document, { location: { href: url } })
+          return Defuddle(document, url, { markdown: true })
         },
-      })),
-    ),
+        catch: (cause) =>
+          new HtmlConverterError({
+            message: 'Failed to convert HTML to Markdown',
+            cause,
+          }),
+      })
+      return response.content
+    }),
   }),
 }) {
   static readonly layer = Layer.effect(this, this.make)

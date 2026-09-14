@@ -2,9 +2,9 @@
 
 Focused plugins for everyday work in [pi](https://github.com/earendil-works/pi).
 
-Fetch web pages, delegate tasks, restore files as you navigate session history, and
-keep an eye on speed and usage. Each package adds a specific capability. Install only
-the pieces you need.
+Search the web, fetch pages, delegate tasks, restore files as you navigate session
+history, and keep an eye on speed and usage. Each package adds a specific capability.
+Install only the pieces you need.
 
 ## Plugins
 
@@ -20,6 +20,7 @@ the pieces you need.
 | [`subagent`](plugins/subagent)         | Delegate a self-contained task to a separate pi session.           | `subagent`                              |
 | [`usage`](plugins/usage)               | Check Claude, OpenAI Codex, and GLM Coding plan limits.            | `/usage`                                |
 | [`webfetch`](plugins/webfetch)         | Fetch web pages as Markdown or raw HTML.                           | `web_fetch`                             |
+| [`websearch`](plugins/websearch)       | Search the web and get titles, URLs and excerpts.                  | `web_search`                            |
 
 ## Requirements
 
