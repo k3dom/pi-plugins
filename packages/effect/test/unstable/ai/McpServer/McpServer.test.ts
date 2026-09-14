@@ -1,8 +1,10 @@
 import { assert, describe, it } from "@effect/vitest"
 import { assertTrue, strictEqual } from "@effect/vitest/utils"
+import * as Cause from "effect/Cause"
 import * as Context from "effect/Context"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
+import * as ErrorReporter from "effect/ErrorReporter"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Queue from "effect/Queue"
@@ -34,7 +36,7 @@ const OptionalStringTool = Tool.make("OptionalStringTool", {
 
 const PublicFailureTool = Tool.make("PublicFailureTool", {
   success: Schema.String,
-  failure: Schema.Error()
+  failure: Schema.ErrorInstance()
 })
 
 const InternalAiErrorTool = Tool.make("InternalAiErrorTool", {
@@ -43,6 +45,10 @@ const InternalAiErrorTool = Tool.make("InternalAiErrorTool", {
 
 const DefectTool = Tool.make("DefectTool", {
   success: Schema.String
+})
+
+const UnserializableResultTool = Tool.make("UnserializableResultTool", {
+  success: Schema.Unknown
 })
 
 const UntypedTool = Tool.make("UntypedTool")
@@ -55,30 +61,54 @@ const AnnotatedVoidTool = Tool.make("AnnotatedVoidTool", {
   success: Schema.Void.annotate({ description: "No output" })
 })
 
+const NullableResultTool = Tool.make("NullableResultTool", {
+  success: Schema.NullOr(Schema.Struct({ answer: Schema.String }))
+})
+
+const ArrayResultTool = Tool.make("ArrayResultTool", {
+  success: Schema.Array(Schema.String)
+})
+
 const TestToolkit = Toolkit.make(
   OptionalStringTool,
   PublicFailureTool,
   InternalAiErrorTool,
   DefectTool,
+  UnserializableResultTool,
   UntypedTool,
   StructuredResultTool,
-  AnnotatedVoidTool
+  AnnotatedVoidTool,
+  NullableResultTool,
+  ArrayResultTool
 )
 type TestToolkitHandlers = Toolkit.HandlersFrom<Toolkit.Tools<typeof TestToolkit>>
 
+const publicFailure = new Error("Public failure")
+const internalAiError = AiError.make({
+  module: "TestToolkit",
+  method: "InternalAiErrorTool",
+  reason: new AiError.RateLimitError({})
+})
+const privateDefect = new Error("private defect details")
+
 const testToolkitHandlers = TestToolkit.of({
   OptionalStringTool: ({ signature }) => Effect.succeed(signature ?? "omitted"),
-  PublicFailureTool: () => Effect.fail(new Error("Public failure")),
-  InternalAiErrorTool: () => Effect.fail(new AiError.RateLimitError({})),
-  DefectTool: () => Effect.die("private defect details"),
+  PublicFailureTool: () => Effect.fail(publicFailure),
+  InternalAiErrorTool: () => Effect.fail(internalAiError),
+  DefectTool: () => Effect.die(privateDefect),
   UntypedTool: () => Effect.void,
   StructuredResultTool: () => Effect.succeed({ answer: "result" }),
-  AnnotatedVoidTool: () => Effect.void
+  AnnotatedVoidTool: () => Effect.void,
+  NullableResultTool: () => Effect.succeed(null),
+  ArrayResultTool: () => Effect.succeed(["first", "second"]),
+  UnserializableResultTool: () => Effect.succeed(1n)
 })
 
 const INTERNAL_TOOL_ERROR_MESSAGE = "Tool execution failed due to an internal server error."
 
 const TestServerLayer = makeServerLayer({ name: "TestServer" })
+
+const LatestProtocolServerLayer = makeServerLayer({ name: "TestServer", protocols: [McpProtocol.v2025_11_25] })
 
 const initializePayload = {
   protocolVersion: "2025-06-18",
@@ -95,6 +125,15 @@ const pingBody = {
   params: {},
   id: 0
 }
+
+const directClient = McpSchema.McpServerClient.of({
+  clientId: 1,
+  protocolVersion: "2025-06-18",
+  clientCapabilities: {},
+  clientInfo: initializePayload.clientInfo,
+  initializePayload,
+  getClient: Effect.die("not used")
+})
 
 const makeTestClientWith = Effect.fnUntraced(function*<A, E>(
   serverLayer: Layer.Layer<A, E, HttpRouter.HttpRouter>,
@@ -131,9 +170,14 @@ const makeRouterTestClient = (
 ) => makeTestClientWith(TestServerLayer, { routerLayer: router })
 
 const makeToolkitTestClient = Effect.fnUntraced(function*(handlers: TestToolkitHandlers = testToolkitHandlers) {
+  const reported: Array<Cause.Cause<unknown>> = []
+  const reporterLayer = ErrorReporter.layer([ErrorReporter.make(({ cause }) => {
+    reported.push(cause)
+  })])
   const serverLayer = McpServer.toolkit(TestToolkit).pipe(
     Layer.provideMerge(TestToolkit.toLayer(handlers)),
-    Layer.provide(TestServerLayer)
+    Layer.provide(TestServerLayer),
+    Layer.provide(reporterLayer)
   )
   const { client } = yield* makeTestClientWith(serverLayer)
   yield* client.initialize({
@@ -144,7 +188,7 @@ const makeToolkitTestClient = Effect.fnUntraced(function*(handlers: TestToolkitH
       version: "1.0.0"
     }
   })
-  return client
+  return { client, reported }
 })
 
 const toolResultText = (result: McpSchema.CallToolResult): string => {
@@ -154,6 +198,106 @@ const toolResultText = (result: McpSchema.CallToolResult): string => {
 }
 
 describe("McpServer", () => {
+  describe("direct service", () => {
+    it.effect("should fail when a resource URI is unknown", () =>
+      Effect.gen(function*() {
+        const server = yield* McpServer.McpServer.make
+
+        const error = yield* server.findResource("file:///unknown").pipe(
+          Effect.provideService(McpSchema.McpServerClient, directClient),
+          Effect.flip
+        )
+
+        assertTrue(error instanceof McpSchema.InvalidParams)
+        assert.strictEqual(error.message, "Resource 'file:///unknown' not found")
+      }))
+
+    it.effect("should resolve an HTTP resource template", () =>
+      Effect.gen(function*() {
+        const server = yield* McpServer.McpServer.make
+        yield* McpServer.registerResource`https://example.test/docs/${Schema.String}`({
+          name: "document",
+          content: (_uri, name) => Effect.succeed(name)
+        }).pipe(Effect.provideService(McpServer.McpServer, server))
+
+        const uri = "https://example.test/docs/alice"
+        const result = yield* server.findResource(uri).pipe(
+          Effect.provideService(McpSchema.McpServerClient, directClient)
+        )
+
+        assert.deepStrictEqual(result.contents, [{ uri, text: "alice" }])
+      }))
+
+    it.effect("should preserve a registered resource handler's typed failure", () =>
+      Effect.gen(function*() {
+        const server = yield* McpServer.McpServer.make
+        const failure = new McpSchema.InternalError({ message: "resource failed" })
+        yield* server.addResource({
+          resource: new McpSchema.Resource({
+            uri: "file:///failure",
+            name: "failure"
+          }),
+          annotations: Context.empty(),
+          handle: Effect.fail(failure)
+        })
+
+        const error = yield* server.findResource("file:///failure").pipe(
+          Effect.provideService(McpSchema.McpServerClient, directClient),
+          Effect.flip
+        )
+
+        assert.strictEqual(error, failure)
+      }))
+
+    it.effect("should pass decoded values to prompt handlers", () =>
+      Effect.gen(function*() {
+        const server = yield* McpServer.McpServer.make
+        yield* McpServer.registerPrompt({
+          name: "count",
+          parameters: { count: Schema.FiniteFromString },
+          completion: { count: () => Effect.succeed([13]) },
+          content: ({ count }) => Effect.succeed(count.toFixed(0))
+        }).pipe(Effect.provideService(McpServer.McpServer, server))
+
+        const result = yield* server.getPromptResult({ name: "count", arguments: { count: "12" } }).pipe(
+          Effect.provideService(McpSchema.McpServerClient, directClient)
+        )
+        const completion = yield* server.completion({
+          ref: { type: "ref/prompt", name: "count" },
+          argument: { name: "count", value: "1" }
+        }).pipe(Effect.provideService(McpSchema.McpServerClient, directClient))
+
+        assert.deepStrictEqual(result.messages, [{ role: "user", content: { type: "text", text: "12" } }])
+        assert.deepStrictEqual(completion.completion.values, ["13"])
+      }))
+
+    it.effect("should pass undefined to a low-level tool handler when arguments are omitted", () =>
+      Effect.gen(function*() {
+        const server = yield* McpServer.McpServer.make
+        let received: unknown = "not called"
+        yield* server.addTool({
+          tool: new McpSchema.Tool({
+            name: "arguments-omitted",
+            inputSchema: {
+              type: "object",
+              properties: {}
+            }
+          }),
+          annotations: Context.empty(),
+          handle: (payload) => {
+            received = payload
+            return Effect.succeed(new McpSchema.CallToolResult({ content: [] }))
+          }
+        })
+
+        yield* server.callTool({ name: "arguments-omitted" }).pipe(
+          Effect.provideService(McpSchema.McpServerClient, directClient)
+        )
+
+        assert.isUndefined(received)
+      }))
+  })
+
   it.effect("should reject browser Origins by default while accepting Origin-less clients", () =>
     Effect.gen(function*() {
       const harness = yield* makeHttpHarness(TestServerLayer)
@@ -209,10 +353,26 @@ describe("McpServer", () => {
 
       strictEqual(response.status, 400)
     }))
+  it.effect("negotiates an initialize request from a client on an unsupported protocol version", () =>
+    Effect.gen(function*() {
+      const { httpClient } = yield* makeTestClientWith(LatestProtocolServerLayer)
+
+      const response = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
+        HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
+        HttpClientRequest.setHeader("Mcp-Protocol-Version", "2025-06-18"),
+        HttpClientRequest.bodyJsonUnsafe({ jsonrpc: "2.0", id: 1, method: "initialize", params: initializePayload }),
+        httpClient.execute
+      )
+
+      strictEqual(response.status, 200)
+      strictEqual(response.headers["mcp-protocol-version"], "2025-11-25")
+      assertTrue(response.headers["mcp-session-id"] !== undefined)
+    }))
+
   describe("registerToolkit", () => {
     it.effect("lists output schemas only for structured tool results", () =>
       Effect.gen(function*() {
-        const client = yield* makeToolkitTestClient()
+        const { client } = yield* makeToolkitTestClient()
 
         const result = yield* client["tools/list"]({})
         const structuredTool = result.tools.find((tool) => tool.name === "StructuredResultTool")
@@ -224,7 +384,7 @@ describe("McpServer", () => {
           type: "object",
           properties: { answer: { type: "string" } },
           required: ["answer"],
-          additionalProperties: false
+          additionalProperties: true
         })
         assertTrue(scalarTool !== undefined)
         assert.isFalse("outputSchema" in scalarTool)
@@ -237,7 +397,7 @@ describe("McpServer", () => {
     it.effect("returns concise parameter-validation errors without invoking the handler", () =>
       Effect.gen(function*() {
         let handlerInvoked = false
-        const client = yield* makeToolkitTestClient(TestToolkit.of({
+        const { client, reported } = yield* makeToolkitTestClient(TestToolkit.of({
           ...testToolkitHandlers,
           OptionalStringTool: ({ signature }) => {
             handlerInvoked = true
@@ -251,16 +411,24 @@ describe("McpServer", () => {
         }).pipe(Effect.flip)
 
         assert.isFalse(handlerInvoked)
-        assert.instanceOf(error, McpSchema.InvalidParams)
+        assert.isTrue("code" in error)
+        if ("code" in error) assert.strictEqual(error.code, McpSchema.INVALID_PARAMS_ERROR_CODE)
         assert.match(error.message, /Invalid parameters for tool 'OptionalStringTool'/)
         assert.match(error.message, /Expected string \| undefined/)
         assert.match(error.message, /at \["signature"\]/)
+        assert.lengthOf(reported, 1)
+        assert.isTrue(Cause.hasFails(reported[0]))
+        assert.deepInclude(Cause.squash(reported[0]), {
+          _tag: "ProtocolError",
+          code: McpSchema.INVALID_PARAMS_ERROR_CODE,
+          message: error.message
+        })
       }))
 
     it.effect("preserves successful results when optional parameters are omitted", () =>
       Effect.gen(function*() {
         let handlerInvoked = false
-        const client = yield* makeToolkitTestClient(TestToolkit.of({
+        const { client } = yield* makeToolkitTestClient(TestToolkit.of({
           ...testToolkitHandlers,
           OptionalStringTool: ({ signature }) => {
             handlerInvoked = true
@@ -283,9 +451,68 @@ describe("McpServer", () => {
         )
       }))
 
+    it.effect("keeps void tool results successful", () =>
+      Effect.gen(function*() {
+        const { client, reported } = yield* makeToolkitTestClient()
+
+        const result = yield* client["tools/call"]({
+          name: "UntypedTool",
+          arguments: {}
+        })
+
+        assert.deepStrictEqual(
+          result,
+          new McpSchema.CallToolResult({
+            isError: false,
+            content: []
+          })
+        )
+        assert.deepStrictEqual(reported, [])
+      }))
+
+    it.effect("carries object tool results as structured content", () =>
+      Effect.gen(function*() {
+        const { client } = yield* makeToolkitTestClient()
+
+        const result = yield* client["tools/call"]({
+          name: "StructuredResultTool",
+          arguments: {}
+        })
+
+        assert.deepStrictEqual(result.structuredContent, { answer: "result" })
+        assert.deepStrictEqual(result.content, [{
+          type: "text",
+          text: JSON.stringify({ answer: "result" })
+        }])
+      }))
+
+    it.effect("omits structured content for null and array tool results", () =>
+      Effect.gen(function*() {
+        const { client } = yield* makeToolkitTestClient()
+
+        const nullResult = yield* client["tools/call"]({
+          name: "NullableResultTool",
+          arguments: {}
+        })
+
+        assert.isUndefined(nullResult.structuredContent)
+        assert.deepStrictEqual(nullResult.content, [{ type: "text", text: "null" }])
+
+        const arrayResult = yield* client["tools/call"]({
+          name: "ArrayResultTool",
+          arguments: {}
+        })
+
+        assert.isUndefined(arrayResult.structuredContent)
+        assert.deepStrictEqual(arrayResult.content, [{
+          type: "text",
+          text: JSON.stringify(["first", "second"])
+        }])
+      }))
+
     it.effect("returns schema-validated messages for declared handler failures", () =>
       Effect.gen(function*() {
-        const client = yield* makeToolkitTestClient()
+        const { client, reported } = yield* makeToolkitTestClient()
 
         const result = yield* client["tools/call"]({
           name: "PublicFailureTool",
@@ -295,11 +522,14 @@ describe("McpServer", () => {
         assert.strictEqual(result.isError, true)
         const text = toolResultText(result)
         assert.strictEqual(text, "Public failure")
+        assert.lengthOf(reported, 1)
+        assert.isTrue(Cause.hasFails(reported[0]))
+        assert.strictEqual(Cause.squash(reported[0]), publicFailure)
       }))
 
     it.effect("returns a generic message for non-validation AiError failures", () =>
       Effect.gen(function*() {
-        const client = yield* makeToolkitTestClient()
+        const { client, reported } = yield* makeToolkitTestClient()
 
         const result = yield* client["tools/call"]({
           name: "InternalAiErrorTool",
@@ -309,11 +539,14 @@ describe("McpServer", () => {
         assert.strictEqual(result.isError, true)
         const text = toolResultText(result)
         assert.strictEqual(text, INTERNAL_TOOL_ERROR_MESSAGE)
+        assert.lengthOf(reported, 1)
+        assert.isTrue(Cause.hasFails(reported[0]))
+        assert.strictEqual(Cause.squash(reported[0]), internalAiError)
       }))
 
     it.effect("returns a generic message for handler defects", () =>
       Effect.gen(function*() {
-        const client = yield* makeToolkitTestClient()
+        const { client, reported } = yield* makeToolkitTestClient()
 
         const result = yield* client["tools/call"]({
           name: "DefectTool",
@@ -323,20 +556,41 @@ describe("McpServer", () => {
         assert.strictEqual(result.isError, true)
         const text = toolResultText(result)
         assert.strictEqual(text, INTERNAL_TOOL_ERROR_MESSAGE)
+        assert.lengthOf(reported, 1)
+        assert.isTrue(Cause.hasDies(reported[0]))
+        assert.strictEqual(Cause.squash(reported[0]), privateDefect)
+      }))
+
+    it.effect("reports response serialization defects before returning a generic message", () =>
+      Effect.gen(function*() {
+        const { client, reported } = yield* makeToolkitTestClient()
+
+        const result = yield* client["tools/call"]({
+          name: "UnserializableResultTool",
+          arguments: {}
+        })
+
+        assert.strictEqual(result.isError, true)
+        assert.strictEqual(toolResultText(result), INTERNAL_TOOL_ERROR_MESSAGE)
+        assert.lengthOf(reported, 1)
+        assert.isTrue(Cause.hasDies(reported[0]))
+        assert.instanceOf(Cause.squash(reported[0]), TypeError)
       }))
 
     it.effect("keeps unknown tools as protocol errors", () =>
       Effect.gen(function*() {
-        const client = yield* makeToolkitTestClient()
+        const { client } = yield* makeToolkitTestClient()
 
         const error = yield* client["tools/call"]({
           name: "UnknownTool",
           arguments: {}
         }).pipe(Effect.flip)
 
-        assert.instanceOf(error, McpSchema.InvalidParams)
-        assert.strictEqual(error.code, McpSchema.INVALID_PARAMS_ERROR_CODE)
-        assert.strictEqual(error.message, "Tool 'UnknownTool' not found")
+        assert.isTrue("code" in error)
+        if ("code" in error) {
+          assert.strictEqual(error.code, McpSchema.INVALID_PARAMS_ERROR_CODE)
+          assert.strictEqual(error.message, "Tool 'UnknownTool' not found")
+        }
       }))
   })
 
@@ -396,6 +650,54 @@ describe("McpServer", () => {
       strictEqual(pingResponseBody.length > 0, true)
     }))
 
+  it.effect("drops server notifications from buffered JSON-RPC responses", () =>
+    Effect.gen(function*() {
+      const serverLayer = Layer.effectDiscard(Effect.gen(function*() {
+        const router = yield* HttpRouter.HttpRouter
+        const { httpEffect, protocol } = yield* RpcServer.makeProtocolWithHttpEffect()
+        yield* protocol.run((clientId, message) => {
+          if (message._tag !== "Request") {
+            return Effect.void
+          }
+          return Effect.gen(function*() {
+            yield* protocol.send(clientId, {
+              _tag: "Request",
+              id: "",
+              tag: "notifications/message",
+              payload: { level: "info" },
+              headers: [],
+              isNotification: true
+            })
+            yield* protocol.send(clientId, {
+              _tag: "Exit",
+              requestId: message.id,
+              exit: { _tag: "Success", value: { ok: true } }
+            })
+            yield* protocol.end(clientId)
+          })
+        }).pipe(Effect.forkScoped)
+        yield* router.add("POST", "/mcp", () => httpEffect)
+      })).pipe(
+        Layer.provideMerge(HttpRouter.layer),
+        Layer.provide(RpcSerialization.layerJsonRpc())
+      )
+      const harness = yield* makeHttpHarness(serverLayer)
+
+      const response = yield* harness.post({
+        jsonrpc: "2.0",
+        method: "ping",
+        params: {},
+        id: 1
+      })
+
+      assert.strictEqual(response.status, 200)
+      assert.deepStrictEqual(yield* Effect.promise(() => response.json()), {
+        jsonrpc: "2.0",
+        id: 1,
+        result: { ok: true }
+      })
+    }))
+
   it.effect("validates supplied protocol versions on POST", () =>
     Effect.gen(function*() {
       const { client, httpClient } = yield* makeRouterTestClient(HttpRouter.cors())
@@ -411,6 +713,55 @@ describe("McpServer", () => {
       strictEqual(unsupportedResponse.status, 400)
       strictEqual(yield* unsupportedResponse.text, "")
       strictEqual(unsupportedResponse.headers["access-control-allow-origin"], "*")
+
+      const malformedResponse = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
+        HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
+        HttpClientRequest.setHeader("Mcp-Protocol-Version", "9999-01-01"),
+        HttpClientRequest.bodyText("{"),
+        HttpClientRequest.setHeader("content-type", "application/json"),
+        httpClient.execute
+      )
+      strictEqual(malformedResponse.status, 400)
+      strictEqual(yield* malformedResponse.text, "")
+
+      const malformedNoVersionResponse = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
+        HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
+        HttpClientRequest.bodyText("{"),
+        HttpClientRequest.setHeader("content-type", "application/json"),
+        httpClient.execute
+      )
+      strictEqual(malformedNoVersionResponse.status, 200)
+      const malformedNoVersionBody = JSON.parse(yield* malformedNoVersionResponse.text)
+      strictEqual(malformedNoVersionBody.id, null)
+      strictEqual(malformedNoVersionBody.error.code, McpSchema.PARSE_ERROR_CODE)
+
+      const invalidRequestResponse = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
+        HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
+        HttpClientRequest.setHeader("Mcp-Protocol-Version", "9999-01-01"),
+        HttpClientRequest.bodyJsonUnsafe({ hello: "world" }),
+        httpClient.execute
+      )
+      strictEqual(invalidRequestResponse.status, 400)
+      strictEqual(yield* invalidRequestResponse.text, "")
+
+      const invalidRequestNoVersionResponse = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
+        HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
+        HttpClientRequest.bodyJsonUnsafe({ hello: "world" }),
+        httpClient.execute
+      )
+      strictEqual(invalidRequestNoVersionResponse.status, 200)
+      const invalidRequestNoVersionBody = JSON.parse(yield* invalidRequestNoVersionResponse.text)
+      strictEqual(invalidRequestNoVersionBody.id, null)
+      strictEqual(invalidRequestNoVersionBody.error.code, McpSchema.INVALID_REQUEST_ERROR_CODE)
+
+      const invalidInitializeResponse = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
+        HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
+        HttpClientRequest.setHeader("Mcp-Protocol-Version", "9999-01-01"),
+        HttpClientRequest.bodyJsonUnsafe({ method: "initialize", id: 7 }),
+        httpClient.execute
+      )
+      strictEqual(invalidInitializeResponse.status, 400)
+      strictEqual(yield* invalidInitializeResponse.text, "")
 
       const responseOnly = yield* HttpClientRequest.post("http://localhost/mcp").pipe(
         HttpClientRequest.setHeader("accept", "application/json, text/event-stream"),
@@ -469,12 +820,8 @@ describe("McpServer", () => {
     it.effect("should isolate resource update subscriptions between sessions", () =>
       Effect.gen(function*() {
         const clientIds = new Set([1, 2])
-        const client1Outbound = yield* Queue.unbounded<
-          RpcMessage.FromServerEncoded | RpcMessage.RequestEncoded
-        >()
-        const client2Outbound = yield* Queue.unbounded<
-          RpcMessage.FromServerEncoded | RpcMessage.RequestEncoded
-        >()
+        const client1Outbound = yield* Queue.unbounded<RpcMessage.FromServerEncoded>()
+        const client2Outbound = yield* Queue.unbounded<RpcMessage.FromServerEncoded>()
         const disconnects = yield* Queue.unbounded<number>()
         const writeRequest = yield* Deferred.make<
           (clientId: number, message: RpcMessage.FromClientEncoded) => Effect.Effect<void>
@@ -490,7 +837,9 @@ describe("McpServer", () => {
               initialMessage: Effect.succeedNone,
               supportsAck: false,
               supportsTransferables: false,
-              supportsSpanPropagation: false
+              supportsSpanPropagation: false,
+              supportsNotifications: true,
+              codecFor: Schema.toCodecJson as RpcSerialization.CodecFor
             })
           )
         )

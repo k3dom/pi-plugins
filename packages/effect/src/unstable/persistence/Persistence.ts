@@ -35,7 +35,7 @@ const ErrorTypeId = "~effect/persistence/Persistence/PersistenceError" as const
  * @category errors
  * @since 4.0.0
  */
-export class PersistenceError extends Schema.ErrorClass<PersistenceError>(ErrorTypeId)({
+export class PersistenceError extends Schema.Error<PersistenceError>(ErrorTypeId)({
   _tag: Schema.tag("PersistenceError"),
   message: Schema.String,
   cause: Schema.optional(Schema.Defect())
@@ -304,7 +304,8 @@ export const layerBackingSqlMultiTable: Layer.Layer<
   return BackingPersistence.of({
     make: Effect.fnUntraced(function*(storeId) {
       const clock = yield* Clock.Clock
-      const table = sql(`effect_persistence_${storeId}`)
+      const tableName = `effect_persistence_${storeId}`
+      const table = sql(tableName)
       yield* sql.onDialectOrElse({
         mysql: () =>
           sql`
@@ -324,7 +325,7 @@ export const layerBackingSqlMultiTable: Layer.Layer<
           `,
         mssql: () =>
           sql`
-            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name=${table} AND xtype='U')
+            IF NOT EXISTS (SELECT * FROM sysobjects WHERE name=${tableName} AND xtype='U')
             CREATE TABLE ${table} (
               id NVARCHAR(450) PRIMARY KEY,
               value NVARCHAR(MAX) NOT NULL,
@@ -362,17 +363,26 @@ export const layerBackingSqlMultiTable: Layer.Layer<
             INSERT INTO ${table} ${sql.insert(entries)}
             ON DUPLICATE KEY UPDATE value=VALUES(value), expires=VALUES(expires)
           `.unprepared,
+        mssql: (): UpsertFn => (entries) =>
+          Effect.forEach(
+            entries,
+            (entry) =>
+              sql`
+                MERGE ${table} AS target
+                USING (SELECT ${entry.id} AS id, ${entry.value} AS value, ${entry.expires} AS expires) AS source
+                ON target.id = source.id
+                WHEN MATCHED THEN UPDATE SET value = source.value, expires = source.expires
+                WHEN NOT MATCHED THEN INSERT (id, value, expires)
+                VALUES (source.id, source.value, source.expires);
+              `,
+            { discard: true }
+          ),
         // sqlite
         orElse: (): UpsertFn => (entries) =>
           sql`
             INSERT INTO ${table} ${sql.insert(entries)}
             ON CONFLICT(id) DO UPDATE SET value=excluded.value, expires=excluded.expires
           `.unprepared
-      })
-
-      const wrapString = sql.onDialectOrElse({
-        mssql: () => (s: string) => `N'${s}'`,
-        orElse: () => (s: string) => `'${s}'`
       })
 
       return identity<BackingPersistenceStore>({
@@ -404,9 +414,9 @@ export const layerBackingSqlMultiTable: Layer.Layer<
               })
             ),
         getMany: (keys) =>
-          sql<{ id: string; value: string }>`SELECT id, value FROM ${table} WHERE id IN (${
-            sql.literal(keys.map(wrapString).join(", "))
-          }) AND (expires IS NULL OR expires > ${clock.currentTimeMillisUnsafe()})`.unprepared.pipe(
+          sql<{ id: string; value: string }>`SELECT id, value FROM ${table} WHERE ${
+            sql.in("id", keys)
+          } AND (expires IS NULL OR expires > ${clock.currentTimeMillisUnsafe()})`.unprepared.pipe(
             Effect.mapError((cause) =>
               new PersistenceError({
                 message: `Failed to getMany from backing store`,
@@ -538,7 +548,7 @@ export const layerBackingSql: Layer.Layer<
       `,
     mssql: () =>
       sql`
-        IF NOT EXISTS (SELECT * FROM sysobjects WHERE name=${table} AND xtype='U')
+        IF NOT EXISTS (SELECT * FROM sysobjects WHERE name=${"effect_persistence"} AND xtype='U')
         CREATE TABLE ${table} (
           store_id NVARCHAR(191) NOT NULL,
           id NVARCHAR(191) NOT NULL,
@@ -711,11 +721,6 @@ export const layerBackingSql: Layer.Layer<
       `.unprepared
   })
 
-  const wrapString = sql.onDialectOrElse({
-    mssql: () => (s: string) => `N'${s}'`,
-    orElse: () => (s: string) => `'${s}'`
-  })
-
   return BackingPersistence.of({
     make: Effect.fnUntraced(function*(storeId) {
       const clock = yield* Clock.Clock
@@ -749,9 +754,9 @@ export const layerBackingSql: Layer.Layer<
               })
             ),
         getMany: (keys) =>
-          sql<{ id: string; value: string }>`SELECT id, value FROM ${table} WHERE store_id = ${storeId} AND id IN (${
-            sql.literal(keys.map(wrapString).join(", "))
-          }) AND (expires IS NULL OR expires > ${clock.currentTimeMillisUnsafe()})`.unprepared.pipe(
+          sql<{ id: string; value: string }>`SELECT id, value FROM ${table} WHERE store_id = ${storeId} AND ${
+            sql.in("id", keys)
+          } AND (expires IS NULL OR expires > ${clock.currentTimeMillisUnsafe()})`.unprepared.pipe(
             Effect.mapError((cause) =>
               new PersistenceError({
                 message: `Failed to getMany from backing store`,
@@ -928,7 +933,13 @@ export const layerBackingRedis: Layer.Layer<
             Effect.mapError(
               ttl === undefined
                 ? redis.send("SET", prefixed(key), JSON.stringify(value))
-                : redis.send("SET", prefixed(key), JSON.stringify(value), "PX", String(Duration.toMillis(ttl))),
+                : redis.send(
+                  "SET",
+                  prefixed(key),
+                  JSON.stringify(value),
+                  "PX",
+                  String(Math.ceil(Duration.toMillis(ttl)))
+                ),
               ({ cause }) =>
                 new PersistenceError({
                   message: `Failed to set key ${key} in Redis`,
@@ -943,7 +954,7 @@ export const layerBackingRedis: Layer.Layer<
                 const pkey = prefixed(key)
                 sets.set(pkey, JSON.stringify(value))
                 if (ttl) {
-                  expires.set(pkey, Duration.toMillis(ttl))
+                  expires.set(pkey, Math.ceil(Duration.toMillis(ttl)))
                 }
               }
               return Effect.mapError(
@@ -1090,7 +1101,6 @@ export const layerBackingKvs: Layer.Layer<
           setMany: (entries) =>
             Effect.forEach(entries, ([key, value, ttl]) => {
               const expires = unsafeTtlToExpires(clock, ttl)
-              if (expires === null) return Effect.void
               const encoded = JSON.stringify([value, expires])
               return store.set(key, encoded)
             }, { concurrency: "unbounded", discard: true }).pipe(

@@ -15,7 +15,7 @@ import type * as Cause from "./Cause.ts"
 import type { Clock } from "./Clock.ts"
 import * as Context from "./Context.ts"
 import * as Duration from "./Duration.ts"
-import type { ExecutionPlan } from "./ExecutionPlan.ts"
+import type * as ExecutionPlan from "./ExecutionPlan.ts"
 import * as Exit from "./Exit.ts"
 import type { Fiber } from "./Fiber.ts"
 import type * as Filter from "./Filter.ts"
@@ -40,7 +40,7 @@ import { CurrentLogAnnotations, CurrentLogSpans } from "./References.ts"
 import type * as Request from "./Request.ts"
 import type { RequestResolver } from "./RequestResolver.ts"
 import type * as Result from "./Result.ts"
-import type { Schedule } from "./Schedule.ts"
+import type { Metadata as ScheduleMetadata, Schedule } from "./Schedule.ts"
 import type { Scheduler } from "./Scheduler.ts"
 import type { Scope } from "./Scope.ts"
 import type {
@@ -331,13 +331,8 @@ export declare namespace All {
           ] ? Mode extends true ? Result.Result<_A, _E> : _A
             : never
         },
-      Mode extends true ? never
-        : keyof T extends never ? never
-        : T[keyof T] extends Effect<infer _A, infer _E, infer _R> ? _E
-        : never,
-      keyof T extends never ? never
-        : T[keyof T] extends Effect<infer _A, infer _E, infer _R> ? _R
-        : never
+      Mode extends true ? never : Error<ObjectValues<T>>,
+      Services<ObjectValues<T>>
     >
     : never
 
@@ -377,6 +372,8 @@ export declare namespace All {
     : [Arg] extends [Iterable<EffectAny>] ? ReturnIterable<Arg, IsDiscard<O>, IsResult<O>>
     : [Arg] extends [Record<string, EffectAny>] ? ReturnObject<Arg, IsDiscard<O>, IsResult<O>>
     : never
+
+  type ObjectValues<T> = T extends unknown ? T[keyof T] : never
 }
 
 /**
@@ -777,16 +774,46 @@ export const findFirstFilter: {
  * @since 2.0.0
  */
 export const forEach: {
-  <B, E, R, S extends Iterable<any>, const Discard extends boolean = false>(
-    f: (a: Arr.ReadonlyArray.Infer<S>, i: number) => Effect<B, E, R>,
+  <A, B, E, R, S extends Iterable<A> = Iterable<A>, const Discard extends boolean = false>(
+    f: (a: A, i: number) => Effect<B, E, R>,
     options?: { readonly concurrency?: Concurrency | undefined; readonly discard?: Discard | undefined } | undefined
-  ): (self: S) => Effect<Discard extends false ? Arr.ReadonlyArray.With<S, B> : void, E, R>
+  ): (
+    self: [S] extends [never] ? Iterable<A> : S
+  ) => Effect<Discard extends false ? Arr.ReadonlyArray.With<S, B> : void, E, R>
   <B, E, R, S extends Iterable<any>, const Discard extends boolean = false>(
     self: S,
     f: (a: Arr.ReadonlyArray.Infer<S>, i: number) => Effect<B, E, R>,
     options?: { readonly concurrency?: Concurrency | undefined; readonly discard?: Discard | undefined } | undefined
   ): Effect<Discard extends false ? Arr.ReadonlyArray.With<S, B> : void, E, R>
 } = internal.forEach
+
+/**
+ * Returns the first element of the iterable produced by an effect, or fails
+ * with `NoSuchElementError` if the iterable is empty.
+ *
+ * **When to use**
+ *
+ * Use when an effect produces a collection that must contain at least one
+ * element and absence should be represented in the typed error channel.
+ *
+ * **Example** (Getting the first element)
+ *
+ * ```ts import.meta.vitest
+ * import { Effect, Option } from "effect"
+ *
+ * const first = await Effect.runPromise(Effect.head(Effect.succeed([1, 2, 3])))
+ * first // => 1
+ *
+ * const empty = Effect.head(Effect.succeed([] as Array<number>)).pipe(Effect.catchNoSuchElement)
+ * await Effect.runPromise(empty) // => Option.none()
+ * ```
+ *
+ * @category getters
+ * @since 2.0.0
+ */
+export const head: <A, E, R>(
+  self: Effect<Iterable<A>, E, R>
+) => Effect<A, E | Cause.NoSuchElementError, R> = internal.head
 
 /**
  * Executes a body effect repeatedly while a condition holds true.
@@ -936,11 +963,12 @@ export const promise: <A>(
  * @category constructors
  * @since 2.0.0
  */
-export const tryPromise: <A, E = Cause.UnknownError>(
-  options:
-    | { readonly try: (signal: AbortSignal) => PromiseLike<A>; readonly catch: (error: unknown) => E }
-    | ((signal: AbortSignal) => PromiseLike<A>)
-) => Effect<A, E> = internal.tryPromise
+export const tryPromise: {
+  <A>(options: (signal: AbortSignal) => PromiseLike<A>): Effect<A, Cause.UnknownError>
+  <A, E>(
+    options: { readonly try: (signal: AbortSignal) => PromiseLike<A>; readonly catch: (error: unknown) => E }
+  ): Effect<A, E>
+} = internal.tryPromise
 
 /**
  * Creates an `Effect` that always succeeds with a given value.
@@ -1605,12 +1633,13 @@ export const failCauseSync: <E>(
  */
 export const die: (defect: unknown) => Effect<never> = internal.die
 
-const try_: <A, E = Cause.UnknownError>(
-  options: {
+const try_: {
+  <A>(options: LazyArg<A>): Effect<A, Cause.UnknownError>
+  <A, E>(options: {
     readonly try: LazyArg<A>
     readonly catch: (error: unknown) => E
-  } | LazyArg<A>
-) => Effect<A, E> = internal.try
+  }): Effect<A, E>
+} = internal.try
 
 export {
   /**
@@ -1747,6 +1776,26 @@ export const withFiber: <A, E = never, R = never>(
   evaluate: (fiber: Fiber<unknown, unknown>) => Effect<A, E, R>
 ) => Effect<A, E, R> = core.withFiber
 
+/**
+ * Accesses the current fiber to compute a successful value.
+ *
+ * **Example** (Computing a value from the current fiber)
+ *
+ * ```ts import.meta.vitest
+ * import { Effect } from "effect"
+ *
+ * const program = Effect.withFiberSucceed((fiber) => typeof fiber.id)
+ *
+ * Effect.runSync(program) // => "number"
+ * ```
+ *
+ * @category constructors
+ * @since 4.0.0
+ */
+export const withFiberSucceed: <A, R = never>(
+  evaluate: (fiber: Fiber<unknown, unknown>) => A
+) => Effect<A, never, R> = core.withFiberSucceed
+
 // -----------------------------------------------------------------------------
 // Conversions
 // -----------------------------------------------------------------------------
@@ -1813,10 +1862,19 @@ export const fromResult: <A, E>(result: Result.Result<A, E>) => Effect<A, E> = i
  * @category converting
  * @since 4.0.0
  */
-export const fromOption: <Arg extends Option<unknown> | LazyArg<unknown>, E = Cause.NoSuchElementError>(
-  arg: Arg,
-  ...rest: [Arg] extends [Option<unknown>] ? [onNone?: LazyArg<E>] : []
-) => [Arg] extends [Option<infer A>] ? Effect<A, E>
+export const fromOption: <
+  Arg extends Option<unknown> | LazyArg<unknown>,
+  Rest extends [] | [onNone: LazyArg<unknown> | undefined] = []
+>(
+  arg: Arg & (Rest extends [] ? unknown : Option<unknown>),
+  ...rest: Rest
+) => [Arg] extends [Option<infer A>] ? Effect<
+    A,
+    Rest extends [LazyArg<infer E>] ? E
+      : Rest extends [undefined] ? Cause.NoSuchElementError
+      : Rest extends [LazyArg<infer E> | undefined] ? E | Cause.NoSuchElementError
+      : Cause.NoSuchElementError
+  >
   : [Arg] extends [LazyArg<infer E>] ? <A>(option: Option<A>) => Effect<A, E>
   : never = internal.fromOption
 
@@ -3883,7 +3941,7 @@ export const tapCauseFilter: {
  * @since 2.0.0
  */
 export const tapDefect: {
-  <E, B, E2, R2>(f: (defect: unknown) => Effect<B, E2, R2>): <A, R>(self: Effect<A, E, R>) => Effect<A, E | E2, R | R2>
+  <B, E2, R2>(f: (defect: unknown) => Effect<B, E2, R2>): <A, E, R>(self: Effect<A, E, R>) => Effect<A, E | E2, R | R2>
   <A, E, R, B, E2, R2>(self: Effect<A, E, R>, f: (defect: unknown) => Effect<B, E2, R2>): Effect<A, E | E2, R | R2>
 } = internal.tapDefect
 
@@ -4259,6 +4317,14 @@ export const ignoreCause: <
  * and retry timing is derived per step (the first attempt uses the remaining
  * attempts schedule; later retries apply the step schedule at least once).
  *
+ * Attempts can be observed from outside the effect by passing
+ * `options.onEvent`, which receives an `ExecutionPlan.Event` before each
+ * attempt and after it settles. The handler is awaited inline before and after
+ * every attempt, so events are strictly ordered; keep it cheap. It cannot
+ * fail, which keeps observation from changing the plan's outcome, and its
+ * requirements are added to the resulting effect. Terminal events run like
+ * finalizers, so they are emitted even when the attempt is interrupted.
+ *
  * **Example** (Retrying with an execution plan)
  *
  * ```ts import.meta.vitest
@@ -4283,19 +4349,55 @@ export const ignoreCause: <
  * Effect.runSync(program) // => "good"
  * ```
  *
+ * **Example** (Observing execution-plan attempts)
+ *
+ * ```ts import.meta.vitest
+ * import { Context, Effect, ExecutionPlan, Layer } from "effect"
+ *
+ * const Endpoint = Context.Service<{ url: string }>("Endpoint")
+ *
+ * const fetchUrl = Effect.gen(function*() {
+ *   const endpoint = yield* Effect.service(Endpoint)
+ *   if (endpoint.url === "bad") {
+ *     return yield* Effect.fail("Unavailable")
+ *   }
+ *   return endpoint.url
+ * })
+ *
+ * const plan = ExecutionPlan.make(
+ *   { provide: Layer.succeed(Endpoint, { url: "bad" }) },
+ *   { provide: Layer.succeed(Endpoint, { url: "good" }) }
+ * )
+ *
+ * const events: Array<string> = []
+ * const program = Effect.withExecutionPlan(fetchUrl, plan, {
+ *   onEvent: (event) => Effect.sync(() => events.push(`${event._tag}:${event.stepIndex}`))
+ * })
+ *
+ * await Effect.runPromise(program) // => "good"
+ *
+ * events // => ["AttemptStart:0", "AttemptFailure:0", "AttemptStart:1", "AttemptSuccess:1"]
+ * ```
+ *
  * @category error handling
  * @since 3.16.0
  */
 export const withExecutionPlan: {
-  <Input, Provides, PlanE, PlanR>(
-    plan: ExecutionPlan<{ provides: Provides; input: Input; error: PlanE; requirements: PlanR }>
+  <Input, Provides, PlanE, PlanR, RX = never>(
+    plan: ExecutionPlan.ExecutionPlan<{ provides: Provides; input: Input; error: PlanE; requirements: PlanR }>,
+    options?: {
+      readonly onEvent?: ((event: ExecutionPlan.Event<Input | PlanE>) => Effect<void, never, RX>) | undefined
+    }
   ): <A, E extends Input, R>(
     effect: Effect<A, E, R>
-  ) => Effect<A, E | PlanE, Exclude<R, Provides> | PlanR>
-  <A, E extends Input, R, Provides, Input, PlanE, PlanR>(
+  ) => Effect<A, E | PlanE, Exclude<R, Provides> | PlanR | RX>
+  <A, E extends Input, R, Provides, Input, PlanE, PlanR, RX = never>(
     effect: Effect<A, E, R>,
-    plan: ExecutionPlan<{ provides: Provides; input: Input; error: PlanE; requirements: PlanR }>
-  ): Effect<A, E | PlanE, Exclude<R, Provides> | PlanR>
+    plan: ExecutionPlan.ExecutionPlan<{ provides: Provides; input: Input; error: PlanE; requirements: PlanR }>,
+    options?: {
+      readonly onEvent?: ((event: ExecutionPlan.Event<E | PlanE>) => Effect<void, never, RX>) | undefined
+    }
+  ): Effect<A, E | PlanE, Exclude<R, Provides> | PlanR | RX>
 } = internalExecutionPlan.withExecutionPlan
 
 /**
@@ -4316,8 +4418,8 @@ export const withErrorReporting: <
 >(
   effectOrOptions: Arg,
   options?: { readonly defectsOnly?: boolean | undefined } | undefined
-) => [Arg] extends [Effect<infer _A, infer _E, infer _R>] ? Arg : <A, E, R>(self: Effect<A, E, R>) => Effect<A, E, R> =
-  internal.withErrorReporting
+) => [Arg] extends [Effect<infer A, infer E, infer R>] ? Effect<A, E, R>
+  : <A, E, R>(self: Effect<A, E, R>) => Effect<A, E, R> = internal.withErrorReporting
 
 // -----------------------------------------------------------------------------
 // Fallback
@@ -4506,21 +4608,8 @@ export const timeoutOption: {
 } = internal.timeoutOption
 
 /**
- * Applies a timeout to an effect, with a fallback effect executed if the timeout is reached.
- *
- * **When to use**
- *
- * Use when a timeout of an `Effect` should switch to a fallback effect.
- *
- * **Details**
- *
- * The fallback effect is created lazily by `orElse` and may introduce its own
- * success, failure, and requirement types.
- *
- * **Gotchas**
- *
- * If the timeout wins, the source effect is interrupted before the fallback is
- * run.
+ * Applies a timeout to an effect, lazily evaluating `orElse` after interrupting
+ * the source if the timeout is reached.
  *
  * **Example** (Falling back on timeout)
  *
@@ -5769,7 +5858,7 @@ export const contextWith: <R, A, E, R2>(
  *
  * const Database = Context.Service<Database>("Database")
  *
- * const DatabaseLive = Layer.succeed(Database)({
+ * const DatabaseLayer = Layer.succeed(Database)({
  *   query: Effect.fn("Database.query")((sql: string) => Effect.succeed(`Result for: ${sql}`))
  * })
  *
@@ -5778,7 +5867,7 @@ export const contextWith: <R, A, E, R2>(
  *   return yield* db.query("SELECT * FROM users")
  * })
  *
- * const provided = Effect.provide(program, DatabaseLive)
+ * const provided = Effect.provide(program, DatabaseLayer)
  *
  * await Effect.runPromise(provided) // => "Result for: SELECT * FROM users"
  * ```
@@ -6099,12 +6188,12 @@ export const updateContext: {
 export const updateService: {
   <I, A>(
     service: Context.Key<I, A>,
-    f: (value: A) => A
+    f: (value: A) => NoInfer<A>
   ): <XA, E, R>(self: Effect<XA, E, R>) => Effect<XA, E, R | I>
   <XA, E, R, I, A>(
     self: Effect<XA, E, R>,
     service: Context.Key<I, A>,
-    f: (value: A) => A
+    f: (value: A) => NoInfer<A>
   ): Effect<XA, E, R | I>
 } = internal.updateService
 
@@ -6169,7 +6258,7 @@ export const updateService: {
  */
 export const updateServiceScoped: <I, A>(
   service: Context.Key<I, A>,
-  f: (value: A) => A,
+  f: (value: A) => NoInfer<A>,
   options?: {
     readonly reset?: ((original: A, updated: A, current: A) => A) | undefined
   } | undefined
@@ -6298,12 +6387,12 @@ export const provideService: {
 export const provideServiceEffect: {
   <I, S, E2, R2>(
     service: Context.Key<I, S>,
-    acquire: Effect<S, E2, R2>
+    acquire: Effect<NoInfer<S>, E2, R2>
   ): <A, E, R>(self: Effect<A, E, R>) => Effect<A, E | E2, Exclude<R, I> | R2>
   <A, E, R, I, S, E2, R2>(
     self: Effect<A, E, R>,
     service: Context.Key<I, S>,
-    acquire: Effect<S, E2, R2>
+    acquire: Effect<NoInfer<S>, E2, R2>
   ): Effect<A, E | E2, Exclude<R, I> | R2>
 } = internal.provideServiceEffect
 
@@ -6847,7 +6936,8 @@ export const onErrorFilter: {
  * **Details**
  *
  * This low-level operator preserves the source effect's result unless the
- * finalizer fails. Prefer `onExit` for normal cleanup logic.
+ * finalizer fails. If both the source effect and the finalizer fail, the two
+ * causes are merged. Prefer `onExit` for normal cleanup logic.
  *
  * @see {@link onExit} for ordinary exit-aware cleanup whose finalizer always returns an effect
  *
@@ -6863,6 +6953,10 @@ export const onExitPrimitive: <A, E, R, XE = never, XR = never>(
 /**
  * Ensures that a cleanup function runs whether this effect succeeds, fails, or
  * is interrupted.
+ *
+ * **Details**
+ *
+ * If both the effect and the cleanup function fail, the two causes are merged.
  *
  * **Example** (Observing every exit)
  *
@@ -7024,8 +7118,8 @@ export const onExitFilter: {
 export const cached: <A, E, R>(self: Effect<A, E, R>) => Effect<Effect<A, E, R>> = internal.cached
 
 /**
- * Returns an effect that caches its result for a specified `Duration`,
- * known as "timeToLive" (TTL).
+ * Returns an effect that caches its result for a fixed duration or a duration
+ * computed from its `Exit`, known as "timeToLive" (TTL).
  *
  * **When to use**
  *
@@ -7043,6 +7137,17 @@ export const cached: <A, E, R>(self: Effect<A, E, R>) => Effect<Effect<A, E, R>>
  *
  * After the specified duration has passed, the cache expires, and the effect
  * will be recomputed upon the next evaluation.
+ *
+ * `timeToLive` accepts a `Duration.Input` or a function from `Exit<A, E>` to
+ * `Duration.Input`. The function runs once after each fresh computation,
+ * including failures, so successes and failures can have different TTLs. It
+ * does not run when the cache is created or when a cached result is reused.
+ * The callback also receives interruption exits, which are cached for the
+ * returned duration.
+ *
+ * The TTL starts when the computation completes. Concurrent callers share the
+ * pending computation. A zero TTL expires immediately, and an infinite TTL
+ * keeps the result indefinitely.
  *
  * **Example** (Memoizing an effect with TTL)
  *
@@ -7068,6 +7173,26 @@ export const cached: <A, E, R>(self: Effect<A, E, R>) => Effect<Effect<A, E, R>>
  * output // => ["expensive task...", "result 1", "result 1", "result 1"]
  * ```
  *
+ * **Example** (Caching successes while retrying failures)
+ *
+ * ```ts import.meta.vitest
+ * import { Effect, Exit } from "effect"
+ *
+ * let attempts = 0
+ * const task = Effect.suspend(() =>
+ *   ++attempts === 1 ? Effect.fail("temporary failure") : Effect.succeed(42)
+ * )
+ * const program = Effect.gen(function*() {
+ *   const cached = yield* task.pipe(
+ *     Effect.cachedWithTTL((exit) => Exit.isSuccess(exit) ? "1 hour" : 0)
+ *   )
+ *   yield* Effect.exit(cached)
+ *   return yield* cached
+ * })
+ *
+ * Effect.runSync(program) // => 42
+ * ```
+ *
  * @see {@link cached} for a similar function that caches the result
  * indefinitely.
  * @see {@link cachedInvalidateWithTTL} for a similar function that includes an
@@ -7076,8 +7201,17 @@ export const cached: <A, E, R>(self: Effect<A, E, R>) => Effect<Effect<A, E, R>>
  * @since 2.0.0
  */
 export const cachedWithTTL: {
+  <A, E>(
+    timeToLive: (exit: Exit.Exit<A, E>) => Duration.Input
+  ): <R>(self: Effect<A, E, R>) => Effect<Effect<A, E, R>>
   (timeToLive: Duration.Input): <A, E, R>(self: Effect<A, E, R>) => Effect<Effect<A, E, R>>
-  <A, E, R>(self: Effect<A, E, R>, timeToLive: Duration.Input): Effect<Effect<A, E, R>>
+  <A, E>(
+    timeToLive: Duration.Input | ((exit: Exit.Exit<A, E>) => Duration.Input)
+  ): <R>(self: Effect<A, E, R>) => Effect<Effect<A, E, R>>
+  <A, E, R>(
+    self: Effect<A, E, R>,
+    timeToLive: Duration.Input | ((exit: Exit.Exit<A, E>) => Duration.Input)
+  ): Effect<Effect<A, E, R>>
 } = internal.cachedWithTTL
 
 /**
@@ -7573,10 +7707,10 @@ export const repeat: {
  * const program = Effect.repeatOrElse(
  *   task,
  *   Schedule.recurs(3),
- *   (error, attempts) =>
+ *   (error, previous) =>
  *     Effect.sync(() => { output.push(
  *       `Final failure: ${error}, after ${
- *         Option.getOrElse(attempts, () => 0)
+ *         Option.isSome(previous) ? previous.value.attempt : 0
  *       } attempts`
  *     ) }).pipe(Effect.map(() => 0))
  * )
@@ -7591,12 +7725,12 @@ export const repeat: {
 export const repeatOrElse: {
   <R2, A, B, E, E2, E3, R3>(
     schedule: Schedule<B, A, E2, R2>,
-    orElse: (error: E | E2, option: Option<B>) => Effect<B, E3, R3>
+    orElse: (error: E | E2, option: Option<ScheduleMetadata<B, A>>) => Effect<B, E3, R3>
   ): <R>(self: Effect<A, E, R>) => Effect<B, E3, R | R2 | R3>
   <A, E, R, R2, B, E2, E3, R3>(
     self: Effect<A, E, R>,
     schedule: Schedule<B, A, E2, R2>,
-    orElse: (error: E | E2, option: Option<B>) => Effect<B, E3, R3>
+    orElse: (error: E | E2, option: Option<ScheduleMetadata<B, A>>) => Effect<B, E3, R3>
   ): Effect<B, E3, R | R2 | R3>
 } = internalSchedule.repeatOrElse
 
@@ -7717,15 +7851,15 @@ export const replicateEffect: {
 export const schedule: {
   <Output, Error, Env>(
     schedule: Schedule<Output, unknown, Error, Env>
-  ): <A, E, R>(self: Effect<A, E, R>) => Effect<Output, E, R | Env>
+  ): <A, E, R>(self: Effect<A, E, R>) => Effect<Output, E | Error, R | Env>
   <A, E, R, Output, Error, Env>(
     self: Effect<A, E, R>,
     schedule: Schedule<Output, unknown, Error, Env>
-  ): Effect<Output, E, R | Env>
+  ): Effect<Output, E | Error, R | Env>
 } = dual(2, <A, E, R, Output, Error, Env>(
   self: Effect<A, E, R>,
   schedule: Schedule<Output, unknown, Error, Env>
-): Effect<Output, E, R | Env> => scheduleFrom(self, undefined, schedule))
+): Effect<Output, E | Error, R | Env> => scheduleFrom(self, undefined, schedule))
 
 /**
  * Runs an effect repeatedly according to a schedule that is initialized with a
@@ -7769,12 +7903,12 @@ export const scheduleFrom: {
   <Input, Output, Error, Env>(
     initial: Input,
     schedule: Schedule<Output, Input, Error, Env>
-  ): <E, R>(self: Effect<Input, E, R>) => Effect<Output, E, R | Env>
+  ): <E, R>(self: Effect<Input, E, R>) => Effect<Output, E | Error, R | Env>
   <Input, E, R, Output, Error, Env>(
     self: Effect<Input, E, R>,
     initial: Input,
     schedule: Schedule<Output, Input, Error, Env>
-  ): Effect<Output, E, R | Env>
+  ): Effect<Output, E | Error, R | Env>
 } = internalSchedule.scheduleFrom
 
 // -----------------------------------------------------------------------------
@@ -13990,14 +14124,10 @@ export const withLogSpan = dual<
 // -----------------------------------------------------------------------------
 
 /**
- * Updates the `Metric` every time the `Effect` is executed.
+ * Updates a metric after each effect execution, optionally mapping its `Exit` to
+ * the metric's input.
  *
- * **Details**
- *
- * Also accepts an optional function which can be used to map the `Exit` value
- * of the `Effect` into a valid `Input` for the `Metric`.
- *
- * **Example** (Incrementing a metric for each execution)
+ * **Example** (Counting executions)
  *
  * ```ts import.meta.vitest
  * import { Effect, Metric } from "effect"
@@ -14014,12 +14144,11 @@ export const withLogSpan = dual<
  * Effect.runSync(Metric.value(counter)).count // => 1
  * ```
  *
- * **Example** (Mapping exits before updating a metric)
+ * **Example** (Mapping exits)
  *
  * ```ts import.meta.vitest
  * import { Effect, Exit, Metric } from "effect"
  *
- * // Track different exit types with custom mapping
  * const exitTracker = Metric.frequency("exit_types", {
  *   description: "Tracks success/failure/defect counts"
  * })
@@ -14044,7 +14173,7 @@ export const track: {
   <Input, State, E, A>(
     metric: Metric.Metric<Input, State>,
     f: (exit: Exit.Exit<A, E>) => Input
-  ): <E, R>(self: Effect<A, E, R>) => Effect<A, E, R>
+  ): <E2 extends E, R>(self: Effect<A, E2, R>) => Effect<A, E2, R>
   <State, E, A>(
     metric: Metric.Metric<Exit.Exit<NoInfer<A>, NoInfer<E>>, State>
   ): <R>(self: Effect<A, E, R>) => Effect<A, E, R>
@@ -14476,11 +14605,12 @@ export const tx = <A, E, R>(
   effect: Effect<A, E, R>
 ): Effect<A, E, Exclude<R, Transaction>> =>
   withFiber((fiber) => {
-    if (fiber.context.mapUnsafe.has(Transaction.key)) {
+    let state = Context.getOrUndefined(fiber.context, Transaction)
+    if (state) {
       return effect as Effect<A, E, Exclude<R, Transaction>>
     }
     // Create transaction state only at the outermost boundary
-    const state: Transaction["Service"] = { journal: new Map(), retry: false }
+    state = { journal: new Map(), retry: false }
     let result: Exit.Exit<A, E> | undefined
     return uninterruptibleMask((restore) =>
       flatMap(
@@ -14850,6 +14980,9 @@ export declare namespace Effectify {
     : never
 }
 
+type EffectifyArgs<F extends (...args: Array<any>) => any> = Parameters<F> extends [...infer Args, any] ? Args
+  : Parameters<F>
+
 /**
  * Converts an error-first callback API into a function that returns an
  * `Effect`.
@@ -14906,12 +15039,12 @@ export const effectify: {
   <F extends (...args: Array<any>) => any>(fn: F): Effectify.Effectify<F, Effectify.EffectifyError<F>>
   <F extends (...args: Array<any>) => any, E>(
     fn: F,
-    onError: (error: Effectify.EffectifyError<F>, args: Parameters<F>) => E
+    onError: (error: Effectify.EffectifyError<F>, args: EffectifyArgs<F>) => E
   ): Effectify.Effectify<F, E>
   <F extends (...args: Array<any>) => any, E, E2>(
     fn: F,
-    onError: (error: Effectify.EffectifyError<F>, args: Parameters<F>) => E,
-    onSyncError: (error: unknown, args: Parameters<F>) => E2
+    onError: (error: Effectify.EffectifyError<F>, args: EffectifyArgs<F>) => E,
+    onSyncError: (error: unknown, args: EffectifyArgs<F>) => E2
   ): Effectify.Effectify<F, E | E2>
 } =
   (<A>(fn: Function, onError?: (e: any, args: any) => any, onSyncError?: (e: any, args: any) => any) =>

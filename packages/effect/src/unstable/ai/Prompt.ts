@@ -11,6 +11,7 @@
  */
 import * as Arr from "../../Array.ts"
 import * as Effect from "../../Effect.ts"
+import * as Encoding from "../../Encoding.ts"
 import { dual } from "../../Function.ts"
 import { type Pipeable, pipeArguments } from "../../Pipeable.ts"
 import * as Predicate from "../../Predicate.ts"
@@ -631,7 +632,8 @@ export const toolCallPart = (params: PartConstructorParams<ToolCallPart>): ToolC
  *     temperature: 22,
  *     condition: "sunny",
  *     humidity: 65
- *   }
+ *   },
+ *   providerExecuted: false
  * })
  * const result = [toolResultPart.name, toolResultPart.isFailure] // => ["get_weather", false]
  * ```
@@ -656,6 +658,10 @@ export interface ToolResultPart extends BasePart<"tool-result", ToolResultPartOp
    * The result returned by the tool execution.
    */
   readonly result: unknown
+  /**
+   * Whether the tool was executed by the provider (true) or framework (false).
+   */
+  readonly providerExecuted: boolean
 }
 
 /**
@@ -681,6 +687,10 @@ export interface ToolResultPartEncoded extends BasePartEncoded<"tool-result", To
    * The result returned by the tool execution.
    */
   readonly result: unknown
+  /**
+   * Whether the tool was executed by the provider (true) or framework (false).
+   */
+  readonly providerExecuted?: boolean | undefined
 }
 
 /**
@@ -704,6 +714,7 @@ export const ToolResultPart: Schema.Struct<{
   readonly name: Schema.String
   readonly isFailure: Schema.Boolean
   readonly result: Schema.Unknown
+  readonly providerExecuted: Schema.withDecodingDefault<Schema.Boolean>
   readonly "~effect/ai/Prompt/Part": Schema.withDecodingDefaultKey<Schema.Literal<"~effect/ai/Prompt/Part">>
   readonly options: Schema.withDecodingDefault<
     Schema.$Record<
@@ -717,7 +728,8 @@ export const ToolResultPart: Schema.Struct<{
   id: Schema.String,
   name: Schema.String,
   isFailure: Schema.Boolean,
-  result: Schema.Unknown
+  result: Schema.Unknown,
+  providerExecuted: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false)))
 }).annotate({ identifier: "ToolResultPart" })
 
 /**
@@ -1087,7 +1099,7 @@ export type MessageConstructorParams<M extends Message> = Omit<M, typeof Message
   /**
    * Optional provider-specific options for this message.
    */
-  readonly options?: Part["options"] | undefined
+  readonly options?: M["options"] | undefined
 }
 
 /**
@@ -1374,7 +1386,9 @@ export const UserMessage: Schema.Struct<{
   ...BaseMessage.fields,
   role: Schema.Literal("user"),
   content: Schema.Union([
-    ContentFromString,
+    ContentFromString.check(
+      Schema.makeFilter((content) => content.length === 1 && Object.keys(content[0].options).length === 0)
+    ),
     Schema.Array(Schema.Union([TextPart, FilePart]))
   ])
 }).annotate({ identifier: "UserMessage" })
@@ -1420,7 +1434,8 @@ export const userMessage = (params: MessageConstructorParams<UserMessage>): User
  *         result: {
  *           temperature: 72,
  *           condition: "sunny"
- *         }
+ *         },
+ *         providerExecuted: true
  *       }),
  *       Prompt.makePart("text", {
  *         text: "The weather in San Francisco is currently 72°F and sunny."
@@ -1573,7 +1588,9 @@ export const AssistantMessage: Schema.Struct<{
   ...BaseMessage.fields,
   role: Schema.Literal("assistant"),
   content: Schema.Union([
-    ContentFromString,
+    ContentFromString.check(
+      Schema.makeFilter((content) => content.length === 1 && Object.keys(content[0].options).length === 0)
+    ),
     Schema.Array(Schema.Union([
       TextPart,
       FilePart,
@@ -1627,7 +1644,8 @@ export const assistantMessage = (params: MessageConstructorParams<AssistantMessa
  *           { title: "TypeScript Handbook", url: "https://..." },
  *           { title: "Effective TypeScript", url: "https://..." }
  *         ]
- *       }
+ *       },
+ *       providerExecuted: false
  *     })
  *   ]
  * })
@@ -1772,7 +1790,7 @@ export const Message: Schema.Codec<Message, MessageEncoded> = Schema.Union([
 // Prompt
 // =============================================================================
 
-const TypeId = "~effect/unstable/ai/Prompt" as const
+const TypeId = "~effect/ai/Prompt" as const
 
 /**
  * Type guard to check if a value is a Prompt.
@@ -1826,21 +1844,31 @@ export const Prompt: Schema.Codec<Prompt, PromptEncoded> = Schema.Struct({
 }).pipe(
   Schema.decodeTo(
     $Prompt,
-    SchemaTransformation.transformOrFail({
-      decode: (input) =>
+    SchemaTransformation.transformEffect({
+      decode: (input, options) =>
         Effect.mapBothEager(
           SchemaParser.decodeEffect(Schema.Array(Message))(input.content),
           {
             onSuccess: makePrompt,
-            onFailure: () => new SchemaIssue.InvalidValue({ message: "Invalid Prompt messages" })
+            onFailure: () =>
+              new SchemaIssue.InvalidValue(
+                { message: "Invalid Prompt messages" },
+                input.content,
+                options
+              )
           }
         ),
-      encode: (prompt) =>
+      encode: (prompt, options) =>
         Effect.mapBothEager(
           SchemaParser.encodeEffect(Schema.Array(Message))(prompt.content),
           {
             onSuccess: (messages) => ({ content: messages }),
-            onFailure: () => new SchemaIssue.InvalidValue({ message: "Invalid Prompt messages" })
+            onFailure: () =>
+              new SchemaIssue.InvalidValue(
+                { message: "Invalid Prompt messages" },
+                prompt.content,
+                options
+              )
           }
         )
     })
@@ -1981,11 +2009,23 @@ export const make = (input: RawInput): Prompt => {
  */
 export const fromMessages = (messages: ReadonlyArray<Message>): Prompt => makePrompt(messages)
 
+const mergeOptions = (left: ProviderOptions, right: ProviderOptions): ProviderOptions => {
+  const result: Record<string, ProviderOptions[string]> = { ...left }
+  for (const [provider, metadata] of Object.entries(right)) {
+    const previous = result[provider]
+    result[provider] = Predicate.isObject(previous) && Predicate.isObject(metadata)
+      ? Object.assign({}, previous, metadata)
+      : metadata
+  }
+  return result
+}
+
 /**
  * Creates a `Prompt` from response parts by folding completed text and
- * reasoning streams into assistant parts, placing tool calls and approval
- * requests in an assistant message, and placing non-preliminary tool results
- * in a tool message using their encoded results.
+ * reasoning streams into assistant parts, preserving provider metadata as
+ * prompt options, placing tool calls and approval requests in an assistant
+ * message, and placing non-preliminary tool results in a tool message using
+ * their encoded results.
  *
  * **Example** (Creating prompts from response parts)
  *
@@ -2029,56 +2069,74 @@ export const fromResponseParts = (parts: ReadonlyArray<Response.AnyPart>): Promp
   const assistantParts: Array<AssistantMessagePart> = []
   const toolParts: Array<ToolMessagePart> = []
 
-  const activeTextDeltas = new Map<string, { text: string }>()
-  const activeReasoningDeltas = new Map<string, { text: string }>()
+  const activeTextDeltas = new Map<string, { text: string; options: ProviderOptions }>()
+  const activeReasoningDeltas = new Map<string, { text: string; options: ProviderOptions }>()
 
   for (const part of parts) {
     switch (part.type) {
       // Text Parts
       case "text": {
-        assistantParts.push(makePart("text", { text: part.text }))
+        assistantParts.push(makePart("text", { text: part.text, options: part.metadata }))
         break
       }
 
       // Text Parts (streaming)
       case "text-start": {
-        activeTextDeltas.set(part.id, { text: "" })
+        activeTextDeltas.set(part.id, { text: "", options: part.metadata })
         break
       }
       case "text-delta": {
         if (activeTextDeltas.has(part.id)) {
-          activeTextDeltas.get(part.id)!.text += part.delta
+          const active = activeTextDeltas.get(part.id)!
+          active.text += part.delta
+          active.options = mergeOptions(active.options, part.metadata)
         }
         break
       }
       case "text-end": {
         if (activeTextDeltas.has(part.id)) {
-          assistantParts.push(makePart("text", activeTextDeltas.get(part.id)!))
+          const active = activeTextDeltas.get(part.id)!
+          active.options = mergeOptions(active.options, part.metadata)
+          assistantParts.push(makePart("text", active))
         }
         break
       }
 
       // Reasoning Parts
       case "reasoning": {
-        assistantParts.push(makePart("reasoning", { text: part.text }))
+        assistantParts.push(makePart("reasoning", { text: part.text, options: part.metadata }))
         break
       }
 
       // Reasoning Parts (streaming)
       case "reasoning-start": {
-        activeReasoningDeltas.set(part.id, { text: "" })
+        activeReasoningDeltas.set(part.id, { text: "", options: part.metadata })
         break
       }
       case "reasoning-delta": {
         if (activeReasoningDeltas.has(part.id)) {
-          activeReasoningDeltas.get(part.id)!.text += part.delta
+          const active = activeReasoningDeltas.get(part.id)!
+          active.text += part.delta
+          active.options = mergeOptions(active.options, part.metadata)
         }
         break
       }
       case "reasoning-end": {
         if (activeReasoningDeltas.has(part.id)) {
-          assistantParts.push(makePart("reasoning", activeReasoningDeltas.get(part.id)!))
+          const active = activeReasoningDeltas.get(part.id)!
+          active.options = mergeOptions(active.options, part.metadata)
+          assistantParts.push(makePart("reasoning", active))
         }
+        break
+      }
+
+      // File Parts
+      case "file": {
+        assistantParts.push(makePart("file", {
+          data: Encoding.encodeBase64(part.data),
+          mediaType: part.mediaType,
+          options: part.metadata
+        }))
         break
       }
 
@@ -2088,7 +2146,8 @@ export const fromResponseParts = (parts: ReadonlyArray<Response.AnyPart>): Promp
           id: part.id,
           name: part.name,
           params: part.params,
-          providerExecuted: part.providerExecuted ?? false
+          providerExecuted: part.providerExecuted ?? false,
+          options: part.metadata
         }))
         break
       }
@@ -2096,11 +2155,14 @@ export const fromResponseParts = (parts: ReadonlyArray<Response.AnyPart>): Promp
       // Tool Result Parts (skip preliminary results)
       case "tool-result": {
         if (part.preliminary !== true) {
-          toolParts.push(makePart("tool-result", {
+          const target = part.providerExecuted === true ? assistantParts : toolParts
+          target.push(makePart("tool-result", {
             id: part.id,
             name: part.name,
             isFailure: part.isFailure,
-            result: part.encodedResult
+            result: part.encodedResult,
+            providerExecuted: part.providerExecuted ?? false,
+            options: part.metadata
           }))
         }
         break

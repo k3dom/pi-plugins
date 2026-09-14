@@ -52,7 +52,7 @@ import { hasProperty } from "./Predicate.ts"
  * @category symbols
  * @since 2.0.0
  */
-export const symbol = "~effect/interfaces/Equal"
+export const symbol = "~effect/Equal"
 
 /**
  * The interface for types that define their own equality logic.
@@ -360,10 +360,14 @@ function compareRecords(
 /** @internal */
 export function makeCompareMap<K, V>(keyEquivalence: Equivalence<K>, valueEquivalence: Equivalence<V>) {
   return function compareMaps(self: Iterable<[K, V]>, that: Iterable<[K, V]>): boolean {
+    const thatEntries = Array.from(that)
     for (const [selfKey, selfValue] of self) {
       let found = false
-      for (const [thatKey, thatValue] of that) {
+      for (let i = 0; i < thatEntries.length; i++) {
+        const [thatKey, thatValue] = thatEntries[i]
         if (keyEquivalence(selfKey, thatKey) && valueEquivalence(selfValue, thatValue)) {
+          thatEntries[i] = thatEntries[thatEntries.length - 1]
+          thatEntries.pop()
           found = true
           break
         }
@@ -382,10 +386,14 @@ const compareMaps = makeCompareMap(compareBoth, compareBoth)
 /** @internal */
 export function makeCompareSet<A>(equivalence: Equivalence<A>) {
   return function compareSets(self: Iterable<A>, that: Iterable<A>): boolean {
+    const thatValues = Array.from(that)
     for (const selfValue of self) {
       let found = false
-      for (const thatValue of that) {
+      for (let i = 0; i < thatValues.length; i++) {
+        const thatValue = thatValues[i]
         if (equivalence(selfValue, thatValue)) {
+          thatValues[i] = thatValues[thatValues.length - 1]
+          thatValues.pop()
           found = true
           break
         }

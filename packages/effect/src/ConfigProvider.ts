@@ -9,6 +9,7 @@
  * @since 4.0.0
  */
 
+import * as Arr from "./Array.ts"
 import * as Context from "./Context.ts"
 import * as Data from "./Data.ts"
 import * as Effect from "./Effect.ts"
@@ -651,7 +652,7 @@ export const nested: {
  * )
  *
  * const program = Effect.gen(function*() {
- *   const port = yield* Config.number("port")
+ *   const port = yield* Config.Number("port")
  *   return port
  * })
  *
@@ -697,7 +698,7 @@ export const layer = <E = never, R = never>(
  * // The current env provider is tried first; `defaults` is the fallback
  * const DefaultsLayer = ConfigProvider.layerAdd(defaults)
  * const BaseLayer = ConfigProvider.layer(ConfigProvider.fromUnknown({}))
- * const program = Config.string("HOST")
+ * const program = Config.String("HOST")
  *
  * const layer = Layer.provide(DefaultsLayer, BaseLayer)
  * Effect.runSync(Effect.provide(program, layer)) // => "localhost"
@@ -763,7 +764,7 @@ export const layerAdd = <E = never, R = never>(
  *   }
  * })
  *
- * const host = Config.string("host").parse(
+ * const host = Config.String("host").parse(
  *   provider.pipe(ConfigProvider.nested("database"))
  * )
  *
@@ -833,13 +834,49 @@ function emptyStringAsMissing(value: string | undefined, preserveEmptyStrings: b
 }
 
 /**
+ * Creates a `ConfigProvider` backed by an explicit environment record.
+ *
+ * **When to use**
+ *
+ * Use when a restricted runtime cannot evaluate the automatic environment
+ * detection performed by {@link fromEnv}, or whenever the environment record
+ * must be supplied explicitly.
+ *
+ * **Details**
+ *
+ * `undefined` values are ignored. Path lookup and child discovery otherwise
+ * use the same environment-variable semantics as {@link fromEnv}.
+ *
+ * Environment variable names are captured at construction time to establish
+ * record keys and array lengths. The supplied record remains live for value
+ * lookups, so updates to known paths are observed by later loads. Keys added
+ * after construction can be loaded directly, but do not appear in captured
+ * parent record keys or array lengths.
+ *
+ * Literal empty strings are treated as missing values by default. Pass
+ * `{ preserveEmptyStrings: true }` to keep empty strings as explicit values.
+ *
+ * @see {@link fromEnv} – automatically reads the runtime environment
+ *
+ * @category constructors
+ * @since 4.0.0
+ */
+export function fromEnvRecord(
+  env: Record<string, string | undefined>,
+  options?: { readonly preserveEmptyStrings?: boolean | undefined }
+): ConfigProvider {
+  const preserveEmptyStrings = options?.preserveEmptyStrings === true
+  const trie = buildEnvTrie(env)
+  return make((path) => Effect.succeed(nodeAtEnv(trie, env, path, preserveEmptyStrings)))
+}
+
+/**
  * Creates a `ConfigProvider` backed by environment variables.
  *
  * **When to use**
  *
  * Use to read configuration from `process.env`, which is the default when no
- * provider is explicitly set, or pass a custom env record for testing or
- * non-Node runtimes.
+ * provider is explicitly set, or pass a custom env record for testing.
  *
  * **Details**
  *
@@ -872,7 +909,7 @@ function emptyStringAsMissing(value: string | undefined, preserveEmptyStrings: b
  *   }
  * })
  *
- * const host = Config.string("HOST").parse(
+ * const host = Config.String("HOST").parse(
  *   provider.pipe(ConfigProvider.nested("DATABASE"))
  * )
  *
@@ -880,6 +917,7 @@ function emptyStringAsMissing(value: string | undefined, preserveEmptyStrings: b
  * ```
  *
  * @see {@link fromUnknown} – for JSON objects
+ * @see {@link fromEnvRecord} – for explicit records in restricted runtimes
  * @see {@link constantCase} – bridge camelCase keys to SCREAMING_SNAKE_CASE
  *
  * @category constructors
@@ -895,10 +933,7 @@ export function fromEnv(options?: {
     }).process?.env,
     ...(import.meta as any)?.env
   }
-  const preserveEmptyStrings = options?.preserveEmptyStrings === true
-  const trie = buildEnvTrie(env)
-
-  return make((path) => Effect.succeed(nodeAtEnv(trie, env, path, preserveEmptyStrings)))
+  return fromEnvRecord(env, { preserveEmptyStrings: options?.preserveEmptyStrings })
 }
 
 type EnvTrieNode = {
@@ -924,8 +959,6 @@ function buildEnvTrie(env: Record<string, string | undefined>): EnvTrieNode {
   return trie
 }
 
-const NUMERIC_INDEX = /^(0|[1-9][0-9]*)$/
-
 function nodeAtEnv(
   trie: EnvTrieNode,
   env: Record<string, string | undefined>,
@@ -942,7 +975,7 @@ function nodeAtEnv(
     return leafValue === undefined ? undefined : makeValue(leafValue)
   }
 
-  const allNumeric = children.every((k) => NUMERIC_INDEX.test(k))
+  const allNumeric = children.every(Arr.isCanonicalArrayIndex)
   if (allNumeric) {
     const length = Math.max(...children.map((k) => parseInt(k, 10))) + 1
     return makeArray(length, leafValue)
@@ -984,7 +1017,7 @@ function trieNodeAt(root: EnvTrieNode, path: Path): EnvTrieNode | undefined {
  *
  * Parsing is based on the `dotenv` / `dotenv-expand` algorithm.
  *
- * Internally delegates to {@link fromEnv} with the parsed key-value pairs.
+ * Internally delegates to {@link fromEnvRecord} with the parsed key-value pairs.
  *
  * **Example** (Parsing .env contents)
  *
@@ -1003,6 +1036,7 @@ function trieNodeAt(root: EnvTrieNode, path: Path): EnvTrieNode | undefined {
  * ```
  *
  * @see {@link fromDotEnv} – loads a `.env` file from disk
+ * @see {@link fromEnvRecord} – for explicit environment records
  * @see {@link fromEnv} – for raw environment variable access
  *
  * @category constructors
@@ -1016,7 +1050,7 @@ export function fromDotEnvContents(lines: string, options?: {
   if (options?.expandVariables) {
     env = dotEnvExpand(env)
   }
-  return fromEnv({ env, preserveEmptyStrings: options?.preserveEmptyStrings })
+  return fromEnvRecord(env, { preserveEmptyStrings: options?.preserveEmptyStrings })
 }
 
 const DOT_ENV_LINE =
@@ -1096,9 +1130,12 @@ function interpolate(envValue: string, parsed: Record<string, string>): string {
 
   if (match !== null) {
     const [_, group, variableName, defaultValue] = match
+    const value = Object.hasOwn(parsed, variableName) && parsed[variableName] !== ""
+      ? parsed[variableName]
+      : defaultValue ?? ""
 
     return interpolate(
-      envValue.replace(group, defaultValue || (Object.hasOwn(parsed, variableName) ? parsed[variableName] : "")),
+      envValue.replace(group, () => value),
       parsed
     )
   }

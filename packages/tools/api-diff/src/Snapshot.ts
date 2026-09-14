@@ -2,6 +2,7 @@ import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Path from "effect/Path"
+import * as Predicate from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import ts from "typescript-compiler"
 import { Discovery, type DiscoveryResult } from "./Discovery.ts"
@@ -226,8 +227,18 @@ export const serializeType = (node: ts.TypeNode, context: SerializationContext):
   }
   if (ts.isLiteralTypeNode(node)) {
     const literal = node.literal
+    const operand = ts.isPrefixUnaryExpression(literal) ? literal.operand : literal
     return {
       kind: "literal",
+      literalKind: ts.isStringLiteralLike(operand)
+        ? "string"
+        : ts.isNumericLiteral(operand)
+        ? "number"
+        : ts.isBigIntLiteral(operand)
+        ? "bigint"
+        : operand.kind === ts.SyntaxKind.NullKeyword
+        ? "null"
+        : "boolean",
       value: literal.kind === ts.SyntaxKind.TrueKeyword
         ? true
         : literal.kind === ts.SyntaxKind.FalseKeyword
@@ -396,11 +407,14 @@ const serializeClassMember = (
       kind: "property",
       name: nameText(node.name),
       type: node.type === undefined ? { kind: "unknown" } : serializeType(node.type, context),
-      modifiers: visibility
+      modifiers: node.questionToken === undefined ? visibility : [...(visibility ?? []), "optional"].sort()
     }
   }
   if (ts.isMethodDeclaration(node)) {
-    return serializeSignature(node, context, "method", nameText(node.name))
+    return {
+      ...serializeSignature(node, context, "method", nameText(node.name)),
+      modifiers: node.questionToken === undefined ? visibility : [...(visibility ?? []), "optional"].sort()
+    }
   }
   if (ts.isConstructorDeclaration(node)) {
     return serializeSignature(node, context, "constructor", "constructor")
@@ -701,13 +715,16 @@ export interface ExtractSnapshotOptions {
   readonly modules?: ReadonlyArray<string>
 }
 
-export class SnapshotExtractionError extends Schema.TaggedErrorClass<SnapshotExtractionError>()(
+export class SnapshotExtractionError extends Schema.TaggedError<SnapshotExtractionError>()(
   "SnapshotExtractionError",
   {
     message: Schema.String,
     diagnostics: Schema.Array(SnapshotDiagnosticSchema)
   }
 ) {}
+
+export const isSnapshotExtractionError = (u: unknown): u is SnapshotExtractionError =>
+  Predicate.isTagged(u, "SnapshotExtractionError")
 
 const snapshotExtractionError = (diagnostics: ReadonlyArray<SnapshotDiagnostic>): SnapshotExtractionError =>
   new SnapshotExtractionError({
@@ -842,7 +859,15 @@ const extractSnapshot = (
 export const snapshotCacheKey = (
   sha: string,
   modules?: ReadonlyArray<string>
-): string => fingerprint(["snapshot-v4", sha, ts.version, modules === undefined ? "all" : [...modules].sort()])
+): string =>
+  fingerprint([
+    "snapshot-v4",
+    "class-member-optionality-v1",
+    "literal-type-category-v1",
+    sha,
+    ts.version,
+    modules === undefined ? "all" : [...modules].sort()
+  ])
 
 export class Snapshotter extends Context.Service<Snapshotter, {
   readonly extract: (options: ExtractSnapshotOptions) => Effect.Effect<
@@ -861,7 +886,7 @@ export class Snapshotter extends Context.Service<Snapshotter, {
         return yield* Effect.try({
           try: () => extractSnapshot(options, discovered, path),
           catch: (cause) =>
-            cause instanceof SnapshotExtractionError
+            isSnapshotExtractionError(cause)
               ? cause
               : new ApiDiffError({
                 message: `Could not extract the API snapshot for ${options.ref}`,
