@@ -1,5 +1,12 @@
 # @pi-plugins/webfetch
 
+## 0.2.5
+
+### Patch Changes
+
+- 68c6816: Fail timeouts with Effect's own `Cause.TimeoutError` instead of a bespoke
+  `WebFetchTimeoutError`. The message the model reads back is unchanged.
+
 ## 0.2.4
 
 ### Patch Changes
