@@ -1,5 +1,4 @@
 import {
-  Cause,
   Config,
   DateTime,
   Duration,
@@ -13,11 +12,10 @@ import {
   FetchHttpClient,
   HttpBody,
   HttpClient,
-  HttpClientError,
   HttpClientRequest,
   HttpClientResponse,
 } from 'effect/unstable/http'
-import { SearchResult, WebSearch } from './search'
+import { SearchResult, WebSearch, WebSearchError } from './search'
 
 const ENDPOINT = 'https://api.tavily.com/search'
 
@@ -32,9 +30,16 @@ const SearchResponse = Schema.Struct({
   ),
 })
 
-const ErrorResponse = Schema.Struct({
+class TavilyError extends Schema.ErrorClass<TavilyError>(
+  '@pi-plugins/websearch/TavilyError',
+)({
+  _tag: Schema.tagDefaultOmit('TavilyError'),
   detail: Schema.Struct({ error: Schema.String }),
-})
+}) {
+  override get message() {
+    return this.detail.error
+  }
+}
 
 export const layer = Layer.effect(
   WebSearch,
@@ -59,13 +64,13 @@ export const layer = Layer.effect(
       HttpClient.filterStatusOk,
     )
 
-    const search = Effect.fn(
+    const search = Effect.fn('Tavily.search')(
       function* (options: {
         readonly query: string
         readonly maxResults: number
         readonly timeout: Duration.Input
       }) {
-        const response = yield* http
+        const body = yield* http
           .post(ENDPOINT, {
             body: HttpBody.jsonUnsafe({
               query: options.query,
@@ -80,39 +85,20 @@ export const layer = Layer.effect(
               'HttpClientError',
               'StatusCodeError',
               (reason, error) =>
-                Effect.gen(function* () {
-                  const body = yield* Effect.mapError(
-                    HttpClientResponse.schemaBodyJson(ErrorResponse)(
-                      reason.response,
-                    ),
-                    () => error,
-                  )
-                  return yield* new HttpClientError.HttpClientError({
-                    reason: new HttpClientError.StatusCodeError({
-                      request: reason.request,
-                      response: reason.response,
-                      description: body.detail.error,
-                    }),
-                  })
+                HttpClientResponse.schemaBodyJson(TavilyError)(reason.response).pipe(
+                  Effect.mapError(() => error),
+                  Effect.flatMap(Effect.fail),
+                ),
+            ),
+            Effect.flatMap(HttpClientResponse.schemaBodyJson(SearchResponse)),
+            Effect.mapError(
+              (cause) =>
+                new WebSearchError({
+                  message: `Tavily search failed: ${cause.message}`,
+                  cause,
                 }),
             ),
           )
-
-        const body = yield* HttpClientResponse.schemaBodyJson(SearchResponse)(
-          response,
-        ).pipe(
-          Effect.mapError(
-            (cause) =>
-              new HttpClientError.HttpClientError({
-                reason: new HttpClientError.DecodeError({
-                  request: response.request,
-                  response,
-                  description: 'unexpected response body',
-                  cause,
-                }),
-              }),
-          ),
-        )
 
         return body.results.map(
           (result) =>
@@ -130,20 +116,15 @@ export const layer = Layer.effect(
         )
       },
       (_, options) =>
-        _.pipe(
-          Effect.timeoutOrElse({
-            duration: options.timeout,
-            orElse: () =>
-              new Cause.TimeoutError(
-                `Tavily search timed out after ${Duration.format(
-                  Duration.fromInputUnsafe(options.timeout),
-                )}`,
-              ),
-          }),
-          Effect.withSpan('Tavily.search', {
-            attributes: { query: options.query, maxResults: options.maxResults },
-          }),
-        ),
+        Effect.timeoutOrElse(_, {
+          duration: options.timeout,
+          orElse: () =>
+            new WebSearchError({
+              message: `Tavily search timed out after ${Duration.format(
+                Duration.fromInputUnsafe(options.timeout),
+              )}`,
+            }),
+        }),
     )
 
     return { search } as const

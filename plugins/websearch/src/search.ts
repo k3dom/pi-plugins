@@ -1,5 +1,4 @@
-import { type Cause, Context, type Duration, type Effect, Schema } from 'effect'
-import type { HttpClientError } from 'effect/unstable/http'
+import { Context, type Duration, type Effect, Schema } from 'effect'
 
 export class SearchResult extends Schema.Class<SearchResult>('SearchResult')({
   title: Schema.String,
@@ -8,15 +7,20 @@ export class SearchResult extends Schema.Class<SearchResult>('SearchResult')({
   publishedAt: Schema.optional(Schema.DateTimeUtc),
 }) {}
 
+export class WebSearchError extends Schema.TaggedErrorClass<WebSearchError>()(
+  '@pi-plugins/websearch/WebSearchError',
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
 interface WebSearchService {
   search: (options: {
     readonly query: string
     readonly maxResults: number
     readonly timeout: Duration.Input
-  }) => Effect.Effect<
-    ReadonlyArray<SearchResult>,
-    HttpClientError.HttpClientError | Cause.TimeoutError
-  >
+  }) => Effect.Effect<ReadonlyArray<SearchResult>, WebSearchError>
 }
 
 export class WebSearch extends Context.Service<WebSearch, WebSearchService>()(
