@@ -1,4 +1,4 @@
-import { Context, Duration, Effect, Layer, Schedule, Schema } from 'effect'
+import { Cause, Context, Duration, Effect, Layer, Schedule } from 'effect'
 import {
   FetchHttpClient,
   HttpClient,
@@ -8,13 +8,6 @@ import {
 import { HtmlConverter, HtmlConverterError } from './converter'
 
 export type WebFetchFormat = 'markdown' | 'html'
-
-export class WebFetchTimeoutError extends Schema.TaggedErrorClass<WebFetchTimeoutError>()(
-  '@pi-plugins/webfetch/WebFetchTimeoutError',
-  {
-    message: Schema.String,
-  },
-) {}
 
 const ACCEPT_HEADERS: Record<WebFetchFormat, string> = {
   markdown:
@@ -35,7 +28,7 @@ interface WebFetchService {
     timeout: Duration.Input
   }) => Effect.Effect<
     string,
-    HtmlConverterError | HttpClientError.HttpClientError | WebFetchTimeoutError
+    HtmlConverterError | HttpClientError.HttpClientError | Cause.TimeoutError
   >
 }
 
@@ -86,11 +79,11 @@ export class WebFetch extends Context.Service<WebFetch, WebFetchService>()(
             Effect.timeoutOrElse({
               duration: options.timeout,
               orElse: () =>
-                new WebFetchTimeoutError({
-                  message: `GET ${options.url} timed out after ${Duration.format(
+                new Cause.TimeoutError(
+                  `GET ${options.url} timed out after ${Duration.format(
                     Duration.fromInputUnsafe(options.timeout),
                   )}`,
-                }),
+                ),
             }),
             Effect.withSpan('WebFetch.fetch', {
               attributes: { url: options.url, format: options.format },
