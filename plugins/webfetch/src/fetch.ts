@@ -48,7 +48,7 @@ export class WebFetch extends Context.Service<WebFetch, WebFetchService>()(
         }),
       )
 
-      const fetch = Effect.fn(
+      const fetch = Effect.fn('WebFetch.fetch')(
         function* (options: {
           url: string
           format: WebFetchFormat
@@ -75,20 +75,15 @@ export class WebFetch extends Context.Service<WebFetch, WebFetchService>()(
           return isHtml ? yield* converter.toMarkdown(raw, options.url) : raw
         },
         (_, options) =>
-          _.pipe(
-            Effect.timeoutOrElse({
-              duration: options.timeout,
-              orElse: () =>
-                new Cause.TimeoutError(
-                  `GET ${options.url} timed out after ${Duration.format(
-                    Duration.fromInputUnsafe(options.timeout),
-                  )}`,
-                ),
-            }),
-            Effect.withSpan('WebFetch.fetch', {
-              attributes: { url: options.url, format: options.format },
-            }),
-          ),
+          Effect.timeoutOrElse(_, {
+            duration: options.timeout,
+            orElse: () =>
+              new Cause.TimeoutError(
+                `GET ${options.url} timed out after ${Duration.format(
+                  Duration.fromInputUnsafe(options.timeout),
+                )}`,
+              ),
+          }),
       )
 
       return { fetch } as const
