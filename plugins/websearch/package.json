@@ -1,0 +1,73 @@
+{
+  "name": "@pi-plugins/websearch",
+  "version": "0.0.0",
+  "description": "WebSearch tool extension for pi-agent.",
+  "keywords": [
+    "pi",
+    "pi-agent",
+    "pi-extension",
+    "pi-package",
+    "websearch"
+  ],
+  "homepage": "https://github.com/k3dom/pi-plugins/tree/main/plugins/websearch#readme",
+  "bugs": {
+    "url": "https://github.com/k3dom/pi-plugins/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/k3dom/pi-plugins.git",
+    "directory": "plugins/websearch"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "prepack": "pnpm run build",
+    "build": "tsdown",
+    "check": "pnpm run lint && pnpm run check-types && pnpm run format:check",
+    "check-types": "tsc -b",
+    "lint": "oxlint",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
+  },
+  "dependencies": {
+    "effect": "4.0.0-beta.103"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.83.0",
+    "@earendil-works/pi-coding-agent": "0.83.0",
+    "@earendil-works/pi-tui": "0.83.0",
+    "@pi-plugins/fmt": "workspace:*",
+    "@pi-plugins/lint": "workspace:*",
+    "@pi-plugins/shared": "workspace:*",
+    "@pi-plugins/tsconfig": "workspace:*",
+    "@types/node": "26.1.2",
+    "oxfmt": "0.62.0",
+    "oxlint": "1.77.0",
+    "tsdown": "0.22.14",
+    "typebox": "1.3.10",
+    "typescript": "7.0.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./dist/index.mjs"
+    ]
+  }
+}
