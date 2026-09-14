@@ -5,6 +5,7 @@ import { ExpandableText, formatTruncationNotice } from '@pi-plugins/shared/ui'
 import { Array, DateTime, Duration, Effect, flow, Number } from 'effect'
 import { Type, type Static } from 'typebox'
 import { type SearchResult, WebSearch } from './search'
+import * as Tavily from './tavily'
 
 const DEFAULT_MAX_RESULTS = 8
 const MAX_RESULTS_LIMIT = 20
@@ -53,7 +54,7 @@ export default function webSearch(pi: ExtensionAPI) {
           maxResults,
           timeout: TIMEOUT,
         })
-      }).pipe(Effect.provide(WebSearch.layer))
+      }).pipe(Effect.provide(Tavily.layer))
 
       const results = await runTool(program, { signal })
       const truncation = truncateHead(
