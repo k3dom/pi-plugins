@@ -49,7 +49,7 @@ export const layer = Layer.effect(
       HttpClient.mapRequest((request) =>
         request.pipe(
           HttpClientRequest.acceptJson,
-          HttpClientRequest.setHeader('X-Client-Name', 'pi-plugins-websearch'),
+          HttpClientRequest.setHeader('X-Client-Name', '@pi-plugins/websearch'),
           Option.match(apiKey, {
             onNone: () =>
               HttpClientRequest.setHeader('X-Tavily-Access-Mode', 'keyless'),
