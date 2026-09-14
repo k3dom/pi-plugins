@@ -1,6 +1,6 @@
 {
   "name": "@pi-plugins/webfetch",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "WebFetch tool extension for pi-agent.",
   "keywords": [
     "pi",
