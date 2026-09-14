@@ -33,6 +33,16 @@ Pair it with [`@pi-plugins/webfetch`](../webfetch#readme) to read a result in fu
 | `query`      | `string` | Yes      | The search query.                                               |
 | `maxResults` | `number` | No       | Number of results to return, from `1` to `20`. Defaults to `8`. |
 
+## Configuration
+
+Searches are served by [Tavily](https://tavily.com) in its free, rate-limited
+[keyless mode](https://docs.tavily.com/documentation/keyless). No account or setup is
+needed.
+
+If you hit the keyless limit, set `TAVILY_API_KEY` to a Tavily API key. The free tier
+includes 1,000 searches a month with no credit card required. Results are identical
+in both modes.
+
 ## Notes
 
 Long result lists may be shortened to fit pi's output limit. A notice indicates when
