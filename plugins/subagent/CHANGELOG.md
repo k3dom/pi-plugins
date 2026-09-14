@@ -1,5 +1,14 @@
 # @pi-plugins/subagent
 
+## 0.3.1
+
+### Patch Changes
+
+- 8a8e5c8: Bundle Effect into the extension instead of depending on it at runtime. npm could
+  resolve two incompatible Effect versions into the install tree, which either failed
+  to load the extension or warned `Ignoring invalid <name> config: TypeError` on every
+  startup.
+
 ## 0.3.0
 
 ### Minor Changes
