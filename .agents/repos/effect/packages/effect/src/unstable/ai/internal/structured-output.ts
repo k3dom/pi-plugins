@@ -1,6 +1,6 @@
 import * as Arr from "../../../Array.ts"
 import * as InternalRecord from "../../../internal/record.ts"
-import type * as JsonSchema from "../../../JsonSchema.ts"
+import * as JsonSchema from "../../../JsonSchema.ts"
 import * as Option from "../../../Option.ts"
 import * as Predicate from "../../../Predicate.ts"
 import * as Schema from "../../../Schema.ts"
@@ -17,6 +17,29 @@ const RECORD_DESCRIPTION =
 const TUPLE_DESCRIPTION =
   "Tuple encoded as an object with numeric string keys ('0', '1', ...). If present, '__rest__' contains remaining elements"
 const TUPLE_TAIL_DESCRIPTION = `${TUPLE_DESCRIPTION}. Post-rest elements use '__tail_0__', '__tail_1__', and so on`
+
+/** @internal */
+export function resolveReference($ref: string, definitions: JsonSchema.Definitions): JsonSchema.JsonSchema {
+  const key = JsonSchema.getReferenceKey($ref)
+  if (key === undefined) {
+    throw new Error(`Unsupported reference ${JSON.stringify($ref)}`)
+  }
+  if (!Object.hasOwn(definitions, key)) {
+    throw new Error(`Invalid reference ${JSON.stringify($ref)}`)
+  }
+  return definitions[key]
+}
+
+/** @internal */
+export function resolveTopLevelReference(
+  document: JsonSchema.Document<"draft-2020-12">
+): JsonSchema.Document<"draft-2020-12"> {
+  if (typeof document.schema.$ref !== "string") return document
+  return {
+    ...document,
+    schema: resolveReference(document.schema.$ref, document.definitions)
+  }
+}
 
 /** @internal */
 export function toCodec<T, E, RD, RE>(
@@ -41,11 +64,11 @@ function transform(root: SchemaAST.AST): SchemaAST.AST {
       case "Union": {
         const types = SchemaAST.mapOrSame(ast.types, recur)
         const checks = prepareChecks(ast.checks)
-        const mode = ast.mode === "oneOf" ? "anyOf" : ast.mode
-        if (types === ast.types && checks === ast.checks && mode === ast.mode) return ast
+        const options = ast.options?.mode === "oneOf" ? { ...ast.options, mode: "anyOf" as const } : ast.options
+        if (types === ast.types && checks === ast.checks && options === ast.options) return ast
         return new SchemaAST.Union(
           types,
-          mode,
+          options,
           ast.annotations,
           checks,
           ast.encoding,
@@ -231,7 +254,7 @@ function objectToEntries(
 function unionOrSingle(types: ReadonlyArray<SchemaAST.AST>): SchemaAST.AST {
   if (types.length === 1) return types[0]
   const unique = Array.from(new Set(types))
-  return unique.length === 1 ? unique[0] : new SchemaAST.Union(unique, "anyOf")
+  return unique.length === 1 ? unique[0] : new SchemaAST.Union(unique)
 }
 
 function combineChecks(
@@ -277,7 +300,7 @@ function compilerAnnotations(
 
 function optionalToNullable(type: SchemaAST.AST): SchemaAST.AST {
   return SchemaAST.decodeTo(
-    new SchemaAST.Union([type, SchemaAST.null], "anyOf"),
+    new SchemaAST.Union([type, SchemaAST.null]),
     SchemaAST.optionalKey(type),
     SchemaTransformation.transformOptional({
       decode: Option.filter(Predicate.isNotNull),

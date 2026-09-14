@@ -203,6 +203,14 @@ const SleepOrder = Order.flip(Order.Struct({
   sequence: Order.Number
 }))
 
+const nanosPerMilli = BigInt(1_000_000)
+
+const millisToNanos = (millis: number): bigint => {
+  const wholeMillis = Math.floor(millis)
+  const fractionalNanos = Math.floor((millis - wholeMillis) * 1_000_000)
+  return BigInt(wholeMillis) * nanosPerMilli + BigInt(fractionalNanos)
+}
+
 /**
  * Creates a `TestClock` with optional configuration.
  *
@@ -247,6 +255,7 @@ export const make = Effect.fnUntraced(function*(
   const warningSemaphore = yield* Semaphore.make(1)
 
   let currentTimestamp: number = new Date(0).getTime()
+  let currentWallNanos = BigInt(0)
   let currentMonotonicNanos = BigInt(0)
   let warningState: WarningState = WarningState.Start()
 
@@ -255,7 +264,7 @@ export const make = Effect.fnUntraced(function*(
   }
 
   function currentTimeNanosUnsafe(): bigint {
-    return BigInt(Math.floor(currentTimestamp * 1000000))
+    return currentWallNanos
   }
 
   function monotonicTimeNanosUnsafe(): bigint {
@@ -331,13 +340,21 @@ export const make = Effect.fnUntraced(function*(
   })
 
   const runSemaphore = yield* Semaphore.make(1)
-  const run = Effect.fnUntraced(function*(step: (currentTimestamp: number) => number) {
+  const run = Effect.fnUntraced(function*(
+    step: (currentTimestamp: number) => number,
+    adjustmentNanos?: bigint
+  ) {
     yield* Fiber.await(yield* Effect.forkChild(Effect.yieldNow))
+    const initialWallNanos = currentWallNanos
+    const initialMonotonicNanos = currentMonotonicNanos
     const endTimestamp = step(currentTimestamp)
     const advanceTo = (timestamp: number) => {
       const deltaMillis = timestamp - currentTimestamp
       if (deltaMillis > 0 && Number.isFinite(deltaMillis)) {
         currentMonotonicNanos += BigInt(Math.round(deltaMillis * 1_000_000))
+      }
+      if (Number.isFinite(timestamp)) {
+        currentWallNanos = millisToNanos(timestamp)
       }
       currentTimestamp = timestamp
     }
@@ -349,11 +366,19 @@ export const make = Effect.fnUntraced(function*(
       yield* Effect.yieldNow
     }
     advanceTo(endTimestamp)
+    if (adjustmentNanos !== undefined && Number.isFinite(endTimestamp)) {
+      currentWallNanos = initialWallNanos + adjustmentNanos
+      if (adjustmentNanos > BigInt(0)) {
+        currentMonotonicNanos = initialMonotonicNanos + adjustmentNanos
+      }
+    }
   }, runSemaphore.withPermits(1))
 
-  function adjust(duration: Duration.Input) {
-    const millis = Duration.toMillis(Duration.fromInputUnsafe(duration))
-    return warningDone.pipe(Effect.andThen(run((timestamp) => timestamp + millis)))
+  function adjust(input: Duration.Input) {
+    const duration = Duration.fromInputUnsafe(input)
+    const millis = Duration.toMillis(duration)
+    const nanos = Number.isFinite(millis) ? Duration.toNanosUnsafe(duration) : undefined
+    return warningDone.pipe(Effect.andThen(run((timestamp) => timestamp + millis, nanos)))
   }
 
   function setTime(timestamp: number) {

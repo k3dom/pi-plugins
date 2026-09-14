@@ -1,6 +1,6 @@
 {
   "name": "@effect/sql-mssql",
-  "version": "4.0.0-beta.103",
+  "version": "4.0.0-rc.115",
   "type": "module",
   "license": "MIT",
   "description": "A Microsoft SQL Server toolkit for Effect",
@@ -37,7 +37,10 @@
     "dist/**/*.js",
     "dist/**/*.js.map",
     "dist/**/*.d.ts",
-    "dist/**/*.d.ts.map"
+    "dist/**/*.d.ts.map",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "ai-docs/**/*"
   ],
   "publishConfig": {
     "access": "public",
@@ -58,12 +61,13 @@
     "check": "tsc -b tsconfig.json"
   },
   "devDependencies": {
+    "@testcontainers/mssqlserver": "^12.1.0",
     "effect": "workspace:^"
   },
   "peerDependencies": {
     "effect": "workspace:^"
   },
   "dependencies": {
-    "tedious": "^19.2.1"
+    "tedious": "^20.0.0"
   }
 }

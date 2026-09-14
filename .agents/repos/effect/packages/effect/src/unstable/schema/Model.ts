@@ -11,15 +11,16 @@
  *
  * @since 4.0.0
  */
-import * as Uuid from "uuid"
 import type { Brand } from "../../Brand.ts"
 import * as DateTime from "../../DateTime.ts"
 import * as Effect from "../../Effect.ts"
+import * as Uuid from "../../internal/uuid.ts"
 import * as Option from "../../Option.ts"
 import * as Predicate from "../../Predicate.ts"
 import * as Schema from "../../Schema.ts"
 import * as SchemaGetter from "../../SchemaGetter.ts"
 import * as SchemaTransformation from "../../SchemaTransformation.ts"
+import * as UndefinedOr from "../../UndefinedOr.ts"
 import * as VariantSchema from "./VariantSchema.ts"
 
 const {
@@ -366,13 +367,13 @@ export const FieldOption: <Field extends VariantSchema.Field<any> | Schema.Top>(
       }
     > :
   never = fieldEvolve({
-    select: Schema.OptionFromNullOr,
-    insert: Schema.OptionFromNullOr,
-    update: Schema.OptionFromNullOr,
-    json: optionalOption,
-    jsonCreate: optionalOption,
-    jsonUpdate: optionalOption
-  }) as any
+    select: UndefinedOr.map(Schema.OptionFromNullOr),
+    insert: UndefinedOr.map(Schema.OptionFromNullOr),
+    update: UndefinedOr.map(Schema.OptionFromNullOr),
+    json: UndefinedOr.map(optionalOption),
+    jsonCreate: UndefinedOr.map(optionalOption),
+    jsonUpdate: UndefinedOr.map(optionalOption)
+  } as any) as any
 
 /**
  * Variant field type for SQLite booleans stored as `0 | 1` in database variants
@@ -755,7 +756,7 @@ export const Uint8Array: Schema.instanceOf<Uint8Array<ArrayBuffer>> = Schema.Uin
 export const UuidV4BytesWithGenerate = <B extends string>(
   schema: Schema.brand<Schema.instanceOf<Uint8Array<ArrayBuffer>>, B>
 ): Schema.withConstructorDefault<Schema.brand<Schema.instanceOf<Uint8Array<ArrayBuffer>>, B>> =>
-  schema.pipe(Schema.withConstructorDefault(Effect.sync(() => Uuid.v4({}, new globalThis.Uint8Array(16)))))
+  schema.pipe(Schema.withConstructorDefault(Effect.sync(() => Uuid.v4Bytes())))
 
 /**
  * A field that represents a binary UUID v4 that is generated on inserts.
@@ -798,7 +799,7 @@ export interface UuidV4Insert<B extends string> extends
 export const UuidV4WithGenerate = <B extends string>(
   schema: Schema.brand<Schema.String, B>
 ): Schema.withConstructorDefault<Schema.brand<Schema.String, B>> =>
-  schema.pipe(Schema.withConstructorDefault(Effect.sync(() => Uuid.v4())))
+  schema.pipe(Schema.withConstructorDefault(Effect.sync(Uuid.v4String)))
 
 /**
  * A field that represents a string UUID v4 that is generated on inserts.
@@ -841,11 +842,11 @@ export interface UuidV7Insert<B extends string> extends
 export const UuidV7WithGenerate = <B extends string>(
   schema: Schema.brand<Schema.String, B>
 ): Schema.withConstructorDefault<Schema.brand<Schema.String, B>> =>
-  schema.pipe(Schema.withConstructorDefault(Effect.clockWith((clock) =>
-    Effect.succeed(Uuid.v7({
-      msecs: clock.currentTimeMillisUnsafe()
-    }))
-  )))
+  schema.pipe(
+    Schema.withConstructorDefault(
+      Effect.clockWith((clock) => Effect.succeed(Uuid.v7String(clock.currentTimeMillisUnsafe())))
+    )
+  )
 
 /**
  * A field that represents a string UUID v7 that is generated on inserts.

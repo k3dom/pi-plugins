@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { strictEqual } from "@effect/vitest/utils"
-import { Clock, Duration, Effect, Fiber, Layer, Ref, Stream } from "effect"
+import { Clock, Duration, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import * as Tracer from "effect/Tracer"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
@@ -38,6 +38,108 @@ const makeRedirectClient = Effect.fnUntraced(function*(status: number, location:
 const RateLimiterTestLayer = RateLimiter.layer.pipe(Layer.provide(RateLimiter.layerStoreMemory))
 
 describe("HttpClient", () => {
+  it.effect("applies JSON revivers to response schema decoders", () =>
+    Effect.gen(function*() {
+      const makeResponse = () =>
+        HttpClientResponse.fromWeb(
+          HttpClientRequest.get("https://example.com"),
+          new Response("{\"value\":\"original\"}")
+        )
+      const options = {
+        reviver: (key: string, value: unknown) => key === "value" ? "revived" : value
+      }
+
+      assert.deepStrictEqual(
+        yield* HttpClientResponse.schemaBodyJson(Schema.Struct({ value: Schema.String }), options)(makeResponse()),
+        { value: "revived" }
+      )
+      assert.deepStrictEqual(
+        yield* HttpClientResponse.schemaJson(
+          Schema.Struct({ body: Schema.Struct({ value: Schema.String }) }),
+          options
+        )(makeResponse()),
+        { body: { value: "revived" } }
+      )
+    }))
+
+  it.effect("forwards parse options to response schema decoders", () =>
+    Effect.gen(function*() {
+      const response = HttpClientResponse.fromWeb(
+        HttpClientRequest.get("https://example.com"),
+        new Response("{}")
+      )
+      const error = yield* HttpClientResponse.schemaJson(
+        Schema.Struct({
+          body: Schema.Struct({
+            a: Schema.String,
+            b: Schema.String
+          })
+        }),
+        { errors: "all" }
+      )(response).pipe(Effect.flip)
+
+      assert.strictEqual(
+        error.message,
+        `Missing key
+  at ["body"]["a"]
+Missing key
+  at ["body"]["b"]`
+      )
+    }))
+
+  it.effect("forwards parse options to response schema decoders without a body", () =>
+    Effect.gen(function*() {
+      const response = HttpClientResponse.fromWeb(
+        HttpClientRequest.get("https://example.com"),
+        new Response(null)
+      )
+      const error = yield* HttpClientResponse.schemaNoBody(
+        Schema.Struct({
+          headers: Schema.Struct({
+            a: Schema.String,
+            b: Schema.String
+          })
+        }),
+        { errors: "all" }
+      )(response).pipe(Effect.flip)
+
+      assert.strictEqual(
+        error.message,
+        `Missing key
+  at ["headers"]["a"]
+Missing key
+  at ["headers"]["b"]`
+      )
+    }))
+
+  it.effect("preserves a raw large integer through schemaBodyJson reviver context", () =>
+    Effect.gen(function*() {
+      const response = HttpClientResponse.fromWeb(
+        HttpClientRequest.get("https://example.com"),
+        new Response("{\"value\":9223372036854775807}")
+      )
+      const reviver = ((key: string, value: unknown, context: { readonly source: string }) =>
+        key === "value" ? context.source : value) as Parameters<typeof JSON.parse>[1]
+
+      const decoded = yield* HttpClientResponse.schemaBodyJson(
+        Schema.Struct({ value: Schema.String }),
+        { reviver }
+      )(response)
+
+      assert.strictEqual(decoded.value, "9223372036854775807")
+    }))
+
+  it.effect("preserves source bytes after reading response text", () =>
+    Effect.gen(function*() {
+      const response = HttpClientResponse.fromWeb(
+        HttpClientRequest.get("https://example.com"),
+        new Response(new Uint8Array([0xef, 0xbb, 0xbf, 0x61]))
+      )
+      yield* response.text
+      const bytes = new Uint8Array(yield* response.arrayBuffer)
+      assert.deepStrictEqual(Array.from(bytes), [0xef, 0xbb, 0xbf, 0x61])
+    }))
+
   describe("tracer", () => {
     it.effect("includes request and response headers by default", () =>
       Effect.gen(function*() {
@@ -142,6 +244,23 @@ describe("HttpClient", () => {
   })
 
   describe("followRedirects", () => {
+    it.effect("preserves preprocessing error recovery", () =>
+      Effect.gen(function*() {
+        const request = HttpClientRequest.get("https://origin.test/")
+        const recovered = HttpClientResponse.fromWeb(request, new Response(null, { status: 418 }))
+        const client = HttpClient.make((request) =>
+          Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 200 })))
+        ).pipe(
+          HttpClient.mapRequestEffect(() => Effect.fail("preprocessing failed")),
+          HttpClient.catch(() => Effect.succeed(recovered)),
+          HttpClient.followRedirects()
+        )
+
+        const response = yield* client.execute(request)
+
+        assert.strictEqual(response, recovered)
+      }))
+
     it.effect("preserves credential headers on same-origin redirects", () =>
       Effect.gen(function*() {
         const { client, requests } = yield* makeRedirectClient(302, "https://origin.test/destination")
@@ -373,6 +492,52 @@ describe("HttpClient", () => {
         strictEqual(yield* Ref.get(attempts), 2)
       }).pipe(Effect.provide(RateLimiterTestLayer)))
 
+    it.effect("updates limits from custom response headers", () =>
+      Effect.gen(function*() {
+        const attempts = yield* Ref.make(0)
+        const client = HttpClient.make((request) =>
+          Effect.map(
+            Ref.updateAndGet(attempts, (n) => n + 1),
+            (attempt) =>
+              HttpClientResponse.fromWeb(
+                request,
+                attempt === 1
+                  ? new Response(null, {
+                    status: 200,
+                    headers: {
+                      "x-vendor-limit": "1",
+                      "x-vendor-reset": "60"
+                    }
+                  })
+                  : new Response(null, { status: 200 })
+              )
+          )
+        ).pipe(
+          HttpClient.withRateLimiter({
+            limiter: yield* RateLimiter.RateLimiter,
+            key: "custom-limit",
+            limit: 10,
+            window: "1 minute",
+            responseHeaders: {
+              limit: "X-Vendor-Limit",
+              reset: "X-Vendor-Reset"
+            }
+          })
+        )
+
+        const fiber = yield* client.get("http://test/").pipe(
+          Effect.andThen(client.get("http://test/")),
+          Effect.forkChild({ startImmediately: true })
+        )
+
+        yield* TestClock.adjust("5 seconds")
+        strictEqual(yield* Ref.get(attempts), 1)
+
+        yield* TestClock.adjust("1 minute")
+        yield* Fiber.join(fiber)
+        strictEqual(yield* Ref.get(attempts), 2)
+      }).pipe(Effect.provide(RateLimiterTestLayer)))
+
     it.effect("inspects remaining headers to infer updated limits", () =>
       Effect.gen(function*() {
         const attempts = yield* Ref.make(0)
@@ -412,6 +577,90 @@ describe("HttpClient", () => {
 
         yield* TestClock.adjust("10 seconds")
         yield* Fiber.join(fiber)
+        strictEqual(yield* Ref.get(attempts), 2)
+      }).pipe(Effect.provide(RateLimiterTestLayer)))
+
+    it.effect("inspects custom remaining and reset-after headers", () =>
+      Effect.gen(function*() {
+        const attempts = yield* Ref.make(0)
+        const limiter = yield* RateLimiter.RateLimiter
+        const client = HttpClient.make((request) =>
+          Effect.map(
+            Ref.updateAndGet(attempts, (n) => n + 1),
+            (attempt) =>
+              HttpClientResponse.fromWeb(
+                request,
+                attempt === 1
+                  ? new Response(null, {
+                    status: 200,
+                    headers: {
+                      "x-vendor-remaining": "0",
+                      "x-vendor-reset-after": "60"
+                    }
+                  })
+                  : new Response(null, { status: 200 })
+              )
+          )
+        ).pipe(
+          HttpClient.withRateLimiter({
+            limiter,
+            key: "custom-remaining",
+            limit: 10,
+            window: "1 minute",
+            responseHeaders: {
+              remaining: "X-Vendor-Remaining",
+              resetAfter: "X-Vendor-Reset-After"
+            }
+          })
+        )
+
+        const fiber = yield* client.get("http://test/").pipe(
+          Effect.andThen(client.get("http://test/")),
+          Effect.forkChild({ startImmediately: true })
+        )
+
+        strictEqual(yield* Ref.get(attempts), 1)
+
+        yield* TestClock.adjust("10 seconds")
+        yield* Fiber.join(fiber)
+        strictEqual(yield* Ref.get(attempts), 2)
+      }).pipe(Effect.provide(RateLimiterTestLayer)))
+
+    it.effect("uses custom header overrides without falling back to built-in names", () =>
+      Effect.gen(function*() {
+        const attempts = yield* Ref.make(0)
+        const client = HttpClient.make((request) =>
+          Effect.map(
+            Ref.updateAndGet(attempts, (n) => n + 1),
+            (attempt) =>
+              HttpClientResponse.fromWeb(
+                request,
+                attempt === 1
+                  ? new Response(null, {
+                    status: 200,
+                    headers: {
+                      "x-ratelimit-limit": "1",
+                      "x-ratelimit-reset": "60"
+                    }
+                  })
+                  : new Response(null, { status: 200 })
+              )
+          )
+        ).pipe(
+          HttpClient.withRateLimiter({
+            limiter: yield* RateLimiter.RateLimiter,
+            key: "custom-override",
+            limit: 10,
+            window: "1 minute",
+            responseHeaders: {
+              limit: "X-Vendor-Limit"
+            }
+          })
+        )
+
+        yield* client.get("http://test/")
+        yield* client.get("http://test/")
+
         strictEqual(yield* Ref.get(attempts), 2)
       }).pipe(Effect.provide(RateLimiterTestLayer)))
 
@@ -531,6 +780,95 @@ describe("HttpClient", () => {
         strictEqual(yield* Ref.get(attempts), 2)
       }).pipe(Effect.provide(RateLimiterTestLayer)))
 
+    it.effect("bounds automatic 429 response retries", () =>
+      Effect.gen(function*() {
+        const { attempts, client } = yield* makeStatusClient(429)
+        const limitedClient = client.pipe(
+          HttpClient.withRateLimiter({
+            limiter: yield* RateLimiter.RateLimiter,
+            key: "bounded-response",
+            limit: 100,
+            window: "1 minute",
+            times: 2,
+            disableResponseInspection: true
+          })
+        )
+
+        const response = yield* limitedClient.get("http://test/")
+
+        strictEqual(response.status, 429)
+        strictEqual(yield* Ref.get(attempts), 3)
+      }).pipe(Effect.provide(RateLimiterTestLayer)))
+
+    it.effect("bounds automatic HttpClientError 429 retries", () =>
+      Effect.gen(function*() {
+        const { attempts, client } = yield* makeStatusClient(429)
+        const limitedClient = client.pipe(
+          HttpClient.filterStatusOk,
+          HttpClient.withRateLimiter({
+            limiter: yield* RateLimiter.RateLimiter,
+            key: "bounded-error",
+            limit: 100,
+            window: "1 minute",
+            times: 2,
+            disableResponseInspection: true
+          })
+        )
+
+        const error = yield* limitedClient.get("http://test/").pipe(Effect.flip)
+
+        strictEqual(error._tag, "HttpClientError")
+        strictEqual(error.reason._tag, "StatusCodeError")
+        if (error.reason._tag === "StatusCodeError") {
+          strictEqual(error.reason.response.status, 429)
+        }
+        strictEqual(yield* Ref.get(attempts), 3)
+      }).pipe(Effect.provide(RateLimiterTestLayer)))
+
+    it.effect("uses a custom Retry-After header", () =>
+      Effect.gen(function*() {
+        const attempts = yield* Ref.make(0)
+        const client = HttpClient.make((request) =>
+          Effect.map(
+            Ref.updateAndGet(attempts, (n) => n + 1),
+            (attempt) =>
+              HttpClientResponse.fromWeb(
+                request,
+                attempt === 1
+                  ? new Response(null, {
+                    status: 429,
+                    headers: { "x-vendor-retry-after": "10" }
+                  })
+                  : new Response(null, { status: 200 })
+              )
+          )
+        ).pipe(
+          HttpClient.withRateLimiter({
+            limiter: yield* RateLimiter.RateLimiter,
+            key: "custom-retry-after",
+            limit: 100,
+            window: "1 minute",
+            times: 1,
+            responseHeaders: {
+              retryAfter: "X-Vendor-Retry-After"
+            },
+            disableAdaptiveLearning: true
+          })
+        )
+
+        const fiber = yield* client.get("http://test/").pipe(Effect.forkChild({ startImmediately: true }))
+        strictEqual(yield* Ref.get(attempts), 1)
+
+        yield* TestClock.adjust("9 seconds")
+        strictEqual(yield* Ref.get(attempts), 1)
+
+        yield* TestClock.adjust("1 second")
+        const response = yield* Fiber.join(fiber)
+
+        strictEqual(response.status, 200)
+        strictEqual(yield* Ref.get(attempts), 2)
+      }).pipe(Effect.provide(RateLimiterTestLayer)))
+
     it.effect("applies adaptive cooldown to requests delayed by the configured limiter", () =>
       Effect.gen(function*() {
         const attempts = yield* Ref.make<Array<number>>([])
@@ -638,6 +976,56 @@ describe("HttpClient", () => {
         yield* Fiber.join(fiberB)
 
         strictEqual(yield* Ref.get(attemptsA), 2)
+        strictEqual(yield* Ref.get(attemptsB), 1)
+      }).pipe(Effect.provide(RateLimiter.layerStoreMemory)))
+
+    it.effect("applies Retry-After feedback when automatic retries are disabled", () =>
+      Effect.gen(function*() {
+        const attemptsB = yield* Ref.make(0)
+        const limiterA = yield* RateLimiter.make
+        const limiterB = yield* RateLimiter.make
+        const clientA = HttpClient.make((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(null, {
+                status: 429,
+                headers: { "retry-after": "10" }
+              })
+            )
+          )
+        ).pipe(
+          HttpClient.withRateLimiter({
+            limiter: limiterA,
+            key: "terminal-feedback",
+            limit: 100,
+            window: "1 minute",
+            times: 0
+          })
+        )
+        const clientB = HttpClient.make((request) =>
+          Effect.as(
+            Ref.update(attemptsB, (n) => n + 1),
+            HttpClientResponse.fromWeb(request, new Response(null, { status: 200 }))
+          )
+        ).pipe(
+          HttpClient.withRateLimiter({
+            limiter: limiterB,
+            key: "terminal-feedback",
+            limit: 100,
+            window: "1 minute"
+          })
+        )
+
+        const response = yield* clientA.get("http://test/a")
+        strictEqual(response.status, 429)
+
+        const fiberB = yield* clientB.get("http://test/b").pipe(Effect.forkChild({ startImmediately: true }))
+        yield* TestClock.adjust("9 seconds")
+        strictEqual(yield* Ref.get(attemptsB), 0)
+
+        yield* TestClock.adjust("1 second")
+        yield* Fiber.join(fiberB)
         strictEqual(yield* Ref.get(attemptsB), 1)
       }).pipe(Effect.provide(RateLimiter.layerStoreMemory)))
 

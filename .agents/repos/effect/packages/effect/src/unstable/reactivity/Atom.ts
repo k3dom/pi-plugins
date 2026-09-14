@@ -22,6 +22,7 @@ import type { LazyArg } from "../../Function.ts"
 import { constant, constTrue, constVoid, dual, pipe } from "../../Function.ts"
 import type * as Inspectable from "../../Inspectable.ts"
 import { PipeInspectableProto } from "../../internal/core.ts"
+import { getStackTraceLimit } from "../../internal/stackTraceLimit.ts"
 import * as Layer from "../../Layer.ts"
 import * as MutableHashMap from "../../MutableHashMap.ts"
 import * as Option from "../../Option.ts"
@@ -545,14 +546,14 @@ function makeEffect<A, E>(
   ctx.addFinalizer(() => {
     Effect.runForkWith(services)(Scope.close(scope, Exit.void))
   })
-  const servicesMap = new Map(services.mapUnsafe)
-  servicesMap.set(Scope.Scope.key, scope)
-  servicesMap.set(AtomRegistry.key, ctx.registry)
-  servicesMap.set(Scheduler.Scheduler.key, ctx.registry.scheduler)
   let syncResult: AsyncResult.AsyncResult<A, E> | undefined
   let isAsync = false
   const cancel = runCallbackSync(
-    Context.makeUnsafe<Scope.Scope | AtomRegistry>(servicesMap),
+    services.pipe(
+      Context.add(Scope.Scope, scope),
+      Context.add(AtomRegistry, ctx.registry),
+      Context.add(Scheduler.Scheduler, ctx.registry.scheduler)
+    ),
     effect,
     function(exit) {
       syncResult = AsyncResult.fromExitWithPrevious(exit, previous)
@@ -694,7 +695,7 @@ export interface AtomRuntime<R, ER = never> extends Atom<AsyncResult.AsyncResult
 }
 
 /**
- * Factory for `AtomRuntime` values that share a `Layer.MemoMap` and a set of global layers.
+ * Factory for `AtomRuntime` values that share a set of global layers.
  *
  * @category models
  * @since 4.0.0
@@ -705,7 +706,6 @@ export interface RuntimeFactory {
       | Layer.Layer<R, E, AtomRegistry | Reactivity.Reactivity>
       | ((get: AtomContext) => Layer.Layer<R, E, AtomRegistry | Reactivity.Reactivity>)
   ): AtomRuntime<R, E>
-  readonly memoMap: Layer.MemoMap
   readonly addGlobalLayer: <A, E>(layer: Layer.Layer<A, E, AtomRegistry | Reactivity.Reactivity>) => void
 
   /**
@@ -718,14 +718,40 @@ export interface RuntimeFactory {
 }
 
 /**
- * Creates a `RuntimeFactory` backed by the supplied `Layer.MemoMap`.
+ * A `RuntimeFactory` backed by an atom whose memo map is scoped to each registry.
+ *
+ * @category models
+ * @since 4.0.0
+ */
+export interface RegistryRuntimeFactory extends RuntimeFactory {
+  readonly memoMap: Atom<Layer.MemoMap>
+}
+
+/**
+ * A `RuntimeFactory` backed by a concrete memo map shared across registries.
+ *
+ * @category models
+ * @since 4.0.0
+ */
+export interface SharedRuntimeFactory extends RuntimeFactory {
+  readonly memoMap: Layer.MemoMap
+}
+
+/**
+ * Creates a `RuntimeFactory` backed by a registry-scoped memo map by default,
+ * or by the supplied atom or concrete `Layer.MemoMap`.
  *
  * @category constructors
  * @since 4.0.0
  */
-export const context: (options: {
-  readonly memoMap: Layer.MemoMap
-}) => RuntimeFactory = (options) => {
+export function context(): RegistryRuntimeFactory
+export function context(options: { readonly memoMap: Atom<Layer.MemoMap> }): RegistryRuntimeFactory
+export function context(options: { readonly memoMap: Layer.MemoMap }): SharedRuntimeFactory
+export function context(options?: {
+  readonly memoMap: Atom<Layer.MemoMap> | Layer.MemoMap
+}): RegistryRuntimeFactory | SharedRuntimeFactory {
+  const memoMap = options?.memoMap ?? removeTtl(make(() => Layer.makeMemoMapUnsafe()))
+  const resolveMemoMap = (get: AtomContext): Layer.MemoMap => isAtom(memoMap) ? get(memoMap) : memoMap
   let globalLayer: Layer.Layer<any, any, AtomRegistry> = Reactivity.layer
   function factory<E, R>(
     create:
@@ -747,23 +773,25 @@ export const context: (options: {
 
     self.read = function read(get: AtomContext) {
       const layer = get(layerAtom)
-      const build = Effect.flatMap(Effect.scope, (scope) => Layer.buildWithMemoMap(layer, options.memoMap, scope))
+      const build = Effect.flatMap(Effect.scope, (scope) => Layer.buildWithMemoMap(layer, resolveMemoMap(get), scope))
       return effect(get, build, { uninterruptible: true })
     }
 
     return self
   }
-  factory.memoMap = options.memoMap
+  factory.memoMap = memoMap
   factory.addGlobalLayer = (layer: Layer.Layer<any, any, AtomRegistry | Reactivity.Reactivity>) => {
     globalLayer = Layer.provideMerge(globalLayer, Layer.provide(layer, Reactivity.layer))
   }
-  const reactivityAtom = removeTtl(make(
-    Effect.contextWith((services: Context.Context<Scope.Scope>) =>
-      Layer.buildWithMemoMap(Reactivity.layer, options.memoMap, Context.get(services, Scope.Scope))
-    ).pipe(
-      Effect.map(Context.get(Reactivity.Reactivity))
+  const reactivityAtom = removeTtl(
+    make((get) =>
+      Effect.contextWith((services: Context.Context<Scope.Scope>) =>
+        Layer.buildWithMemoMap(Reactivity.layer, resolveMemoMap(get), Context.get(services, Scope.Scope))
+      ).pipe(
+        Effect.map(Context.get(Reactivity.Reactivity))
+      )
     )
-  ))
+  )
   factory.withReactivity =
     (keys: ReadonlyArray<unknown> | ReadonlyRecord<string, ReadonlyArray<unknown>>) =>
     <A extends Atom<any>>(atom: A): A =>
@@ -775,24 +803,16 @@ export const context: (options: {
         get.subscribe(atom, (value) => get.setSelf(value))
         return get.once(atom)
       }, { initialValueTarget: atom }) as any as A
-  return factory
+  return factory as any
 }
 
 /**
- * Default `Layer.MemoMap` used by the module-level `runtime` factory.
+ * Default registry-scoped `RuntimeFactory`.
  *
  * @category context
  * @since 4.0.0
  */
-export const defaultMemoMap: Layer.MemoMap = Layer.makeMemoMapUnsafe()
-
-/**
- * Default `RuntimeFactory` created with `defaultMemoMap`.
- *
- * @category context
- * @since 4.0.0
- */
-export const runtime: RuntimeFactory = context({ memoMap: defaultMemoMap })
+export const runtime: RegistryRuntimeFactory = context()
 
 /**
  * Returns `Rx.runtime.withReactivity` for refreshing an atom whenever the
@@ -872,12 +892,12 @@ function makeStream<A, E>(
       return Effect.void
     })
   )
-  const servicesMap = new Map(services.mapUnsafe)
-  servicesMap.set(AtomRegistry.key, ctx.registry)
-  servicesMap.set(Scheduler.Scheduler.key, ctx.registry.scheduler)
 
   const cancel = runCallbackSync(
-    Context.makeUnsafe<AtomRegistry>(servicesMap),
+    services.pipe(
+      Context.add(AtomRegistry, ctx.registry),
+      Context.add(Scheduler.Scheduler, ctx.registry.scheduler)
+    ),
     run,
     constVoid,
     false
@@ -1446,7 +1466,9 @@ export const withFallback: {
   return isWritable(self)
     ? writable(
       withFallback,
-      self.write,
+      function(ctx, value) {
+        ctx.set(self, value)
+      },
       self.refresh ?? function(refresh) {
         refresh(self)
       }
@@ -1566,7 +1588,7 @@ export const withLabel: {
 >(2, (self, name) =>
   Object.assign(Object.create(Object.getPrototypeOf(self)), {
     ...self,
-    label: [name, new Error().stack?.split("\n")[5] ?? ""]
+    label: [name, getStackTraceLimit() === 0 ? "" : new Error().stack?.split("\n")[5] ?? ""]
   }))
 
 /**
@@ -2496,7 +2518,7 @@ export const serializable: {
   const codecJson = Schema.toCodecJson(options.schema)
   return Object.assign(Object.create(Object.getPrototypeOf(self)), {
     ...self,
-    label: self.label ?? [options.key, new Error().stack?.split("\n")[5] ?? ""],
+    label: self.label ?? [options.key, getStackTraceLimit() === 0 ? "" : new Error().stack?.split("\n")[5] ?? ""],
     [SerializableTypeId]: {
       key: options.key,
       encode: Schema.encodeSync(codecJson),

@@ -411,7 +411,7 @@ const toConflicts = (
     const newHistory = history.slice(i)
     let conflicts: Array<Entry> = []
     for (let j = 0; j < newHistory.length; j++) {
-      const scannedEntry = history[j]!
+      const scannedEntry = newHistory[j]!
       if (scannedEntry.event === originEntry.event && scannedEntry.primaryKey === originEntry.primaryKey) {
         conflicts.push(scannedEntry)
       }
@@ -730,7 +730,7 @@ export const make = Effect.gen(function*() {
           id: makeEntryIdUnsafe(),
           event: options.event,
           primaryKey: schemaEvent.primaryKey(options.payload),
-          payload: yield* Schema.encodeUnknownEffect(schemaEvent.payloadMsgPack)(options.payload).pipe(
+          payload: yield* Schema.encodeUnknownEffect(schemaEvent.payloadSchemaBinary)(options.payload).pipe(
             Effect.mapError((_) =>
               new EventLogServerStoreError({
                 reason: "PersistenceFailure",
@@ -866,7 +866,7 @@ const makeServerHandler = Effect.gen(function*() {
         return yield* Effect.logDebug(`Event handler not found for: "${options.entry.event}"`)
       }
 
-      const decodePayload = Schema.decodeUnknownEffect(handler.event.payloadMsgPack)
+      const decodePayload = Schema.decodeUnknownEffect(handler.event.payloadSchemaBinary)
       const decodedConflicts: Array<{ readonly entry: Entry; readonly payload: unknown }> = []
 
       for (const conflict of options.conflicts) {

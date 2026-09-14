@@ -17,7 +17,6 @@ import { dual, type LazyArg } from "./Function.ts"
 import * as Hash from "./Hash.ts"
 import type { Inspectable } from "./Inspectable.ts"
 import { exitSucceed, PipeInspectableProto, withFiber } from "./internal/core.ts"
-import { getStackTraceLimit, setStackTraceLimit } from "./internal/stackTraceLimit.ts"
 import * as Option from "./Option.ts"
 import type { Pipeable } from "./Pipeable.ts"
 import { hasProperty } from "./Predicate.ts"
@@ -67,7 +66,6 @@ export interface Key<out Identifier, out Shape> extends Effect<Shape, never, Ide
   readonly Service: Shape
   readonly Identifier: Identifier
   readonly key: string
-  readonly stack?: string | undefined
 }
 
 /**
@@ -244,19 +242,9 @@ export const Service: {
     >
     & { readonly make: Make }
 } = function() {
-  const prevLimit = getStackTraceLimit()
-  setStackTraceLimit(2)
-  const err = new Error()
-  setStackTraceLimit(prevLimit)
   function KeyClass() {}
   const self = KeyClass as any as Types.Mutable<Reference<any>>
   Object.setPrototypeOf(self, ServiceProto)
-  // @effect-diagnostics-next-line floatingEffect:off
-  Object.defineProperty(self, "stack", {
-    get() {
-      return err.stack
-    }
-  })
   const init = (key: string, options?: {
     readonly defaultValue?: any
     readonly make?: any
@@ -289,8 +277,7 @@ const ServiceProto: any = {
   toJSON<I, A>(this: Service<I, A>) {
     return {
       _id: "Service",
-      key: this.key,
-      stack: this.stack
+      key: this.key
     }
   },
   of<Service>(this: void, self: Service): Service {
@@ -597,12 +584,12 @@ const Proto: Omit<
   ContextImpl<never>,
   "cacheRoot" | "base" | "overlay" | "depth" | "_flat" | "baseHits"
 > = {
+  get mapUnsafe() {
+    return flatten(this as any as ContextImpl<any>)
+  },
   ...PipeInspectableProto,
   [TypeId]: {
     _Services: (_: never) => _
-  },
-  get mapUnsafe() {
-    return flatten(this as any as ContextImpl<any>)
   },
   toJSON(this: Context<never>) {
     return {
@@ -789,24 +776,36 @@ export const add: {
   self: Context<Services>,
   key: Key<I, S>,
   service: Types.NoInfer<S>
+): Context<Services | I> => addUnsafe(self, key.key, service))
+
+/**
+ * Adds a service by key to a given `Context` using a string key.
+ *
+ * @category combining
+ * @since 4.0.0
+ */
+export const addUnsafe = <Services, I, S>(
+  self: Context<Services>,
+  key: string,
+  service: Types.NoInfer<S>
 ): Context<Services | I> => {
   const impl = self as ContextImpl<Services>
-  const cacheRoot = cacheKeys.has(key.key) ? undefined : impl.cacheRoot
+  const cacheRoot = cacheKeys.has(key) ? undefined : impl.cacheRoot
   if (impl.depth >= MaxDepth) {
     // Rebase the overlay chain into a flat map, keeping the cacheRoot so a
     // rebase on an ordinary key does not invalidate fiber caches
     const map = new Map(impl.mapUnsafe)
-    map.set(key.key, service)
+    map.set(key, service)
     return makeImpl(cacheRoot, map, undefined, 0)
   }
 
   return makeImpl(
     cacheRoot,
     impl.base,
-    { key: key.key, value: service, parent: impl.overlay },
+    { key, value: service, parent: impl.overlay },
     impl.depth + 1
   )
-})
+}
 
 /**
  * Adds or removes a service depending on an `Option`.
@@ -847,20 +846,20 @@ export const addOrOmit: {
   <I, S>(
     key: Key<I, S>,
     service: Option.Option<Types.NoInfer<S>>
-  ): <Services>(self: Context<Services>) => Context<Services | I>
+  ): <Services>(self: Context<Services>) => Context<Exclude<Services, I>>
   <Services, I, S>(
     self: Context<Services>,
     key: Key<I, S>,
     service: Option.Option<Types.NoInfer<S>>
-  ): Context<Services | I>
+  ): Context<Exclude<Services, I>>
 } = dual(3, <Services, I, S>(
   self: Context<Services>,
   key: Key<I, S>,
   service: Option.Option<Types.NoInfer<S>>
-): Context<Services | I> =>
+): Context<Exclude<Services, I>> =>
   service._tag === "None"
-    ? omit(key)(self) as any
-    : add(self, key, service.value))
+    ? omit(key)(self)
+    : add(self, key, service.value) as any)
 
 /**
  * Gets the service for a key, or evaluates the fallback when a non-reference
@@ -1032,6 +1031,7 @@ export const getUnsafe: {
  * @since 2.0.0
  */
 export const get: {
+  <I, S>(service: Key<I, S>): (self: Context<I>) => S
   <Services, I extends Services, S>(service: Key<I, S>): (self: Context<Services>) => S
   <Services, I extends Services, S>(self: Context<Services>, service: Key<I, S>): S
 } = getUnsafe
@@ -1049,15 +1049,6 @@ const serviceNotFoundError = (service: Key<any, any>) => {
   const error = new Error(
     `Service not found${service.key ? `: ${String(service.key)}` : ""}`
   )
-  if (service.stack) {
-    const lines = service.stack.split("\n")
-    if (lines.length > 2) {
-      const afterAt = lines[2].match(/at (.*)/)
-      if (afterAt) {
-        error.message = error.message + ` (defined at ${afterAt[1]})`
-      }
-    }
-  }
   if (error.stack) {
     const lines = error.stack.split("\n")
     lines.splice(1, 3)
