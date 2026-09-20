@@ -19,7 +19,7 @@ export function sanitizeSystemText(text: string): string {
     Array.filter(
       (paragraph) =>
         !paragraph.toLowerCase().includes('you are pi') &&
-        !paragraph.startsWith(PI_DOCUMENTATION_HEADING) &&
+        !paragraph.includes(PI_DOCUMENTATION_HEADING) &&
         !PI_REMOVAL_ANCHORS.some((anchor) => paragraph.includes(anchor)),
     ),
     Array.join('\n\n'),

@@ -16,12 +16,5 @@ export default function claudeOauth(pi: ExtensionAPI): void {
     fetchWrapped = true
   }
 
-  // @pi-plugins/subagent sets `short` on its children so extended retention does
-  // not leak into them through this globally loaded plugin.
-  pi.on('before_provider_request', (event) =>
-    rewriteForClaudeCode(
-      event.payload,
-      process.env['PI_CACHE_RETENTION'] !== 'short',
-    ),
-  )
+  pi.on('before_provider_request', (event) => rewriteForClaudeCode(event.payload))
 }

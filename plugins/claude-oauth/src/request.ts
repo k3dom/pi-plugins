@@ -74,36 +74,24 @@ interface SystemBlock {
 interface AnthropicPayload {
   messages?: Array<{ role?: string; content?: unknown }>
   system?: SystemBlock[]
-  tools?: unknown[]
   metadata?: { user_id?: unknown }
   thinking?: { type?: unknown }
   context_management?: unknown
   diagnostics?: unknown
 }
 
-function configureCacheTtl(block: unknown, extended: boolean): void {
-  if (!Predicate.isObject(block)) {
-    return
-  }
-  const cacheControl = (block as { cache_control?: unknown }).cache_control
-  if (!Predicate.isObject(cacheControl)) {
-    return
-  }
-  const typed = cacheControl as { type?: unknown; ttl?: unknown }
-  if (typed.type !== 'ephemeral') {
-    return
-  }
-  if (extended) {
-    typed.ttl = '1h'
-  } else if (typed.ttl === '1h') {
-    delete typed.ttl
-  }
-}
+const sanitizeBlocks = <T>(blocks: T[]): T[] =>
+  Array.flatMap(blocks, (block) => {
+    if (!isTextBlock(block)) {
+      return [block]
+    }
+    const text = sanitizeSystemText(block.text)
+    return text ? [{ ...block, text }] : []
+  })
 
 // Mutated in place so fields this plugin does not model pass through untouched.
 export function rewriteForClaudeCode(
   payload: unknown,
-  extendedCacheTtl = true,
 ): AnthropicPayload | undefined {
   if (!Predicate.isObject(payload)) {
     return undefined
@@ -114,16 +102,26 @@ export function rewriteForClaudeCode(
     return undefined
   }
 
-  const normalized = Array.flatMap(system, (block) => {
-    if (!isTextBlock(block)) {
-      return [block]
-    }
-    if (block.text === PI_ANTHROPIC_OAUTH_SENTINEL) {
-      return [{ ...block, text: CLAUDE_AGENT_SDK_IDENTITY }]
-    }
-    const text = sanitizeSystemText(block.text)
-    return text ? [{ ...block, text }] : []
-  })
+  const normalized = Array.flatMap(system, (block) =>
+    block.text === PI_ANTHROPIC_OAUTH_SENTINEL
+      ? [{ ...block, text: CLAUDE_AGENT_SDK_IDENTITY }]
+      : sanitizeBlocks([block]),
+  )
+
+  // Models with native mid-conversation system messages receive later prompt
+  // updates as `role: "system"` messages instead of collapsing them into `system`.
+  if (typed.messages) {
+    typed.messages = Array.flatMap(typed.messages, (message) => {
+      if (message.role !== 'system' || !Array.isArray(message.content)) {
+        return [message]
+      }
+      const content = sanitizeBlocks(message.content)
+      if (message.content.length > 0 && content.length === 0) {
+        return []
+      }
+      return [{ ...message, content }]
+    })
+  }
 
   const firstUserMessage = firstUserMessageText(typed.messages ?? [])
   const fingerprintSeed = CLAUDE_CODE_BILLING_FINGERPRINT_INDICES.map(
@@ -170,20 +168,6 @@ export function rewriteForClaudeCode(
     }
   }
   typed.diagnostics = { previous_message_id: null }
-
-  for (const block of typed.system) {
-    configureCacheTtl(block, extendedCacheTtl)
-  }
-  for (const tool of typed.tools ?? []) {
-    configureCacheTtl(tool, extendedCacheTtl)
-  }
-  for (const message of typed.messages ?? []) {
-    if (Array.isArray(message.content)) {
-      for (const block of message.content) {
-        configureCacheTtl(block, extendedCacheTtl)
-      }
-    }
-  }
 
   return typed
 }
