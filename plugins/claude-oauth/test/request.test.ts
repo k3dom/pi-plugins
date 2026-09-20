@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { PI_ANTHROPIC_OAUTH_SENTINEL } from '../src/constants'
 import { rewriteForClaudeCode } from '../src/request'
+import { cacheControls } from './helpers'
 
 const oauthPayload = (cacheControl?: Record<string, unknown>) => ({
   model: 'claude-fable-5-1',
@@ -36,25 +37,6 @@ const oauthPayload = (cacheControl?: Record<string, unknown>) => ({
     },
   ],
 })
-
-const cacheControls = (payload: unknown): unknown[] => {
-  const found: unknown[] = []
-  const visit = (node: unknown): void => {
-    if (Array.isArray(node)) {
-      node.forEach(visit)
-    } else if (node && typeof node === 'object') {
-      for (const [key, value] of Object.entries(node)) {
-        if (key === 'cache_control') {
-          found.push(value)
-        } else {
-          visit(value)
-        }
-      }
-    }
-  }
-  visit(payload)
-  return found
-}
 
 describe('rewriteForClaudeCode', () => {
   test.each([

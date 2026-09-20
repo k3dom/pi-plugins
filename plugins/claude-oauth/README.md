@@ -21,4 +21,7 @@ Sign in to Anthropic with `/login`, then select a Claude model from the built-in
 `anthropic` provider. The plugin works automatically, with no additional provider or
 configuration.
 
+Prompt-cache retention follows pi's own setting: set `PI_CACHE_RETENTION=long` for
+one-hour cache entries. The plugin never changes the markers pi emits.
+
 This plugin is for subscription sign-ins, not API-key access.

@@ -102,11 +102,11 @@ export function rewriteForClaudeCode(
     return undefined
   }
 
-  const normalized = Array.flatMap(system, (block) =>
-    block.text === PI_ANTHROPIC_OAUTH_SENTINEL
-      ? [{ ...block, text: CLAUDE_AGENT_SDK_IDENTITY }]
-      : sanitizeBlocks([block]),
-  )
+  const [sentinel, ...rest] = system
+  const normalized = [
+    { ...sentinel, text: CLAUDE_AGENT_SDK_IDENTITY },
+    ...sanitizeBlocks(rest),
+  ]
 
   // Models with native mid-conversation system messages receive later prompt
   // updates as `role: "system"` messages instead of collapsing them into `system`.

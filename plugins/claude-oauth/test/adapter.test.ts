@@ -13,19 +13,22 @@ import {
   CLAUDE_CODE_BILLING_HEADER_PREFIX,
 } from '../src/constants'
 import { rewriteForClaudeCode } from '../src/request'
+import {
+  CLAUDE_PREAMBLE,
+  NIX_INSTALL_ROOT,
+  PI_PREAMBLE,
+  cacheControls,
+  piDocsSection,
+} from './helpers'
 
-// Runs the real pi Anthropic adapter and SDK against a recording fetch, so a pi
-// upgrade that changes how prompts or cache markers are serialized fails here
-// instead of in production.
+// Drives the real pi adapter and SDK so pi serialization changes fail here.
 
 const NATIVE_MODEL = 'claude-fable-5-1'
 const COLLAPSED_MODEL = 'claude-opus-4-6'
 
-const PREAMBLE =
-  'You are an expert coding assistant operating inside pi, a coding agent harness.'
-const DOCS =
-  '<docs>\nPi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /nix/store/abc-pi-0.86.0/lib/pi/README.md\n</docs>'
+const DOCS = `<docs>\n${piDocsSection(NIX_INSTALL_ROOT)}\n</docs>`
 const RULES_UPDATE = '<rules>\nUse pi carefully.\n</rules>'
+const SANITIZED_RULES_UPDATE = '<rules>\nUse Claude Code carefully.\n</rules>'
 
 const tool = (name: string): Tool => ({
   name,
@@ -55,7 +58,7 @@ const context = (model: Model<'anthropic-messages'>): Context => ({
   messages: [
     {
       role: 'system',
-      content: PREAMBLE,
+      content: PI_PREAMBLE,
       sections: { docs: DOCS },
       toolsAdded: [tool('read')],
       timestamp: 0,
@@ -88,6 +91,7 @@ interface SentRequest {
     system: Array<{ type: string; text: string; cache_control?: unknown }>
     messages: Array<{ role: string; content: unknown }>
     tools?: Array<{ name: string; cache_control?: unknown }>
+    metadata: { user_id: string }
   }
   headers: Headers
   raw: string
@@ -124,21 +128,6 @@ async function send(
   return { body: JSON.parse(raw), headers: new Headers(init.headers), raw }
 }
 
-const cacheControls = (node: unknown, found: unknown[] = []): unknown[] => {
-  if (Array.isArray(node)) {
-    node.forEach((child) => cacheControls(child, found))
-  } else if (node && typeof node === 'object') {
-    for (const [key, value] of Object.entries(node)) {
-      if (key === 'cache_control') {
-        found.push(value)
-      } else {
-        cacheControls(value, found)
-      }
-    }
-  }
-  return found
-}
-
 describe('through the pi anthropic adapter', () => {
   test.each([NATIVE_MODEL, COLLAPSED_MODEL])(
     '%s: replaces pi identity and attests the request',
@@ -158,6 +147,10 @@ describe('through the pi anthropic adapter', () => {
       expect(betas).toEqual(expect.arrayContaining([...CLAUDE_CODE_AGENT_BETAS]))
       expect(betas).toContain('oauth-2025-04-20')
       expect(headers.get('authorization')).toBe('Bearer sk-ant-oat01-test')
+
+      const identity = JSON.parse(body.metadata.user_id) as Record<string, string>
+      expect(identity['session_id']).toBeTruthy()
+      expect(headers.get('x-claude-code-session-id')).toBe(identity['session_id'])
     },
   )
 
@@ -174,7 +167,7 @@ describe('through the pi anthropic adapter', () => {
     expect(updates[0]?.content).toEqual([
       {
         type: 'text',
-        text: `Updated system prompt section "rules":\n\n${RULES_UPDATE.replace('pi', 'Claude Code')}`,
+        text: `Updated system prompt section "rules":\n\n${SANITIZED_RULES_UPDATE}`,
       },
       {
         type: 'tool_addition',
@@ -190,7 +183,7 @@ describe('through the pi anthropic adapter', () => {
 
     expect(body.messages.some((message) => message.role === 'system')).toBe(false)
     expect(body.system.at(-1)?.text).toBe(
-      `${PREAMBLE.replace('pi', 'Claude Code')}\n\n${RULES_UPDATE.replace('pi', 'Claude Code')}`,
+      `${CLAUDE_PREAMBLE}\n\n${SANITIZED_RULES_UPDATE}`,
     )
   })
 
