@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { lazyApi } from "../src/api/lazy.ts";
 import { envApiKeyAuth } from "../src/auth/helpers.ts";
 import type { AuthContext, AuthEvent } from "../src/auth/types.ts";
-import { createModels, createProvider } from "../src/models.ts";
-import { InMemoryModelsStore, type ModelsStoreEntry } from "../src/models-store.ts";
+import { createModels, createProvider, getSupportedThinkingLevels } from "../src/models.ts";
+import { InMemoryModelsStore } from "../src/models-store.ts";
 import { builtinModels, builtinProviders, getBuiltinModel } from "../src/providers/all.ts";
 import { amazonBedrockProvider } from "../src/providers/amazon-bedrock.ts";
 import { anthropicProvider } from "../src/providers/anthropic.ts";
@@ -10,8 +11,16 @@ import { cloudflareAIGatewayProvider } from "../src/providers/cloudflare-ai-gate
 import { cloudflareWorkersAIProvider } from "../src/providers/cloudflare-workers-ai.ts";
 import { fauxAssistantMessage, fauxProvider } from "../src/providers/faux.ts";
 import { googleVertexProvider } from "../src/providers/google-vertex.ts";
-import type { Api, Context, Model, ProviderStreams } from "../src/types.ts";
+import type {
+	Api,
+	DeferredCancelOptions,
+	DeferredFetchOptions,
+	DeferredHandle,
+	Model,
+	ProviderStreams,
+} from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
+import { normalizeContext } from "../src/utils/transcript.ts";
 
 function fakeAuthContext(env: Record<string, string>, files: string[] = []): AuthContext {
 	return {
@@ -20,7 +29,9 @@ function fakeAuthContext(env: Record<string, string>, files: string[] = []): Aut
 	};
 }
 
-const context: Context = { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] };
+const neverAbortedSignal = new AbortController().signal;
+
+const context = normalizeContext({ messages: [{ role: "user", content: "hi", timestamp: Date.now() }] });
 
 describe("builtin providers", () => {
 	it("builtinModels registers every builtin provider with models", async () => {
@@ -35,13 +46,15 @@ describe("builtin providers", () => {
 		const all = models.getModels();
 		expect(all.length).toBeGreaterThan(500);
 
-		// Static providers list models immediately; Radius is purely dynamic.
 		for (const provider of providers) {
 			const list = models.getModels(provider.id);
-			if (provider.id === "radius") expect(list).toEqual([]);
-			else expect(list.length).toBeGreaterThan(0);
+			expect(list.length).toBeGreaterThan(0);
 			expect(list.every((m) => m.provider === provider.id)).toBe(true);
 		}
+		expect(getBuiltinModel("radius", "balanced")).toMatchObject({
+			api: "pi-messages",
+			provider: "radius",
+		});
 	});
 
 	it("stores native constrained-sampling capabilities in model metadata", () => {
@@ -53,6 +66,130 @@ describe("builtin providers", () => {
 			supportsOpenAIGrammarTools: true,
 		});
 		expect(getBuiltinModel("anthropic", "claude-haiku-4-5").compat?.supportsStrictTools).toBe(true);
+	});
+
+	it("uses models.dev effort levels for Google thinking models", () => {
+		// Regression test for https://github.com/earendil-works/pi/issues/9455
+		for (const provider of ["google", "google-vertex"] as const) {
+			expect(getSupportedThinkingLevels(getBuiltinModel(provider, "gemini-3.6-flash"))).toContain("minimal");
+			expect(getSupportedThinkingLevels(getBuiltinModel(provider, "gemini-3.8-flash"))).toEqual([
+				"low",
+				"medium",
+				"high",
+			]);
+			expect(getSupportedThinkingLevels(getBuiltinModel(provider, "gemini-3.1-pro-preview"))).toEqual([
+				"low",
+				"medium",
+				"high",
+			]);
+		}
+		expect(getSupportedThinkingLevels(getBuiltinModel("opencode", "gemini-3.8-flash"))).toEqual([
+			"low",
+			"medium",
+			"high",
+		]);
+		expect(getSupportedThinkingLevels(getBuiltinModel("google", "gemma-4-31b-it"))).toEqual(["minimal", "high"]);
+	});
+
+	it("enables mid-conversation system messages only for verified models", () => {
+		const models = builtinModels();
+		const supported = [
+			["moonshotai", "kimi-k2.6"],
+			["moonshotai", "kimi-k2.7-code"],
+			["moonshotai", "kimi-k2.7-code-highspeed"],
+			["moonshotai", "kimi-k3"],
+			["moonshotai-cn", "kimi-k2.6"],
+			["moonshotai-cn", "kimi-k2.7-code"],
+			["moonshotai-cn", "kimi-k2.7-code-highspeed"],
+			["moonshotai-cn", "kimi-k3"],
+			["fireworks", "accounts/fireworks/models/kimi-k3"],
+			["fireworks", "accounts/fireworks/routers/kimi-k3-fast"],
+			["openai", "gpt-5.4"],
+			["openai", "gpt-5.5"],
+			["openai", "gpt-6-astra"],
+			["openai-codex", "gpt-5.5"],
+			["anthropic", "claude-opus-5"],
+			["opencode", "gpt-5.4"],
+			["opencode", "gpt-5.6-terra"],
+			["opencode-go", "gpt-5.6-luna"],
+			["opencode", "claude-opus-4-8"],
+			["opencode", "claude-opus-5"],
+			["opencode", "kimi-k3"],
+			["opencode-go", "kimi-k3"],
+			["github-copilot", "gpt-5.6-terra"],
+			["github-copilot", "claude-opus-5"],
+			["github-copilot", "claude-opus-4.8"],
+			["github-copilot", "kimi-k3"],
+			["deepseek", "deepseek-v4-pro"],
+			["openrouter", "openai/gpt-5.6-terra"],
+		] as const;
+		const unsupported = [
+			["fireworks", "accounts/fireworks/models/kimi-k2p6"],
+			["openai", "gpt-4.1"],
+			["openai", "gpt-5.2"],
+			["anthropic", "claude-sonnet-4-5"],
+			["google", "gemini-2.5-pro"],
+			["opencode", "gpt-5.2"],
+			["opencode", "claude-sonnet-4-5"],
+			["github-copilot", "claude-sonnet-4.6"],
+			["deepseek", "deepseek-flash"],
+			["openrouter", "anthropic/claude-opus-5"],
+			["openrouter", "moonshotai/kimi-k3"],
+			["openrouter", "openai/gpt-5.6-terra:batch"],
+		] as const;
+		for (const [provider, modelId] of supported) {
+			expect(models.getModel(provider, modelId), `${provider}/${modelId}`).toHaveProperty(
+				"compat.supportsMidConvoSystemMessages",
+				true,
+			);
+		}
+		for (const [provider, modelId] of unsupported) {
+			expect(models.getModel(provider, modelId), `${provider}/${modelId}`).not.toHaveProperty(
+				"compat.supportsMidConvoSystemMessages",
+			);
+		}
+	});
+
+	it("routes proxied tool changes through verified transports only", () => {
+		const models = builtinModels();
+		for (const [provider, modelId] of [
+			["opencode", "gpt-5.6-terra"],
+			["github-copilot", "gpt-5.6-terra"],
+		] as const) {
+			// Proxies pass `additional_tools` through to OpenAI but are not verified for tool search.
+			expect(models.getModel(provider, modelId)?.compat, `${provider}/${modelId}`).toMatchObject({
+				supportsAdditionalTools: true,
+			});
+			expect(models.getModel(provider, modelId)?.compat, `${provider}/${modelId}`).not.toHaveProperty(
+				"supportsToolSearch",
+			);
+		}
+		// Proxied Anthropic endpoints reject `tool_addition`/`tool_removal` blocks.
+		for (const provider of ["opencode", "github-copilot"] as const) {
+			expect(models.getModel(provider, "claude-opus-5")?.compat, provider).not.toHaveProperty(
+				"supportsMidConvoToolChanges",
+			);
+		}
+		expect(models.getModel("anthropic", "claude-opus-5")?.compat).toMatchObject({
+			supportsMidConvoToolChanges: true,
+		});
+		// Kimi-style tool-bearing system messages survive Moonshot and OpenCode but not Copilot.
+		for (const provider of ["moonshotai", "moonshotai-cn", "opencode", "opencode-go"] as const) {
+			expect(models.getModel(provider, "kimi-k3")?.compat, provider).toMatchObject({
+				supportsMidConvoToolAdditions: true,
+			});
+		}
+		for (const provider of ["moonshotai", "moonshotai-cn"] as const) {
+			for (const modelId of ["kimi-k2.6", "kimi-k2.7-code", "kimi-k2.7-code-highspeed"] as const) {
+				expect(models.getModel(provider, modelId)?.compat, `${provider}/${modelId}`).not.toHaveProperty(
+					"supportsMidConvoToolAdditions",
+				);
+			}
+		}
+		expect(models.getModel("github-copilot", "kimi-k3")?.compat).not.toHaveProperty("supportsMidConvoToolAdditions");
+		expect(models.getModel("openrouter", "openai/gpt-5.6-terra")?.compat).not.toHaveProperty(
+			"supportsMidConvoToolAdditions",
+		);
 	});
 
 	it("uses official Kimi K3 pricing for Moonshot providers", () => {
@@ -111,6 +248,7 @@ describe("builtin providers", () => {
 		const bearerAnswers = ["bearer-token", "bedrock-token"];
 		expect(
 			await auth.login?.({
+				signal: neverAbortedSignal,
 				prompt: async () => bearerAnswers.shift()!,
 				notify: () => {},
 			}),
@@ -120,6 +258,7 @@ describe("builtin providers", () => {
 		const events: AuthEvent[] = [];
 		expect(
 			await auth.login?.({
+				signal: neverAbortedSignal,
 				prompt: async () => profileAnswers.shift()!,
 				notify: (event) => events.push(event),
 			}),
@@ -134,6 +273,7 @@ describe("builtin providers", () => {
 			await auth.resolve({
 				ctx: fakeAuthContext({}),
 				credential: { type: "api_key", env: { AWS_PROFILE: "work" } },
+				signal: neverAbortedSignal,
 			}),
 		).toMatchObject({ auth: {}, env: { AWS_PROFILE: "work" } });
 	});
@@ -202,6 +342,7 @@ describe("builtin providers", () => {
 		const keyAnswers = ["api-key", "vertex-key"];
 		expect(
 			await auth.login?.({
+				signal: neverAbortedSignal,
 				prompt: async () => keyAnswers.shift()!,
 				notify: () => {},
 			}),
@@ -211,6 +352,7 @@ describe("builtin providers", () => {
 		const events: AuthEvent[] = [];
 		expect(
 			await auth.login?.({
+				signal: neverAbortedSignal,
 				prompt: async () => adcAnswers.shift()!,
 				notify: (event) => events.push(event),
 			}),
@@ -231,6 +373,7 @@ describe("builtin providers", () => {
 					type: "api_key",
 					env: { GOOGLE_CLOUD_PROJECT: "project-id", GOOGLE_CLOUD_LOCATION: "us-central1" },
 				},
+				signal: neverAbortedSignal,
 			}),
 		).toMatchObject({
 			auth: {},
@@ -269,20 +412,22 @@ describe("envApiKeyAuth", () => {
 		const stored = await auth.resolve({
 			ctx: fakeAuthContext({ FIRST_KEY: "env" }),
 			credential: { type: "api_key", key: "stored" },
+			signal: neverAbortedSignal,
 		});
 		expect(stored?.auth.apiKey).toBe("stored");
 		expect(stored?.source).toBe("stored credential");
 
-		const second = await auth.resolve({ ctx: fakeAuthContext({ SECOND_KEY: "second" }) });
+		const second = await auth.resolve({ ctx: fakeAuthContext({ SECOND_KEY: "second" }), signal: neverAbortedSignal });
 		expect(second?.auth.apiKey).toBe("second");
 		expect(second?.source).toBe("SECOND_KEY");
 
-		expect(await auth.resolve({ ctx: fakeAuthContext({}) })).toBeUndefined();
+		expect(await auth.resolve({ ctx: fakeAuthContext({}), signal: neverAbortedSignal })).toBeUndefined();
 	});
 
 	it("login prompts for a secret and returns an api-key credential", async () => {
 		const auth = envApiKeyAuth("Test key", ["TEST_KEY"]);
 		const credential = await auth.login?.({
+			signal: neverAbortedSignal,
 			prompt: async (prompt) => {
 				expect(prompt.type).toBe("secret");
 				return "entered-key";
@@ -321,6 +466,31 @@ describe("createProvider", () => {
 			maxTokens: 1000,
 		};
 	}
+
+	it("lazily exposes only declared deferred capabilities", async () => {
+		let loads = 0;
+		const streams = recordingStreams("deferred", []);
+		streams.fetchDeferred = (model) => streams.streamSimple(model, context);
+		const api = lazyApi(
+			async () => {
+				loads++;
+				return streams;
+			},
+			{ fetchDeferred: true },
+		);
+		const model = testModel("api-a", "model-a");
+		const handle: DeferredHandle = {
+			provider: model.provider,
+			modelId: model.id,
+			api: model.api,
+			id: "response-1",
+		};
+
+		expect(loads).toBe(0);
+		expect(api.cancelDeferred).toBeUndefined();
+		expect((await api.fetchDeferred!(model, handle).result()).stopReason).toBe("stop");
+		expect(loads).toBe(1);
+	});
 
 	it("dispatches on model.api for mixed-API providers", async () => {
 		const calls: string[] = [];
@@ -379,6 +549,81 @@ describe("createProvider", () => {
 		expect(capturedEnv).toEqual({ PROVIDER_ONLY: "provider", REQUEST_ONLY: "request", SHARED: "request" });
 	});
 
+	it("applies resolved request options to deferred fetch and cancellation", async () => {
+		let fetchedModel: Model<Api> | undefined;
+		let fetchedOptions: DeferredFetchOptions | undefined;
+		let cancelledOptions: DeferredCancelOptions | undefined;
+		const deferredModel = { ...testModel("api-a", "model-a"), provider: "deferred-provider" };
+		const streams = recordingStreams("deferred", []);
+		streams.fetchDeferred = (model, _handle, options) => {
+			fetchedModel = model;
+			fetchedOptions = options;
+			return streams.streamSimple(model, context);
+		};
+		streams.cancelDeferred = async (_model, _handle, options) => {
+			cancelledOptions = options;
+		};
+		const provider = createProvider({
+			id: "deferred-provider",
+			auth: {
+				apiKey: {
+					name: "Test",
+					resolve: async () => ({
+						auth: {
+							apiKey: "provider-key",
+							baseUrl: "https://resolved.test/v1",
+							headers: { Authorization: "Bearer provider", "X-Shared": "provider" },
+						},
+						env: { PROVIDER_ONLY: "provider", SHARED: "provider" },
+					}),
+				},
+			},
+			models: [deferredModel],
+			api: streams,
+		});
+		const models = createModels();
+		models.setProvider(provider);
+		const handle: DeferredHandle = {
+			provider: deferredModel.provider,
+			modelId: deferredModel.id,
+			api: deferredModel.api,
+			id: "response-1",
+		};
+
+		await models.fetchDeferred(deferredModel, handle, {
+			wait: 50,
+			timeoutMs: 100,
+			apiKey: "request-key",
+			headers: { "X-Request": "request", "x-shared": "request" },
+			env: { REQUEST_ONLY: "request", SHARED: "request" },
+			transformHeaders: (headers) => ({ ...headers, "X-Transformed": "yes" }),
+		});
+		await models.cancelDeferred(deferredModel, handle, {
+			timeoutMs: 200,
+			transformHeaders: (headers) => ({ ...headers, "X-Cancel": "yes" }),
+		});
+
+		expect(fetchedModel?.baseUrl).toBe("https://resolved.test/v1");
+		expect(fetchedOptions).toMatchObject({
+			wait: 50,
+			timeoutMs: 100,
+			apiKey: "request-key",
+			headers: {
+				Authorization: "Bearer provider",
+				"X-Request": "request",
+				"x-shared": "request",
+				"X-Transformed": "yes",
+			},
+			env: { PROVIDER_ONLY: "provider", REQUEST_ONLY: "request", SHARED: "request" },
+		});
+		expect(cancelledOptions).toMatchObject({
+			timeoutMs: 200,
+			apiKey: "provider-key",
+			headers: { Authorization: "Bearer provider", "X-Shared": "provider", "X-Cancel": "yes" },
+			env: { PROVIDER_ONLY: "provider", SHARED: "provider" },
+		});
+	});
+
 	it("produces a stream error for a model whose api has no implementation", async () => {
 		const provider = createProvider({
 			id: "mixed",
@@ -391,38 +636,50 @@ describe("createProvider", () => {
 		expect(result.errorMessage).toContain("no API implementation");
 	});
 
-	it("supports dynamic providers: empty until refreshed, in-flight refreshes deduped", async () => {
+	it("lets a newer dynamic refresh bypass and supersede older network work", async () => {
 		let fetches = 0;
+		let markFirstStarted: (() => void) | undefined;
+		let finishFirst: (() => void) | undefined;
+		const firstStarted = new Promise<void>((resolve) => {
+			markFirstStarted = resolve;
+		});
+		const firstBlocked = new Promise<void>((resolve) => {
+			finishFirst = resolve;
+		});
 		const provider = createProvider({
 			id: "dynamic",
 			auth: { apiKey: { name: "Test", resolve: async () => ({ auth: {} }) } },
 			models: [],
 			fetchModels: async () => {
 				fetches++;
-				await new Promise((resolve) => setTimeout(resolve, 5));
-				return [testModel("api-a", "listed")];
+				const current = fetches;
+				if (current === 1) {
+					markFirstStarted?.();
+					await firstBlocked;
+				}
+				return [testModel("api-a", `listed-${current}`)];
 			},
 			api: recordingStreams("a", []),
 		});
 
 		const store = new InMemoryModelsStore();
-		const refreshContext = {
-			credential: { type: "api_key" as const },
-			store: {
-				read: () => store.read("dynamic"),
-				write: (entry: ModelsStoreEntry) => store.write("dynamic", entry),
-				delete: () => store.delete("dynamic"),
-			},
-			allowNetwork: true,
-		};
+		const models = createModels({ modelsStore: store });
+		models.setProvider(provider);
 		expect(provider.getModels()).toEqual([]);
-		await Promise.all([provider.refreshModels?.(refreshContext), provider.refreshModels?.(refreshContext)]);
-		expect(fetches).toBe(1);
-		expect(provider.getModels().map((m) => m.id)).toEqual(["listed"]);
 
-		// a later refresh fetches again
-		await provider.refreshModels?.(refreshContext);
+		const first = models.refresh({ providers: ["dynamic"] });
+		await firstStarted;
+		const second = models.refresh({ providers: ["dynamic"] });
+		await expect(second).resolves.toMatchObject({ aborted: false });
+		await expect(first).resolves.toMatchObject({ aborted: false });
 		expect(fetches).toBe(2);
+		expect(provider.getModels().map((model) => model.id)).toEqual(["listed-2"]);
+		expect((await store.read("dynamic"))?.models.map((model) => model.id)).toEqual(["listed-2"]);
+
+		finishFirst?.();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(provider.getModels().map((model) => model.id)).toEqual(["listed-2"]);
+		expect((await store.read("dynamic"))?.models.map((model) => model.id)).toEqual(["listed-2"]);
 	});
 });
 
@@ -438,5 +695,61 @@ describe("fauxProvider", () => {
 		expect(result.stopReason).toBe("stop");
 		expect(result.content).toEqual([{ type: "text", text: "hello from faux" }]);
 		expect(faux.state.callCount).toBe(1);
+	});
+
+	it("submits, polls, and redeems deferred responses", async () => {
+		const faux = fauxProvider({ deferred: { pendingFetches: 1, pollAfterMs: 25 } });
+		const models = createModels();
+		models.setProvider(faux.provider);
+		faux.setResponses([fauxAssistantMessage("ready")]);
+		const model = faux.getModel();
+
+		const submission = models.streamSimple(model, context, { deferred: { window: "1h" } });
+		const eventTypes: string[] = [];
+		for await (const event of submission) eventTypes.push(event.type);
+		const deferred = await submission.result();
+		expect(eventTypes).toEqual(["start", "done"]);
+		expect(deferred).toMatchObject({ stopReason: "deferred", content: [] });
+		expect(deferred.deferred).toEqual({
+			provider: model.provider,
+			modelId: model.id,
+			api: model.api,
+			id: expect.any(String),
+			pollAfterMs: 25,
+		});
+		if (!deferred.deferred) throw new Error("Faux response did not include a deferred handle");
+
+		const pending = await models.fetchDeferred(model, deferred.deferred);
+		expect(pending.stopReason).toBe("deferred");
+		expect(pending.deferred).toEqual(deferred.deferred);
+
+		const ready = await models.fetchDeferred(model, deferred.deferred, { wait: 0 });
+		expect(ready.stopReason).toBe("stop");
+		expect(ready.content).toEqual([{ type: "text", text: "ready" }]);
+		expect(ready.usage.totalTokens).toBeGreaterThan(0);
+		expect(faux.state).toMatchObject({ callCount: 1, deferredFetchCount: 2 });
+	});
+
+	it("records cancellation and returns deferred fetch failures in-band", async () => {
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		faux.setResponses([() => Promise.reject(new Error("deferred failed")), fauxAssistantMessage("cancelled")]);
+		const model = faux.getModel();
+
+		const failedSubmission = await models.completeSimple(model, context, { deferred: true });
+		if (!failedSubmission.deferred) throw new Error("Faux response did not include a deferred handle");
+		const failed = await models.fetchDeferred(model, failedSubmission.deferred);
+		expect(failed).toMatchObject({ stopReason: "error", errorMessage: "deferred failed" });
+
+		const cancelledSubmission = await models.completeSimple(model, context, { deferred: true });
+		if (!cancelledSubmission.deferred) throw new Error("Faux response did not include a deferred handle");
+		await models.cancelDeferred(model, cancelledSubmission.deferred);
+		expect(faux.state.cancelledDeferred).toEqual([cancelledSubmission.deferred]);
+		const cancelled = await models.fetchDeferred(model, cancelledSubmission.deferred);
+		expect(cancelled).toMatchObject({
+			stopReason: "error",
+			errorMessage: expect.stringContaining("was cancelled"),
+		});
 	});
 });

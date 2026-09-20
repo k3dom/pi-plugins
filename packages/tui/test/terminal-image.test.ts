@@ -8,16 +8,24 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { Image } from "../src/components/image.ts";
 import {
+	cropKittyImageLine,
 	deleteAllKittyImages,
+	deleteAllKittyPlacements,
 	deleteKittyImage,
 	detectCapabilities,
+	encodeITerm2,
 	encodeKitty,
+	getCapabilities,
+	getKittyImageMetadata,
+	getKittyImagePlacement,
 	hyperlink,
 	imageFallback,
 	isImageLine,
+	registerKittyImageMetadata,
 	renderImage,
 	resetCapabilitiesCache,
 	setCapabilities,
+	setCapabilityOverrides,
 	setCellDimensions,
 } from "../src/terminal-image.ts";
 import { visibleWidth } from "../src/utils.ts";
@@ -36,9 +44,12 @@ const ENV_KEYS = [
 	"CMUX_WORKSPACE_ID",
 	"WARP_SESSION_ID",
 	"WARP_TERMINAL_SESSION_UUID",
+	"PI_HYPERLINKS",
+	"PI_IMAGE_PROTOCOL",
+	"PI_TRUE_COLOR",
 ] as const;
 
-function withEnv(overrides: Record<string, string | undefined>, fn: () => void): void {
+function withEnv<T>(overrides: Record<string, string | undefined>, fn: () => T): T {
 	const saved: Record<string, string | undefined> = {};
 	for (const key of ENV_KEYS) {
 		saved[key] = process.env[key];
@@ -49,7 +60,7 @@ function withEnv(overrides: Record<string, string | undefined>, fn: () => void):
 			if (v === undefined) delete process.env[k];
 			else process.env[k] = v;
 		}
-		fn();
+		return fn();
 	} finally {
 		for (const key of ENV_KEYS) {
 			if (saved[key] === undefined) delete process.env[key];
@@ -213,6 +224,63 @@ describe("detectCapabilities", () => {
 		});
 	});
 
+	it("applies environment overrides", () => {
+		assert.deepStrictEqual(
+			withEnv({ PI_HYPERLINKS: "1", PI_IMAGE_PROTOCOL: "kitty", PI_TRUE_COLOR: "1" }, () => detectCapabilities()),
+			{ images: "kitty", trueColor: true, hyperlinks: true },
+		);
+		assert.deepStrictEqual(
+			withEnv({ TERM_PROGRAM: "iterm.app", PI_HYPERLINKS: "0", PI_IMAGE_PROTOCOL: "none", PI_TRUE_COLOR: "0" }, () =>
+				detectCapabilities(),
+			),
+			{ images: null, trueColor: false, hyperlinks: false },
+		);
+	});
+
+	it("preserves auto-detection for auto environment overrides", () => {
+		assert.deepStrictEqual(
+			withEnv(
+				{
+					TERM_PROGRAM: "ghostty",
+					PI_HYPERLINKS: "auto",
+					PI_IMAGE_PROTOCOL: "auto",
+					PI_TRUE_COLOR: "auto",
+				},
+				() => detectCapabilities(),
+			),
+			{ images: "kitty", trueColor: true, hyperlinks: true },
+		);
+	});
+
+	it("applies and clears programmatic overrides", () => {
+		withEnv({ PI_HYPERLINKS: "1", PI_IMAGE_PROTOCOL: "kitty", PI_TRUE_COLOR: "1" }, () => {
+			setCapabilityOverrides({ images: null, trueColor: false, hyperlinks: false });
+			try {
+				assert.deepStrictEqual(getCapabilities(), { images: null, trueColor: false, hyperlinks: false });
+				setCapabilityOverrides({});
+				assert.deepStrictEqual(getCapabilities(), { images: "kitty", trueColor: true, hyperlinks: true });
+			} finally {
+				setCapabilityOverrides({});
+				resetCapabilitiesCache();
+			}
+		});
+	});
+
+	it("bypasses the tmux probe when hyperlinks are overridden", () => {
+		let probed = false;
+		const caps = withEnv(
+			{ TMUX: "/tmp/tmux-1000/default,1234,0", PI_HYPERLINKS: "1", PI_IMAGE_PROTOCOL: "kitty" },
+			() =>
+				detectCapabilities(() => {
+					probed = true;
+					return false;
+				}),
+		);
+		assert.strictEqual(probed, false);
+		assert.strictEqual(caps.hyperlinks, true);
+		assert.strictEqual(caps.images, "kitty");
+	});
+
 	it("enables hyperlinks under tmux when the client forwards them", () => {
 		withEnv({ TMUX: "/tmp/tmux-1000/default,1234,0", TERM_PROGRAM: "ghostty" }, () => {
 			const caps = detectCapabilities(() => true);
@@ -333,6 +401,12 @@ describe("detectCapabilities", () => {
 		});
 	});
 
+	it("enables Alacritty capabilities for Zed", () => {
+		withEnv({ TERM_PROGRAM: "zed" }, () => {
+			assert.deepStrictEqual(detectCapabilities(), { images: null, trueColor: true, hyperlinks: true });
+		});
+	});
+
 	it("enables truecolor and hyperlinks for Windows Terminal outside multiplexers", () => {
 		withEnv({ WT_SESSION: "session", TERM: "xterm-256color" }, () => {
 			const caps = detectCapabilities();
@@ -370,6 +444,13 @@ describe("detectCapabilities", () => {
 	});
 });
 
+describe("iTerm2 image encoding", () => {
+	it("includes the decoded payload size in OSC 1337 metadata", () => {
+		const sequence = encodeITerm2("AAAA", { width: 2, height: "auto" });
+		assert.strictEqual(sequence, "\x1b]1337;File=inline=1;size=3;width=2;height=auto:AAAA\x07");
+	});
+});
+
 describe("Kitty image cursor movement", () => {
 	it("can request no terminal-side cursor movement", () => {
 		const sequence = encodeKitty("AAAA", { columns: 2, rows: 2, moveCursor: false });
@@ -379,6 +460,7 @@ describe("Kitty image cursor movement", () => {
 	it("suppresses Kitty replies for delete commands", () => {
 		assert.strictEqual(deleteKittyImage(42), "\x1b_Ga=d,d=I,i=42,q=2\x1b\\");
 		assert.strictEqual(deleteAllKittyImages(), "\x1b_Ga=d,d=A,q=2\x1b\\");
+		assert.strictEqual(deleteAllKittyPlacements(), "\x1b_Ga=d,d=a,q=2\x1b\\");
 	});
 
 	it("preserves renderImage's default terminal-side cursor movement", () => {
@@ -407,6 +489,48 @@ describe("Kitty image cursor movement", () => {
 			resetCapabilitiesCache();
 			setCellDimensions({ widthPx: 9, heightPx: 18 });
 		}
+	});
+
+	it("registers metadata and crops a partially visible placement", () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		setCellDimensions({ widthPx: 10, heightPx: 10 });
+		try {
+			const result = renderImage(
+				"AAAA",
+				{ widthPx: 100, heightPx: 100 },
+				{ maxWidthCells: 3, imageId: 42, moveCursor: false },
+			);
+			assert.ok(result);
+			assert.deepStrictEqual(getKittyImageMetadata(result.sequence), {
+				imageId: 42,
+				columns: 3,
+				rows: 3,
+				widthPx: 100,
+				heightPx: 100,
+			});
+			assert.ok(cropKittyImageLine(result.sequence, 2, 1).includes("y=66,h=34,r=1"));
+		} finally {
+			resetCapabilitiesCache();
+			setCellDimensions({ widthPx: 9, heightPx: 18 });
+		}
+	});
+
+	it("creates placement-only commands for uploaded and cropped images", () => {
+		registerKittyImageMetadata({ imageId: 42, columns: 3, rows: 3, widthPx: 100, heightPx: 100 });
+		const transmission = encodeKitty("A".repeat(8192), {
+			columns: 3,
+			rows: 3,
+			imageId: 42,
+			moveCursor: false,
+		});
+		const line = `left ${cropKittyImageLine(transmission, 2, 1)} right`;
+		const placement = getKittyImagePlacement(line);
+		assert.ok(placement);
+		assert.strictEqual(placement.transmissionBytes, line.length - "left ".length - " right".length);
+		assert.strictEqual(placement.estimatedDecodedBytes, 100 * 100 * 4);
+		assert.strictEqual(placement.sequence, "\x1b_Ga=p,q=2,C=1,c=3,i=42,y=66,h=34,r=1\x1b\\");
+		assert.strictEqual(placement.replacementLine, `left ${placement.sequence} right`);
+		assert.ok(!placement.replacementLine.includes("AAAA"));
 	});
 
 	it("honors maxHeightCells by reducing rendered width", () => {
