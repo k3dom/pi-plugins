@@ -1,5 +1,12 @@
 # @pi-plugins/claude-oauth
 
+## 0.3.7
+
+### Patch Changes
+
+- a152365: Stop promoting cache markers to a one-hour TTL. Pi 0.86 schedules cache warming from the retention it resolved itself, so the override caused redundant warm requests; retention now follows `PI_CACHE_RETENTION`.
+- a152365: Remove pi identity from the `<docs>`-wrapped documentation section and from the mid-conversation `role: "system"` messages Pi 0.86 sends to newer Claude models.
+
 ## 0.3.6
 
 ### Patch Changes
