@@ -5,5 +5,5 @@
 # The ref pins each vendored repo to the release we depend on, so the reference
 # material matches the versions in package.json. Bump it together with the
 # dependency.
-.agents/repos/pi	https://github.com/earendil-works/pi	v0.83.0
+.agents/repos/pi	https://github.com/earendil-works/pi	v0.86.0
 .agents/repos/effect	https://github.com/Effect-TS/effect	effect@4.0.0-rc.115
