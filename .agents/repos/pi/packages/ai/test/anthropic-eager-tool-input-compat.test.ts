@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
 import type { Context, Model, Tool } from "../src/types.ts";
+import { normalizeContext } from "../src/utils/transcript.ts";
 
 interface CapturedRequest {
 	headers: IncomingMessage["headers"];
@@ -39,7 +40,10 @@ const schemaCompatibilityTool: Tool = {
 
 const strictTool: Tool = {
 	...tool,
-	parameters: Type.Object({ value: Type.String() }, { additionalProperties: false, title: "StrictLookupInput" }),
+	parameters: Type.Object(
+		{ value: Type.String(), optional: Type.Optional(Type.Number()) },
+		{ title: "StrictLookupInput" },
+	),
 	constrainedSampling: { type: "json_schema", strict: "prefer" },
 };
 
@@ -81,10 +85,14 @@ async function captureAnthropicRequest(
 	const address = server.address() as AddressInfo;
 
 	try {
-		const stream = streamAnthropic(createModel(`http://127.0.0.1:${address.port}`, compat), context, {
-			apiKey: "test-key",
-			cacheRetention: "none",
-		});
+		const stream = streamAnthropic(
+			createModel(`http://127.0.0.1:${address.port}`, compat),
+			normalizeContext(context),
+			{
+				apiKey: "test-key",
+				cacheRetention: "none",
+			},
+		);
 
 		for await (const event of stream) {
 			if (event.type === "done" || event.type === "error") break;
@@ -155,6 +163,8 @@ describe("Anthropic eager tool input streaming compatibility", () => {
 		expect(getFirstTool(strictRequest.body).strict).toBe(true);
 		expect(getFirstToolInputSchema(strictRequest.body)).toMatchObject({
 			additionalProperties: false,
+			required: ["value", "optional"],
+			properties: { optional: { anyOf: [{ type: "number" }, { type: "null" }] } },
 			title: "StrictLookupInput",
 		});
 	});

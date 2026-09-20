@@ -1,4 +1,11 @@
-import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel } from "@earendil-works/pi-ai/compat";
+import {
+	type AssistantMessage,
+	type AssistantMessageEvent,
+	EventStream,
+	getCurrentSystemMessage,
+	getModel,
+	toToolDeclaration,
+} from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
@@ -45,6 +52,16 @@ function createAssistantMessage(text: string): AssistantMessage {
 }
 
 type ToolCallContent = Extract<AssistantMessage["content"][number], { type: "toolCall" }>;
+
+function createTool(name: string): AgentTool {
+	return {
+		name,
+		label: name,
+		description: `${name} tool`,
+		parameters: Type.Object({}),
+		execute: async () => ({ content: [{ type: "text", text: name }], details: {} }),
+	};
+}
 
 function createAssistantToolUseMessage(content: ToolCallContent[]): AssistantMessage {
 	return {
@@ -107,7 +124,6 @@ describe("Agent", () => {
 		const agent = new Agent({ streamFn: unusedStreamFunction });
 
 		expect(agent.state).toBeDefined();
-		expect(agent.state.systemPrompt).toBe("");
 		expect(agent.state.model).toBeDefined();
 		expect(agent.state.thinkingLevel).toBe("off");
 		expect(agent.state.tools).toEqual([]);
@@ -129,9 +145,174 @@ describe("Agent", () => {
 			},
 		});
 
-		expect(agent.state.systemPrompt).toBe("You are a helpful assistant.");
+		expect(agent.state.messages).toEqual([{ role: "system", content: "You are a helpful assistant.", timestamp: 0 }]);
 		expect(agent.state.model).toBe(customModel);
 		expect(agent.state.thinkingLevel).toBe("low");
+	});
+
+	it("converts initial prompt and tools into transcript state", () => {
+		const tool: AgentTool = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo input",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "echo" }], details: {} }),
+		};
+		const agent = new Agent({
+			initialState: { systemPrompt: "You are helpful.", tools: [tool] },
+			streamFn: unusedStreamFunction,
+		});
+
+		const initial = agent.state.messages[0];
+		expect(initial?.role).toBe("system");
+		if (initial?.role !== "system") throw new Error("expected initial system message");
+		expect(initial.content).toBe("You are helpful.");
+		expect(initial.toolsAdded?.map((value) => value.name)).toEqual(["echo"]);
+	});
+
+	it("declares tool loadout changes to the model before the next request", async () => {
+		const first = createTool("first");
+		const second = createTool("second");
+		const requests: string[][] = [];
+		const agent = new Agent({
+			initialState: { systemPrompt: "You are helpful.", tools: [first] },
+			streamFn: (_model, context) => {
+				requests.push(
+					context.messages.flatMap((message) =>
+						message.role === "system"
+							? [
+									`+${(message.toolsAdded ?? []).map((tool) => tool.name).join(",")}`,
+									`-${(message.toolsRemoved ?? []).map((tool) => tool.name).join(",")}`,
+								]
+							: [],
+					),
+				);
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("done") });
+				});
+				return stream;
+			},
+		});
+
+		await agent.prompt("one");
+		agent.state.tools = [second];
+		await agent.prompt("two");
+		await agent.prompt("three");
+
+		expect(requests).toEqual([
+			["+first", "-"],
+			["+first", "-", "+second", "-first"],
+			["+first", "-", "+second", "-first"],
+		]);
+		const update = agent.state.messages.find((message) => message.role === "system" && message.toolsRemoved);
+		expect(update).toEqual({
+			role: "system",
+			content: "",
+			toolsAdded: [{ name: "second", description: "second tool", parameters: Type.Object({}) }],
+			toolsRemoved: [{ name: "first" }],
+			timestamp: expect.any(Number),
+		});
+		const initial = agent.state.messages[0];
+		if (initial?.role !== "system") throw new Error("expected initial system message");
+		expect(initial.toolsAdded?.[0]).not.toHaveProperty("execute");
+	});
+
+	it("merges tool changes into a pending system message", async () => {
+		const tool: AgentTool = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo input",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "echo" }], details: {} }),
+		};
+		const agent = new Agent({
+			initialState: { systemPrompt: "You are helpful." },
+			streamFn: (_model, context) => {
+				expect(context.messages.filter((message) => message.role === "system")).toHaveLength(2);
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("done") });
+				});
+				return stream;
+			},
+		});
+
+		agent.state.tools = [tool];
+		await agent.prompt([
+			{ role: "system", content: "", sections: { skills: "<skills>x</skills>" }, timestamp: 1 },
+			{ role: "user", content: "hi", timestamp: 2 },
+		]);
+
+		expect(agent.state.messages[1]).toEqual({
+			role: "system",
+			content: "",
+			sections: { skills: "<skills>x</skills>" },
+			toolsAdded: [{ name: "echo", description: "Echo input", parameters: Type.Object({}) }],
+			timestamp: 1,
+		});
+	});
+
+	it("rewrites pending tool declarations to match the executable set", async () => {
+		const agent = new Agent({
+			initialState: { systemPrompt: "You are helpful.", tools: [createTool("first")] },
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("done") });
+				});
+				return stream;
+			},
+		});
+
+		// The pending message claims to add `second` and remove `first`, but the executable
+		// set still has `first` and lacks `second`: the executable set wins.
+		await agent.prompt([
+			{
+				role: "system",
+				content: "",
+				sections: { note: "<note>x</note>" },
+				toolsAdded: [toToolDeclaration(createTool("second"))],
+				toolsRemoved: [{ name: "first" }],
+				timestamp: 1,
+			},
+			{ role: "user", content: "hi", timestamp: 2 },
+		]);
+
+		expect(agent.state.messages[1]).toEqual({
+			role: "system",
+			content: "",
+			sections: { note: "<note>x</note>" },
+			timestamp: 1,
+		});
+		expect(getCurrentSystemMessage(agent.state.messages)?.toolsAdded?.map((tool) => tool.name)).toEqual(["first"]);
+	});
+
+	it("restores the transcript baseline when reset", () => {
+		const tool: AgentTool = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo input",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "echo" }], details: {} }),
+		};
+		const agent = new Agent({
+			initialState: {
+				systemPrompt: "You are helpful.",
+				tools: [tool],
+				messages: [{ role: "user", content: "old", timestamp: 1 }],
+			},
+			streamFn: unusedStreamFunction,
+		});
+
+		agent.reset();
+
+		expect(agent.state.messages).toHaveLength(1);
+		const initial = agent.state.messages[0];
+		expect(initial?.role).toBe("system");
+		if (initial?.role !== "system") throw new Error("expected initial system message");
+		expect(initial.content).toBe("You are helpful.");
+		expect(initial.toolsAdded?.map((value) => value.name)).toEqual(["echo"]);
 	});
 
 	it("should subscribe to events", () => {
@@ -146,13 +327,13 @@ describe("Agent", () => {
 		expect(eventCount).toBe(0);
 
 		// State mutators don't emit events
-		agent.state.systemPrompt = "Test prompt";
+		agent.state.thinkingLevel = "low";
 		expect(eventCount).toBe(0);
-		expect(agent.state.systemPrompt).toBe("Test prompt");
+		expect(agent.state.thinkingLevel).toBe("low");
 
 		// Unsubscribe should work
 		unsubscribe();
-		agent.state.systemPrompt = "Another prompt";
+		agent.state.thinkingLevel = "high";
 		expect(eventCount).toBe(0); // Should not increase
 	});
 
@@ -442,10 +623,6 @@ describe("Agent", () => {
 	it("should update state with mutators", () => {
 		const agent = new Agent({ streamFn: unusedStreamFunction });
 
-		// Test setSystemPrompt
-		agent.state.systemPrompt = "Custom prompt";
-		expect(agent.state.systemPrompt).toBe("Custom prompt");
-
 		// Test setModel
 		const newModel = getModel("google", "gemini-2.5-flash");
 		agent.state.model = newModel;
@@ -503,6 +680,40 @@ describe("Agent", () => {
 
 		// Should not throw even if nothing is running
 		expect(() => agent.abort()).not.toThrow();
+	});
+
+	it("should reject reset while processing without corrupting the transcript", async () => {
+		const streamStarted = createDeferred();
+		const releaseResponse = createDeferred();
+		const agent = new Agent({
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(async () => {
+					stream.push({ type: "start", partial: createAssistantMessage("") });
+					streamStarted.resolve();
+					await releaseResponse.promise;
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("Done") });
+				});
+				return stream;
+			},
+		});
+
+		const promptPromise = agent.prompt("Hello");
+		await streamStarted.promise;
+
+		try {
+			expect(agent.state.isStreaming).toBe(true);
+			expect(agent.state.messages.map((message) => message.role)).toEqual(["user"]);
+			expect(() => agent.reset()).toThrow("Agent is already processing. Wait for completion before resetting.");
+			expect(agent.state.isStreaming).toBe(true);
+			expect(agent.state.messages.map((message) => message.role)).toEqual(["user"]);
+		} finally {
+			releaseResponse.resolve();
+			await promptPromise;
+		}
+
+		expect(agent.state.isStreaming).toBe(false);
+		expect(agent.state.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
 	});
 
 	it("should throw when prompt() called while streaming", async () => {
@@ -702,6 +913,50 @@ describe("Agent", () => {
 
 		expect(requestCount).toBe(2);
 		expect(sawAbortSignal).toBe(true);
+	});
+
+	it("forwards shouldStopAfterTurn through AgentOptions", async () => {
+		const schema = Type.Object({});
+		const tool: AgentTool<typeof schema> = {
+			name: "noop",
+			label: "Noop",
+			description: "Noop tool",
+			parameters: schema,
+			execute: async () => ({ content: [{ type: "text", text: "tool complete" }], details: {} }),
+		};
+		let requestCount = 0;
+		let sawAbortSignal = false;
+		let callbackContextRoles: string[] = [];
+		const agent = new Agent({
+			initialState: { tools: [tool] },
+			shouldStopAfterTurn: (context, signal) => {
+				sawAbortSignal = signal instanceof AbortSignal;
+				callbackContextRoles = context.context.messages.map((message) => message.role);
+				return true;
+			},
+			streamFn: () => {
+				requestCount++;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					if (requestCount === 1) {
+						const message = createAssistantToolUseMessage([
+							{ type: "toolCall", id: "tool-1", name: "noop", arguments: {} },
+						]);
+						stream.push({ type: "done", reason: "toolUse", message });
+						return;
+					}
+					const message = createAssistantMessage("should not run");
+					stream.push({ type: "done", reason: "stop", message });
+				});
+				return stream;
+			},
+		});
+
+		await agent.prompt("start");
+
+		expect(requestCount).toBe(1);
+		expect(sawAbortSignal).toBe(true);
+		expect(callbackContextRoles).toEqual(["system", "user", "assistant", "toolResult"]);
 	});
 
 	it("forwards sessionId to streamFunction options", async () => {

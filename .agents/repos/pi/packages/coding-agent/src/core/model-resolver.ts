@@ -3,7 +3,13 @@
  */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { type Api, type KnownProvider, type Model, modelsAreEqual } from "@earendil-works/pi-ai";
+import {
+	type Api,
+	type AuthOperationOptions,
+	type KnownProvider,
+	type Model,
+	modelsAreEqual,
+} from "@earendil-works/pi-ai";
 import chalk from "chalk";
 import { minimatch } from "minimatch";
 import { isValidThinkingLevel } from "../cli/args.ts";
@@ -18,7 +24,7 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	openai: "gpt-5.5",
 	"azure-openai-responses": "gpt-5.4",
 	"openai-codex": "gpt-5.5",
-	radius: "auto",
+	radius: "balanced",
 	nvidia: "nvidia/nemotron-3-super-120b-a12b",
 	deepseek: "deepseek-v4-pro",
 	google: "gemini-3.1-pro-preview",
@@ -26,11 +32,11 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	"github-copilot": "gpt-5.4",
 	openrouter: "moonshotai/kimi-k2.6",
 	"vercel-ai-gateway": "zai/glm-5.1",
-	xai: "grok-4.5",
+	xai: "grok-4.6",
 	groq: "openai/gpt-oss-120b",
-	cerebras: "zai-glm-4.7",
-	zai: "glm-5.1",
-	"zai-coding-cn": "glm-5.1",
+	cerebras: "gpt-oss-120b",
+	zai: "glm-5.3",
+	"zai-coding-cn": "glm-5.3",
 	mistral: "devstral-medium-latest",
 	minimax: "MiniMax-M2.7",
 	"minimax-cn": "MiniMax-M2.7",
@@ -39,6 +45,7 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	huggingface: "moonshotai/Kimi-K2.6",
 	fireworks: "accounts/fireworks/models/kimi-k2p6",
 	together: "moonshotai/Kimi-K2.6",
+	baseten: "zai-org/GLM-5.2",
 	opencode: "kimi-k2.6",
 	"opencode-go": "kimi-k2.6",
 	"kimi-coding": "kimi-for-coding",
@@ -46,6 +53,7 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	"cloudflare-ai-gateway": "workers-ai/@cf/moonshotai/kimi-k2.6",
 	"qwen-token-plan": "qwen3.7-max",
 	"qwen-token-plan-cn": "qwen3.7-max",
+	"qwen-token-plan-individual": "qwen3.8-max",
 	xiaomi: "mimo-v2.5-pro",
 	"xiaomi-token-plan-cn": "mimo-v2.5-pro",
 	"xiaomi-token-plan-ams": "mimo-v2.5-pro",
@@ -270,11 +278,11 @@ export interface ResolveModelScopeResult {
 	diagnostics: ModelScopeDiagnostic[];
 }
 
-export async function resolveModelScopeWithDiagnostics(
+export function resolveModelScopeFromModels(
 	patterns: string[],
-	modelRuntime: ModelRuntime,
-): Promise<ResolveModelScopeResult> {
-	const availableModels = [...(await modelRuntime.getAvailable())];
+	models: readonly Model<Api>[],
+): ResolveModelScopeResult {
+	const availableModels = [...models];
 	const scopedModels: ScopedModel[] = [];
 	const diagnostics: ModelScopeDiagnostic[] = [];
 
@@ -352,8 +360,20 @@ export async function resolveModelScopeWithDiagnostics(
 	return { scopedModels, diagnostics };
 }
 
-export async function resolveModelScope(patterns: string[], modelRuntime: ModelRuntime): Promise<ScopedModel[]> {
-	const { scopedModels, diagnostics } = await resolveModelScopeWithDiagnostics(patterns, modelRuntime);
+export async function resolveModelScopeWithDiagnostics(
+	patterns: string[],
+	modelRuntime: ModelRuntime,
+	options?: AuthOperationOptions,
+): Promise<ResolveModelScopeResult> {
+	return resolveModelScopeFromModels(patterns, await modelRuntime.getAvailable(undefined, options));
+}
+
+export async function resolveModelScope(
+	patterns: string[],
+	modelRuntime: ModelRuntime,
+	options?: AuthOperationOptions,
+): Promise<ScopedModel[]> {
+	const { scopedModels, diagnostics } = await resolveModelScopeWithDiagnostics(patterns, modelRuntime, options);
 	for (const diagnostic of diagnostics) {
 		console.warn(chalk.yellow(`Warning: ${diagnostic.message}`));
 	}
@@ -443,13 +463,42 @@ export function resolveCliModel(options: {
 
 	// If no provider was inferred from the slash, try exact matches without provider inference.
 	// This handles models whose IDs naturally contain slashes (e.g. OpenRouter-style IDs).
+	// Bare exact IDs can exist in multiple providers, so do not choose by catalog order.
+	// Prefer the sole authenticated provider when there is one; otherwise require an
+	// explicit provider to avoid silently selecting an unusable provider.
 	if (!provider) {
 		const lower = cliModel.toLowerCase();
-		const exact = availableModels.find(
+		const exactMatches = availableModels.filter(
 			(m) => m.id.toLowerCase() === lower || `${m.provider}/${m.id}`.toLowerCase() === lower,
 		);
-		if (exact) {
-			return { model: exact, warning: undefined, thinkingLevel: undefined, error: undefined };
+		if (exactMatches.length === 1) {
+			return { model: exactMatches[0], warning: undefined, thinkingLevel: undefined, error: undefined };
+		}
+		if (exactMatches.length > 1) {
+			const authenticatedExactMatches = exactMatches.filter((m) => modelRuntime.hasConfiguredAuth(m.provider));
+			if (authenticatedExactMatches.length === 1) {
+				return {
+					model: authenticatedExactMatches[0],
+					warning: undefined,
+					thinkingLevel: undefined,
+					error: undefined,
+				};
+			}
+
+			const matches = exactMatches
+				.map((m) => `${m.provider}/${m.id}`)
+				.sort((a, b) => a.localeCompare(b))
+				.join(", ");
+			const authHint =
+				authenticatedExactMatches.length === 0
+					? "No matching provider is authenticated."
+					: "More than one matching provider is authenticated.";
+			return {
+				model: undefined,
+				warning: undefined,
+				thinkingLevel: undefined,
+				error: `Model "${cliModel}" is ambiguous across providers: ${matches}. ${authHint} Use --provider or provider/model.`,
+			};
 		}
 	}
 
@@ -577,6 +626,7 @@ export async function findInitialModel(options: {
 	defaultProvider?: string;
 	defaultModelId?: string;
 	defaultThinkingLevel?: ThinkingLevel;
+	modelThinkingLevels?: Record<string, ThinkingLevel>;
 	modelRuntime: ModelRuntime;
 }): Promise<InitialModelResult> {
 	const {
@@ -587,6 +637,7 @@ export async function findInitialModel(options: {
 		defaultProvider,
 		defaultModelId,
 		defaultThinkingLevel,
+		modelThinkingLevels,
 		modelRuntime,
 	} = options;
 
@@ -611,9 +662,11 @@ export async function findInitialModel(options: {
 
 	// 2. Use first model from scoped models (skip if continuing/resuming)
 	if (scopedModels.length > 0 && !isContinuing) {
+		const scopedModel = scopedModels[0];
+		const perModel = modelThinkingLevels?.[`${scopedModel.model.provider}/${scopedModel.model.id}`];
 		return {
-			model: scopedModels[0].model,
-			thinkingLevel: scopedModels[0].thinkingLevel ?? defaultThinkingLevel ?? DEFAULT_THINKING_LEVEL,
+			model: scopedModel.model,
+			thinkingLevel: scopedModel.thinkingLevel ?? perModel ?? defaultThinkingLevel ?? DEFAULT_THINKING_LEVEL,
 			fallbackMessage: undefined,
 		};
 	}
@@ -623,7 +676,10 @@ export async function findInitialModel(options: {
 		const found = modelRuntime.getModel(defaultProvider, defaultModelId);
 		if (found && modelRuntime.hasConfiguredAuth(found.provider)) {
 			model = found;
-			if (defaultThinkingLevel) {
+			const perModel = modelThinkingLevels?.[`${defaultProvider}/${defaultModelId}`];
+			if (perModel) {
+				thinkingLevel = perModel;
+			} else if (defaultThinkingLevel) {
 				thinkingLevel = defaultThinkingLevel;
 			}
 			return { model, thinkingLevel, fallbackMessage: undefined };
@@ -631,7 +687,7 @@ export async function findInitialModel(options: {
 	}
 
 	// 4. Try first available model with valid API key
-	const availableModels = [...(await modelRuntime.getAvailable())];
+	const availableModels = [...modelRuntime.getAvailableSnapshot()];
 
 	if (availableModels.length > 0) {
 		// Try to find a default model from known providers
@@ -692,7 +748,7 @@ export async function restoreModelFromSession(
 	}
 
 	// Try to find any available model
-	const availableModels = [...(await modelRuntime.getAvailable())];
+	const availableModels = [...modelRuntime.getAvailableSnapshot()];
 
 	if (availableModels.length > 0) {
 		// Try to find a default model from known providers

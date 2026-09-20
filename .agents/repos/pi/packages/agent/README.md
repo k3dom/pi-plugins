@@ -10,7 +10,7 @@ npm install @earendil-works/pi-agent-core
 
 ### SQLite session backends
 
-The SQLite session backend and the `node:sqlite` adapter live in a separate package, `@earendil-works/pi-storage-sqlite-node`, so the core package does not pull in runtime builtins or native SQLite dependencies by default. The backend accepts a runtime-specific SQLite factory, allowing other storage backends to ship as their own packages in the future.
+The SQLite session backend and the `node:sqlite` adapter live in a separate package, `@earendil-works/pi-session-backend-sqlite-node`, so the core package does not pull in runtime builtins or native SQLite dependencies by default. The backend accepts a runtime-specific SQLite factory, allowing other session backends to ship as their own packages in the future.
 
 ## Quick Start
 
@@ -41,6 +41,10 @@ agent.subscribe((event) => {
 
 await agent.prompt("Hello!");
 ```
+
+## Experimental facet services
+
+Transport-neutral facet-service primitives live in `@earendil-works/chord`. The agent core does not export the service runtime.
 
 ## Core Concepts
 
@@ -119,11 +123,11 @@ In parallel mode, tool completion events follow tool completion order, but persi
 
 The mode can be set globally via `toolExecution` in the agent config, or per-tool via `executionMode` on `AgentTool`. If any tool call in a batch targets a tool with `executionMode: "sequential"`, the entire batch executes sequentially regardless of the global setting.
 
-The `beforeToolCall` hook runs after `tool_execution_start` and validated argument parsing. It can block execution. The `afterToolCall` hook runs after tool execution finishes and before `tool_execution_end` and final tool result message events are emitted.
+The `beforeToolCall` hook runs after `tool_execution_start` and validated argument parsing. It can block execution and attach `terminate: true` to the blocked result. The `afterToolCall` hook runs after tool execution finishes and before `tool_execution_end` and final tool result message events are emitted.
 
-Tools can also return `terminate: true` to hint that the automatic follow-up LLM call should be skipped. The loop only stops early when every finalized tool result in that batch sets `terminate: true`. Mixed batches continue normally.
+Tools, blocked `beforeToolCall` results, and `afterToolCall` overrides can return `terminate: true` to hint that the automatic follow-up LLM call should be skipped. The loop only stops early when every finalized tool result in that batch sets `terminate: true`. Mixed batches continue normally.
 
-Low-level loop callers can set `shouldStopAfterTurn` to stop gracefully after the current turn completes:
+The `Agent` class accepts `shouldStopAfterTurn` in `AgentOptions`. Low-level loop callers can set the same hook in `AgentLoopConfig`:
 
 ```typescript
 const stream = agentLoop(
@@ -141,7 +145,7 @@ const stream = agentLoop(
 );
 ```
 
-`shouldStopAfterTurn` runs after `turn_end` is emitted and after the assistant response and any tool executions have completed normally. If it returns `true`, the loop emits `agent_end` and exits before polling steering or follow-up queues, and before starting another LLM call. It does not abort the provider stream, does not cancel running tools, and does not alter the assistant message stop reason.
+`shouldStopAfterTurn` runs after `turn_end` is emitted and after the assistant response and any tool executions have completed normally. If it returns `true`, the loop emits `agent_end` and exits before polling steering or follow-up queues, and before starting another LLM call. It does not abort the provider stream, does not cancel running tools, and does not alter the assistant message stop reason. The `AgentOptions` callback also receives the active run's `AbortSignal` as its second argument.
 
 When you use the `Agent` class, assistant `message_end` processing is treated as a barrier before tool preflight begins. That means `beforeToolCall` sees agent state that already includes the assistant message that requested the tool call.
 
@@ -177,7 +181,8 @@ The last message in context must be `user` or `toolResult` (not `assistant`).
 
 ```typescript
 const agent = new Agent({
-  // Initial state
+  // Initial state. systemPrompt and tools become the leading system message
+  // unless messages already starts with one.
   initialState: {
     systemPrompt: string,
     model: Model<any>,
@@ -198,7 +203,8 @@ const agent = new Agent({
   // Follow-up mode: "one-at-a-time" (default) or "all"
   followUpMode: "one-at-a-time",
 
-  // Required stream function
+  // Required stream function. Receives a TranscriptContext: the prompt and tools
+  // are in the transcript's system messages, not on the context.
   streamFn: models.streamSimple.bind(models),
 
   // Session ID for provider caching
@@ -213,7 +219,7 @@ const agent = new Agent({
   // Preflight each tool call after args are validated. Can block execution.
   beforeToolCall: async ({ toolCall, args, context }) => {
     if (toolCall.name === "bash") {
-      return { block: true, reason: "bash is disabled" };
+      return { block: true, reason: "bash is disabled", terminate: true };
     }
   },
 
@@ -225,6 +231,11 @@ const agent = new Agent({
     if (!isError) {
       return { details: { ...result.details, audited: true } };
     }
+  },
+
+  // Stop gracefully after a completed turn, before queued messages are polled.
+  shouldStopAfterTurn: async ({ context }, signal) => {
+    return shouldCompactBeforeNextTurn(context.messages, signal);
   },
 
   // Custom thinking budgets for token-based providers
@@ -241,7 +252,6 @@ const agent = new Agent({
 
 ```typescript
 interface AgentState {
-  systemPrompt: string;
   model: Model<any>;
   thinkingLevel: ThinkingLevel;
   tools: AgentTool<any>[];
@@ -256,6 +266,17 @@ interface AgentState {
 Access state via `agent.state`.
 
 Assigning `agent.state.tools = [...]` or `agent.state.messages = [...]` copies the top-level array before storing it. Mutating the returned array mutates the current agent state.
+
+The transcript owns the system prompt and tool declarations: the leading system message is the prompt, later system messages patch it (see `SystemMessage` in pi-ai). `agent.state.systemPrompt` is read-only and replays the transcript. `agent.state.tools` is the executable loadout; before every request the loop diffs it against the tools the transcript declares and, if they differ, announces the change in a system message (merged into a pending system message when one exists). pi-ai's `getCurrentSystemMessage(messages)` returns the replayed head, including declared tools, for any message array, including agent transcripts with custom message roles.
+
+To change the prompt mid-conversation, append a system message with `content` (added instructions) or `sections` (named replacements):
+
+```typescript
+await agent.prompt([
+  { role: "system", content: "", sections: { skills: "<skills>...</skills>" }, timestamp: Date.now() },
+  { role: "user", content: "Continue", timestamp: Date.now() },
+]);
+```
 
 During streaming, `agent.state.streamingMessage` contains the current partial assistant message.
 
@@ -284,13 +305,13 @@ await agent.continue();
 ### State Management
 
 ```typescript
-agent.state.systemPrompt = "New prompt";
 agent.state.model = getModel("openai", "gpt-4o");
 agent.state.thinkingLevel = "medium";
 agent.state.tools = [myTool];
 agent.toolExecution = "sequential";
 agent.beforeToolCall = async ({ toolCall }) => undefined;
 agent.afterToolCall = async ({ toolCall, result }) => undefined;
+agent.shouldStopAfterTurn = async ({ context }) => shouldCompactBeforeNextTurn(context.messages);
 agent.state.messages = newMessages; // top-level array is copied
 agent.state.messages.push(message);
 agent.reset();
@@ -447,7 +468,7 @@ execute: async (toolCallId, params, signal, onUpdate) => {
 
 Thrown errors are caught by the agent and reported to the LLM as tool errors with `isError: true`.
 
-Return `terminate: true` from `execute()` or `afterToolCall` to hint that the agent should stop after the current tool batch. This only takes effect when every finalized tool result in the batch is terminating. The hint is runtime-only; emitted `toolResult` transcript messages remain standard LLM tool results.
+Return `terminate: true` from `execute()`, a blocked `beforeToolCall`, or `afterToolCall` to hint that the agent should stop after the current tool batch. This only takes effect when every finalized tool result in the batch is terminating. The hint is runtime-only; emitted `toolResult` transcript messages remain standard LLM tool results.
 
 ## Proxy Usage
 
@@ -474,8 +495,7 @@ For direct control without the Agent class:
 import { agentLoop, agentLoopContinue } from "@earendil-works/pi-agent-core";
 
 const context: AgentContext = {
-  systemPrompt: "You are helpful.",
-  messages: [],
+  messages: [{ role: "system", content: "You are helpful.", timestamp: Date.now() }],
   tools: [],
 };
 
