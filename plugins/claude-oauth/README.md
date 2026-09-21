@@ -1,7 +1,8 @@
 # `@pi-plugins/claude-oauth`
 
 Compatibility fixes for using a Claude subscription in
-[pi](https://github.com/earendil-works/pi).
+[pi](https://github.com/earendil-works/pi). This plugin is for subscription sign-ins,
+not API-key access.
 
 ## Install
 
@@ -30,5 +31,3 @@ Claude Code itself uses one hour for the main conversation while within plan usa
 and five minutes for subagents and once on usage credits. Recommendation: set
 `PI_CACHE_RETENTION=long` for interactive sessions (subagents stay `short` via
 `@pi-plugins/subagent`), and leave it unset when you are on usage credits.
-
-This plugin is for subscription sign-ins, not API-key access.
