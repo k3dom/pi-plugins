@@ -1,10 +1,8 @@
 export const PI_PREAMBLE =
   'You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.'
 
-export const CLAUDE_PREAMBLE = PI_PREAMBLE.replace(
-  'inside pi,',
-  'inside Claude Code,',
-)
+export const CLAUDE_PREAMBLE =
+  'You are an expert coding assistant operating inside Claude Code, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.'
 
 export const piDocsSection = (root: string) =>
   `Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):

@@ -654,6 +654,7 @@ interface Extracted {
     entrypoint: string
     cch: string
     promptId?: string
+    turnOrigin?: string
   }
   identityMarker?: string
   firstUserMessage: string
@@ -759,6 +760,7 @@ function extract(request: CapturedRequest): Extracted {
     const entrypoint = /cc_entrypoint=([^;]+)/u.exec(billingText)?.[1]?.trim()
     const cch = /cch=([0-9a-f]{5})/u.exec(billingText)?.[1]
     const promptId = /cc_prompt_id=([^;]+)/u.exec(billingText)?.[1]?.trim()
+    const turnOrigin = /cc_turn_origin=([^;]+)/u.exec(billingText)?.[1]?.trim()
     if (version && entrypoint && cch) {
       billing = {
         version: version[1] ?? '',
@@ -766,6 +768,7 @@ function extract(request: CapturedRequest): Extracted {
         entrypoint,
         cch,
         promptId,
+        turnOrigin,
       }
     }
   }
@@ -881,6 +884,11 @@ function verify(
         extracted.billing.promptId !== undefined &&
         uuidPattern.test(extracted.billing.promptId),
       detail: `observed=${extracted.billing.promptId ?? '(missing)'}`,
+    })
+    checks.push({
+      label: 'cc_turn_origin',
+      ok: extracted.billing.turnOrigin === 'sdk',
+      detail: `observed=${extracted.billing.turnOrigin ?? '(missing)'}`,
     })
   }
 
@@ -1042,7 +1050,8 @@ function report(
     ? [...currentBetaList, expectsFallbackBeta]
     : currentBetaList
   const betasSame =
-    JSON.stringify(expectedBetaList) === JSON.stringify(extracted.betas)
+    JSON.stringify(expectedBetaList.toSorted()) ===
+    JSON.stringify(extracted.betas.toSorted())
   if (!betasSame) {
     allGood = false
   }

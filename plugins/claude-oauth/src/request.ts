@@ -135,7 +135,7 @@ export function rewriteForClaudeCode(
     .slice(0, 3)
   normalized.unshift({
     type: 'text',
-    text: `${CLAUDE_CODE_BILLING_HEADER_PREFIX} cc_version=${CLAUDE_CODE_VERSION}.${versionSuffix}; cc_entrypoint=local-agent; ${CCH_PLACEHOLDER}; cc_prompt_id=${randomUUID()};`,
+    text: `${CLAUDE_CODE_BILLING_HEADER_PREFIX} cc_version=${CLAUDE_CODE_VERSION}.${versionSuffix}; cc_entrypoint=local-agent; ${CCH_PLACEHOLDER}; cc_prompt_id=${randomUUID()}; cc_turn_origin=sdk;`,
   })
   typed.system = normalized
 

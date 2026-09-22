@@ -1,5 +1,5 @@
-export const CLAUDE_CODE_VERSION = '2.1.251'
-export const CLAUDE_AGENT_SDK_VERSION = '0.3.251'
+export const CLAUDE_CODE_VERSION = '2.1.280'
+export const CLAUDE_AGENT_SDK_VERSION = '0.3.280'
 export const CLAUDE_CODE_STAINLESS_PACKAGE_VERSION = '0.112.1'
 export const CLAUDE_CODE_STAINLESS_RUNTIME_VERSION = 'v26.3.0'
 export const CLAUDE_CODE_STAINLESS_TIMEOUT = 600
@@ -32,12 +32,16 @@ export const CLAUDE_CODE_AGENT_BETAS = [
   'context-management-2025-06-27',
   'prompt-caching-scope-2026-01-05',
   'mid-conversation-system-2026-04-07',
+  'per-turn-control-2026-07-01',
+  'mid-conversation-tool-changes-2026-07-01',
   'advanced-tool-use-2025-11-20',
+  'mid-conversation-system-clear-at-2026-08-21',
   'effort-2025-11-24',
   'fallback-credit-2026-06-01',
+  'thinking-binding-controls-2026-08-01',
   'extended-cache-ttl-2025-04-11',
   'cache-diagnosis-2026-04-07',
 ] as const
 
-// Installed by pi alongside its model fallbacks.
-export const CLAUDE_CODE_SERVER_FALLBACK_BETA = 'server-side-fallback-2026-07-01'
+// Capture-only: pi supplies its own beta alongside its fallback payload.
+export const CLAUDE_CODE_SERVER_FALLBACK_BETA = 'server-side-fallback-2026-06-01'

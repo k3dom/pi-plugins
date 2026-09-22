@@ -23,9 +23,12 @@ describe('sanitizeSystemText', () => {
     },
   )
 
-  test('leaves section updates without pi identity untouched', () => {
-    const update = `Updated system prompt section "skills":\n\n<skills>\n- review: Review code\n</skills>`
+  test('preserves project docs and identifiers while replacing standalone pi', () => {
+    const docs =
+      '<docs>\nUse pi with /pi/bin, @pi/tool, pi-plugins, pi.mod, pi_x and pi:1.\n</docs>'
 
-    expect(sanitizeSystemText(update)).toBe(update)
+    expect(sanitizeSystemText(docs)).toBe(
+      '<docs>\nUse Claude Code with /pi/bin, @pi/tool, pi-plugins, pi.mod, pi_x and pi:1.\n</docs>',
+    )
   })
 })

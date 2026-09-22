@@ -15,7 +15,12 @@ const PI_WORD = /(?<![/\\.@:_-])\b[Pp]i\b(?![/\\.@:_-])/g
 
 export function sanitizeSystemText(text: string): string {
   return pipe(
-    text.split(/\n\n+/),
+    text
+      .replace(
+        /(?:Updated system prompt section "docs":\n\n)?<docs>\nPi documentation \(read only when the user asks about pi itself,[\s\S]*?<\/docs>/g,
+        '',
+      )
+      .split(/\n\n+/),
     Array.filter(
       (paragraph) =>
         !paragraph.toLowerCase().includes('you are pi') &&

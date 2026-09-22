@@ -1,127 +1,85 @@
 import { describe, expect, test } from 'vitest'
-import { PI_ANTHROPIC_OAUTH_SENTINEL } from '../src/constants'
 import { rewriteForClaudeCode } from '../src/request'
-import { cacheControls } from './helpers'
+import { NIX_INSTALL_ROOT, piDocsSection } from './helpers'
 
-const oauthPayload = (cacheControl?: Record<string, unknown>) => ({
-  model: 'claude-fable-5-1',
-  system: [
-    {
-      type: 'text',
-      text: PI_ANTHROPIC_OAUTH_SENTINEL,
-      ...(cacheControl && { cache_control: cacheControl }),
-    },
-    {
-      type: 'text',
-      text: 'Be helpful.',
-      ...(cacheControl && { cache_control: cacheControl }),
-    },
-  ],
-  tools: [
-    {
-      name: 'read',
-      input_schema: { type: 'object' },
-      ...(cacheControl && { cache_control: cacheControl }),
-    },
-  ],
-  messages: [
-    {
-      role: 'user',
-      content: [
-        {
-          type: 'text',
-          text: 'Hello',
-          ...(cacheControl && { cache_control: cacheControl }),
-        },
-      ],
-    },
-  ],
-})
+const system = [
+  {
+    type: 'text',
+    text: "You are Claude Code, Anthropic's official CLI for Claude.",
+  },
+]
 
 describe('rewriteForClaudeCode', () => {
   test.each([
-    ['short retention', { type: 'ephemeral' }],
-    ['long retention', { type: 'ephemeral', ttl: '1h' }],
-  ])('preserves cache markers pi emitted for %s', (_, cacheControl) => {
-    const payload = oauthPayload(cacheControl)
-    const rewritten = rewriteForClaudeCode(payload)
+    {
+      content: 'Reply with exactly: ok',
+      version: '2.1.280.9d3',
+    },
+    {
+      content: [
+        {
+          type: 'image',
+          source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' },
+        },
+        { type: 'text', text: 'Hi' },
+        { type: 'text', text: 'Reply with exactly: ok' },
+      ],
+      version: '2.1.280.d7b',
+    },
+  ])('matches Claude Code billing vector $version', ({ content, version }) => {
+    const rewritten = rewriteForClaudeCode({
+      system,
+      messages: [
+        { role: 'assistant', content: 'Ignore this preceding reply.' },
+        { role: 'user', content },
+        { role: 'user', content: 'Ignore this later prompt.' },
+      ],
+    })
 
-    expect(rewritten).toBe(payload)
-    const markers = cacheControls(rewritten)
-    expect(markers).toHaveLength(4)
-    for (const marker of markers) {
-      expect(marker).toEqual(cacheControl)
+    expect(rewritten?.system?.[0]?.text).toContain(`cc_version=${version};`)
+  })
+
+  test('drops identity-only updates without altering conversation, tools or effort', () => {
+    const docs = {
+      type: 'text',
+      text: `Updated system prompt section "docs":\n\n<docs>\n${piDocsSection(NIX_INSTALL_ROOT)}\n</docs>`,
     }
-  })
-
-  test('does not add cache markers when pi emitted none', () => {
-    const rewritten = rewriteForClaudeCode(oauthPayload())
-
-    expect(cacheControls(rewritten)).toHaveLength(0)
-  })
-
-  test('sanitizes native mid-conversation system messages', () => {
     const toolChanges = [
       { type: 'tool_removal', tool: { type: 'tool_reference', name: 'Grep' } },
       { type: 'tool_addition', tool: { type: 'tool_reference', name: 'Bash' } },
     ]
+    const userTurn = {
+      role: 'user',
+      content: [{ type: 'text', text: 'You are pi, right?' }],
+    }
+    const assistantTurn = {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'I am pi.' }],
+    }
     const effortOnly = {
       role: 'system',
       content: [],
       output_config: { effort: 'high' },
     }
-    const userTurn = { role: 'user', content: 'You are pi, right?' }
-    const payload = {
-      ...oauthPayload(),
+    const expected = structuredClone([
+      userTurn,
+      assistantTurn,
+      { role: 'system', content: toolChanges },
+      effortOnly,
+    ])
+
+    const rewritten = rewriteForClaudeCode({
+      system,
       messages: [
         userTurn,
-        {
-          role: 'system',
-          content: [
-            {
-              type: 'text',
-              text: 'Updated system prompt section "rules":\n\n<rules>\nUse pi carefully.\n</rules>',
-            },
-            ...toolChanges,
-          ],
-        },
+        assistantTurn,
+        { role: 'system', content: [docs] },
+        { role: 'system', content: [{ type: 'text', text: 'You are pi.' }] },
+        { role: 'system', content: [docs, ...toolChanges] },
         effortOnly,
-        {
-          role: 'system',
-          content: [{ type: 'text', text: 'You are pi.' }],
-        },
-        { role: 'assistant', content: [{ type: 'text', text: 'I am pi.' }] },
       ],
-    }
+    })
 
-    const rewritten = rewriteForClaudeCode(payload)
-
-    expect(rewritten?.messages).toEqual([
-      userTurn,
-      {
-        role: 'system',
-        content: [
-          {
-            type: 'text',
-            text: 'Updated system prompt section "rules":\n\n<rules>\nUse Claude Code carefully.\n</rules>',
-          },
-          ...toolChanges,
-        ],
-      },
-      effortOnly,
-      { role: 'assistant', content: [{ type: 'text', text: 'I am pi.' }] },
-    ])
-  })
-
-  test('leaves non-OAuth payloads untouched', () => {
-    const payload = {
-      system: [
-        { type: 'text', text: 'Be helpful.', cache_control: { type: 'ephemeral' } },
-      ],
-      messages: [],
-    }
-
-    expect(rewriteForClaudeCode(payload)).toBeUndefined()
-    expect(payload.system[0]?.cache_control).toEqual({ type: 'ephemeral' })
+    expect(rewritten?.messages).toEqual(expected)
   })
 })

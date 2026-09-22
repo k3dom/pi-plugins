@@ -98,9 +98,9 @@ export function firstUserMessageText(
         if (Array.isArray(content)) {
           return pipe(
             content,
-            Array.filter(isTextBlock),
-            Array.map((block) => block.text),
-            Array.join(''),
+            Array.findFirst(isTextBlock),
+            Option.map((block) => block.text),
+            Option.getOrElse(() => ''),
           )
         }
         return ''
