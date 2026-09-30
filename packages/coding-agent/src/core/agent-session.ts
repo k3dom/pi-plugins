@@ -15,15 +15,21 @@
 
 import { readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
-import type {
-	Agent,
-	AgentContext,
-	AgentEvent,
-	AgentMessage,
-	AgentState,
-	AgentTool,
-	PrepareNextTurnContext,
-	ThinkingLevel,
+import {
+	type AfterToolCallContext,
+	type AfterToolCallResult,
+	type Agent,
+	type AgentContext,
+	type AgentEvent,
+	type AgentMessage,
+	type AgentState,
+	type AgentTool,
+	type AgentToolCallOutcome,
+	type BeforeToolCallContext,
+	type BeforeToolCallResult,
+	type PrepareNextTurnContext,
+	runToolCall,
+	type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import { contentText, getCurrentSystemMessage, retryDelayMs } from "@earendil-works/pi-ai";
 import type {
@@ -34,6 +40,7 @@ import type {
 	ProviderHeaders,
 	SystemMessage,
 	TextContent,
+	ToolResultMessage,
 	Usage,
 } from "@earendil-works/pi-ai/compat";
 import {
@@ -50,6 +57,7 @@ import {
 } from "@earendil-works/pi-ai/compat";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
+import { processImage } from "../utils/image-process.ts";
 import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
@@ -63,6 +71,7 @@ import {
 	collectEntriesForBranchSummary,
 	compact,
 	estimateContextTokens,
+	estimateProjectedContextTokens,
 	estimateTokens,
 	generateBranchSummary,
 	prepareCompaction,
@@ -72,7 +81,10 @@ import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
 import {
+	type AgentActivityOutcome,
+	type BoundaryContextPreview,
 	type ContextUsage,
+	type ExecuteToolOptions,
 	type ExtensionCommandContextActions,
 	type ExtensionErrorListener,
 	type ExtensionMode,
@@ -85,6 +97,7 @@ import {
 	type ReplacedSessionContext,
 	type SessionBeforeCompactResult,
 	type SessionBeforeTreeResult,
+	type SessionBoundaryDraft,
 	type SessionCompactFailedEvent,
 	type SessionStartEvent,
 	type ShutdownHandler,
@@ -92,24 +105,33 @@ import {
 	type ToolExecutionEndEvent,
 	type ToolExecutionStartEvent,
 	type ToolExecutionUpdateEvent,
+	type ToolExposure,
 	type ToolInfo,
+	type ToolLoadout,
 	type TreePreparation,
-	type TurnEndEvent,
 	type TurnStartEvent,
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
-import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
+import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
+import { NestedToolCallRunner } from "./nested-tool-calls.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { exportSessionToJsonl } from "./session-export.ts";
-import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
-import { getLatestCompactionEntry } from "./session-manager.ts";
+import {
+	type BranchSummaryEntry,
+	type CompactionEntry,
+	type ContextEditEntry,
+	getLatestCompactionEntry,
+	type SessionEntry,
+	SessionManager,
+	type SessionProjection,
+} from "./session-manager.ts";
 import type { CacheWarmingMode, SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
-import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
+import { BUILTIN_PATH_PREFIX, createSyntheticSourceInfo, isSyntheticPath, type SourceInfo } from "./source-info.ts";
 import {
 	buildSystemPrompt,
 	buildSystemPromptSections,
@@ -120,7 +142,15 @@ import {
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
-import { addUsageToTotals, createUsageTotals } from "./usage-totals.ts";
+import { addUsageToTotals, combineUsage, createUsageTotals } from "./usage-totals.ts";
+import {
+	findLatestResponse,
+	getBranchSelection,
+	getVirtualModelState,
+	isVirtualModel,
+	VIRTUAL_MODEL_STATE_ENTRY,
+	type VirtualModelStateData,
+} from "./virtual-models.ts";
 
 // ============================================================================
 // Skill Block Parsing
@@ -149,9 +179,16 @@ export function parseSkillBlock(text: string): ParsedSkillBlock | null {
 	};
 }
 
+/** Tool execution events of calls a tool made through `ctx.executeTool()` carry `parentToolCallId`. */
+type WithParentToolCallId<E> = E extends {
+	type: "tool_execution_start" | "tool_execution_update" | "tool_execution_end";
+}
+	? E & { parentToolCallId?: string }
+	: E;
+
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
-	| Exclude<AgentEvent, { type: "agent_end" }>
+	| WithParentToolCallId<Exclude<AgentEvent, { type: "agent_end" }>>
 	| {
 			type: "agent_end";
 			messages: AgentMessage[];
@@ -249,6 +286,9 @@ export interface ExtensionBindings {
 	onError?: ExtensionErrorListener;
 }
 
+export type QueuedInputDisposition = "handled" | "queued";
+export type PromptDisposition = QueuedInputDisposition | "started";
+
 /** Options for AgentSession.prompt() */
 export interface PromptOptions {
 	/** Whether to dispatch extension commands and expand skill commands and prompt templates (default: true) */
@@ -259,8 +299,8 @@ export interface PromptOptions {
 	streamingBehavior?: "steer" | "followUp";
 	/** Source of input for extension input event handlers. Defaults to "interactive". */
 	source?: InputSource;
-	/** Internal hook used by RPC mode to observe prompt preflight acceptance or rejection. */
-	preflightResult?: (success: boolean) => void;
+	/** Internal hook used by RPC mode to observe how an accepted prompt was dispatched. Not called if the prompt is rejected. */
+	preflightResult?: (disposition: PromptDisposition) => void;
 }
 
 /** Options for model/thinking mutations. */
@@ -349,6 +389,11 @@ export class AgentSession {
 	// Retry state
 	private _retryAbortController: AbortController | undefined = undefined;
 	private _retryAttempt = 0;
+	/**
+	 * Failed response that the next request repeats, set by auto-retry and overflow recovery. The
+	 * retry is routed with it as `failed`, since the context no longer contains it.
+	 */
+	private _failedResponse: AssistantMessage | undefined;
 
 	// Bash execution state
 	private readonly _bashAbortControllers = new Set<AbortController>();
@@ -357,6 +402,15 @@ export class AgentSession {
 	// Extension system
 	private _extensionRunner!: ExtensionRunner;
 	private _turnIndex = 0;
+	private readonly _entryIdsByMessage = new WeakMap<object, string>();
+	private readonly _boundaryDispatchedMessages = new WeakSet<object>();
+	private _lastAssistantMessage: AssistantMessage | undefined;
+	private _lastAssistantToolResults: AgentMessage[] = [];
+	private _lastActivityOutcome: AgentActivityOutcome = "completed";
+	private _isBeforeSettle = false;
+	private _abortDuringBeforeSettle = false;
+	private _isEmittingAgentSettled = false;
+	private readonly _deferredSettledActions: Array<() => Promise<void>> = [];
 
 	private _resourceLoader: ResourceLoader;
 	private _customTools: ToolDefinition[];
@@ -381,6 +435,10 @@ export class AgentSession {
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
+	/** Created on the first `ctx.executeTool()` call. */
+	private _nestedToolCalls: NestedToolCallRunner | undefined;
+	/** Declared tools whose declarations requests leave out, from `prepareLoadout` hooks. */
+	private _hiddenDeclarations: ReadonlySet<string> = new Set();
 	private _toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
 	private _toolPromptSnippets: Map<string, string> = new Map();
 	private _toolPromptGuidelines: Map<string, string[]> = new Map();
@@ -414,6 +472,9 @@ export class AgentSession {
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
 		this._installAgentNextTurnRefresh();
+		this._installAgentRequestProjection();
+		this._installAgentBoundaryHooks();
+		this._installHiddenDeclarationsProjection();
 		this._installAgentForcedPromptProjection();
 
 		this._buildRuntime({
@@ -468,32 +529,75 @@ export class AgentSession {
 	}
 
 	private async _getSummarizationRequestAuth(
-		model: Model<any>,
+		selectedModel: Model<any>,
 		signal?: AbortSignal,
 	): Promise<{
 		model: Model<any>;
 		apiKey?: string;
 		headers?: Record<string, string>;
 		env?: Record<string, string>;
+		thinkingLevel: ThinkingLevel;
 	}> {
+		// Route a virtual model first: summaries size their input and output from the model they get.
+		const { model, thinkingLevel } = isVirtualModel(selectedModel)
+			? await this._modelRuntime.resolveModel(selectedModel, convertToLlm(this.messages), {
+					reason: "direct",
+					thinkingLevel: this.thinkingLevel,
+					signal,
+				})
+			: { model: selectedModel, thinkingLevel: this.thinkingLevel };
 		if (this.agent.streamFunction === streamSimple) {
-			return this._getRequiredRequestAuth(model, signal);
+			return { ...(await this._getRequiredRequestAuth(model, signal)), thinkingLevel };
 		}
 
 		try {
 			const result = await this._modelRuntime.getAuth(model, { signal });
-			if (!result) return { model };
+			if (!result) return { model, thinkingLevel };
 			const requestModel = result.auth.baseUrl ? { ...model, baseUrl: result.auth.baseUrl } : model;
 			return {
 				model: requestModel,
 				apiKey: result.auth.apiKey,
 				headers: withoutDeletedHeaders(result.auth.headers),
 				env: result.env,
+				thinkingLevel,
 			};
 		} catch (error) {
 			if (signal?.aborted) throw error;
-			return { model };
+			return { model, thinkingLevel };
 		}
+	}
+
+	/**
+	 * The model whose limits apply to `message`, or undefined when the message came from another
+	 * model. Under a virtual selection, that is the physical model that produced it.
+	 */
+	private _modelForMessage(message: AssistantMessage): Model<any> | undefined {
+		const model = this.model;
+		if (model && isVirtualModel(model)) return this._modelRuntime.getPhysicalModel(message.provider, message.model);
+		return model?.provider === message.provider && model.id === message.model ? model : undefined;
+	}
+
+	/**
+	 * Record the selection on the current branch when the branch implies another one, so a resume
+	 * restores it. Tree navigation can leave the latest `model_change` on another branch; responses
+	 * cannot record a virtual selection because they name physical models. Responses do record a
+	 * physical selection unless the branch holds a virtual one; checking a physical selection against
+	 * responses would record it on every prompt while `prepareRequest` redirects to another model.
+	 */
+	private _recordSelection(): void {
+		const model = this.model;
+		if (!model) return;
+		const getModel = (provider: string, modelId: string) => this._modelRuntime.getModel(provider, modelId);
+		const recorded = getBranchSelection(this.sessionManager.getBranch(), getModel);
+		if (!recorded || (recorded.provider === model.provider && recorded.modelId === model.id)) return;
+		const recordedModel = getModel(recorded.provider, recorded.modelId);
+		if (!isVirtualModel(model) && !(recordedModel && isVirtualModel(recordedModel))) return;
+		this.sessionManager.appendModelChange(model.provider, model.id);
+	}
+
+	/** The model whose limits apply to the conversation. */
+	private _limitsModel(): Model<any> | undefined {
+		return this.routedModel?.model ?? this.model;
 	}
 
 	/**
@@ -505,77 +609,248 @@ export class AgentSession {
 	 * happens here instead of in wrappers.
 	 */
 	private _installAgentToolHooks(): void {
-		this.agent.beforeToolCall = async ({ toolCall, args }) => {
-			const runner = this._extensionRunner;
-			if (!runner.hasHandlers("tool_call")) {
-				return undefined;
-			}
+		this.agent.beforeToolCall = (context) => this._beforeToolCall(context);
+		this.agent.afterToolCall = (context) => this._afterToolCall(context);
+	}
 
-			try {
-				return await runner.emitToolCall({
-					type: "tool_call",
+	/** `tool_call` handlers. `parentToolCallId` is set for calls another tool made. */
+	private async _beforeToolCall(
+		{ toolCall, args }: BeforeToolCallContext,
+		parentToolCallId?: string,
+	): Promise<BeforeToolCallResult | undefined> {
+		const runner = this._extensionRunner;
+		if (!runner.hasHandlers("tool_call")) {
+			return undefined;
+		}
+
+		try {
+			return await runner.emitToolCall({
+				type: "tool_call",
+				toolName: toolCall.name,
+				toolCallId: toolCall.id,
+				...(parentToolCallId ? { parentToolCallId } : {}),
+				input: args as Record<string, unknown>,
+			});
+		} catch (err) {
+			if (err instanceof Error) {
+				throw err;
+			}
+			throw new Error(`Extension failed, blocking execution: ${String(err)}`);
+		}
+	}
+
+	/** `tool_result` handlers and image normalization. `parentToolCallId` is set for calls another tool made. */
+	private async _afterToolCall(
+		{ toolCall, args, result, isError }: AfterToolCallContext,
+		parentToolCallId?: string,
+	): Promise<AfterToolCallResult | undefined> {
+		const runner = this._extensionRunner;
+		const hookResult = runner.hasHandlers("tool_result")
+			? await runner.emitToolResult({
+					type: "tool_result",
 					toolName: toolCall.name,
 					toolCallId: toolCall.id,
+					...(parentToolCallId ? { parentToolCallId } : {}),
 					input: args as Record<string, unknown>,
-				});
-			} catch (err) {
-				if (err instanceof Error) {
-					throw err;
-				}
-				throw new Error(`Extension failed, blocking execution: ${String(err)}`);
-			}
-		};
+					content: result.content,
+					details: result.details,
+					...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent }),
+					isError,
+					usage: result.usage,
+				})
+			: undefined;
 
-		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
-			const runner = this._extensionRunner;
-			const hookResult = runner.hasHandlers("tool_result")
-				? await runner.emitToolResult({
-						type: "tool_result",
-						toolName: toolCall.name,
-						toolCallId: toolCall.id,
-						input: args as Record<string, unknown>,
-						content: result.content,
-						details: result.details,
-						isError,
-						usage: result.usage,
-					})
-				: undefined;
+		const content = hookResult?.content ?? result.content ?? [];
+		// Runs after the extension hook so images injected or replaced by extensions are normalized too.
+		const resizeOptions = this._limitsModel()?.inputLimits?.images?.resize;
+		const normalizedContent = await normalizeToolResultImages(content, {
+			autoResizeImages: this.settingsManager.getImageAutoResize(),
+			...(resizeOptions ? { resizeOptions } : {}),
+		});
 
-			const content = hookResult?.content ?? result.content ?? [];
-			// Runs after the extension hook so images injected or replaced by extensions are normalized too.
-			const normalizedContent = await normalizeToolResultImages(content, {
-				autoResizeImages: this.settingsManager.getImageAutoResize(),
-			});
+		if (!hookResult && normalizedContent === content) {
+			return undefined;
+		}
 
-			if (!hookResult && normalizedContent === content) {
-				return undefined;
-			}
-
-			return {
-				content: normalizedContent,
-				details: hookResult?.details,
-				isError: hookResult?.isError ?? isError,
-				usage: hookResult?.usage,
-			};
+		// The hook result already dropped structured content that replaced content no longer matches.
+		return {
+			content: normalizedContent,
+			details: hookResult?.details,
+			structuredContent: hookResult ? hookResult.structuredContent : result.structuredContent,
+			isError: hookResult?.isError ?? isError,
+			usage: hookResult?.usage,
 		};
 	}
 
+	/**
+	 * Run a call that the tool call `parentToolCallId` made through `ctx.executeTool()`. It goes
+	 * through the agent's tool pipeline with the session's hooks, against the callable tools.
+	 */
+	private async _executeNestedToolCall(
+		parentToolCallId: string,
+		name: string,
+		args: unknown,
+		options: ExecuteToolOptions,
+	): Promise<AgentToolCallOutcome> {
+		this._nestedToolCalls ??= new NestedToolCallRunner({
+			getTools: () => this._getCallableTools(),
+			isSequential: () => this.agent.toolExecution === "sequential",
+			runToolCall: (toolCall, parentId, signal, onUpdate) => {
+				const assistantMessage = this._findLastAssistantMessage();
+				if (!assistantMessage) {
+					return Promise.resolve({
+						toolCall,
+						result: { content: [{ type: "text", text: "No assistant message issued this call" }], details: {} },
+						isError: true,
+					});
+				}
+				return runToolCall(toolCall, {
+					tools: this._getCallableTools(),
+					assistantMessage,
+					context: { messages: this.agent.state.messages, tools: this.agent.state.tools },
+					beforeToolCall: (context) => this._beforeToolCall(context, parentId),
+					afterToolCall: (context) => this._afterToolCall(context, parentId),
+					signal,
+					onUpdate,
+				});
+			},
+			emit: async (event) => {
+				await this._extensionRunner.emit(event);
+				this._emit(event);
+			},
+		});
+		return this._nestedToolCalls.execute(parentToolCallId, name, args, options);
+	}
+
+	/** Whether `projection`, the current session projection, exceeds the compaction threshold of `model`. */
+	private _exceedsCompactionThreshold(model: Model<any>, projection: SessionProjection): boolean {
+		if (model.contextWindow <= 0) return false;
+		return shouldCompact(
+			estimateProjectedContextTokens(projection, this.sessionManager.getBranch()).tokens,
+			model.contextWindow,
+			this.settingsManager.getCompactionSettings(this.model),
+		);
+	}
+
 	private async _compactBeforeNextAssistantResponse(context: AgentContext): Promise<AgentContext> {
+		const projection = this.sessionManager.buildSessionProjection();
+		// A virtual selection is checked in prepareRequest, against the model the request is routed to.
 		const model = this.model;
-		const settings = this.settingsManager.getCompactionSettings(model);
-
-		if (
-			!model ||
-			model.contextWindow <= 0 ||
-			!shouldCompact(estimateContextTokens(context.messages).tokens, model.contextWindow, settings)
-		) {
-			return context;
+		if (!model || isVirtualModel(model) || !this._exceedsCompactionThreshold(model, projection)) {
+			return { ...context, messages: projection.messages };
 		}
-
 		await this._runAutoCompaction("threshold", false);
-		return {
-			...context,
-			messages: this.agent.state.messages.slice(),
+		return { ...context, messages: this.sessionManager.buildSessionProjection().messages };
+	}
+
+	private _installAgentRequestProjection(): void {
+		const previousPrepareRequest = this.agent.prepareRequest;
+		this.agent.prepareRequest = async (request, signal) => {
+			const failed = this._failedResponse;
+			this._failedResponse = undefined;
+			const prepare = async () => {
+				const projection = this.sessionManager.buildSessionProjection();
+				const canonicalContext = {
+					...request.context,
+					messages: projection.messages,
+					// Messages declare the provider-visible loadout; context.tools keeps executable implementations.
+					tools: this.agent.state.tools.slice(),
+				};
+				const previous = await previousPrepareRequest?.(
+					{
+						...request,
+						context: canonicalContext,
+						model: this.agent.state.model,
+						thinkingLevel: this.agent.state.thinkingLevel,
+					},
+					signal,
+				);
+				return { previous, context: previous?.context ?? canonicalContext, projection };
+			};
+			let { previous, context, projection } = await prepare();
+			const model = previous?.model ?? this.agent.state.model;
+			const thinkingLevel = previous?.thinkingLevel ?? this.agent.state.thinkingLevel;
+			if (!isVirtualModel(model)) return { ...previous, context, model, thinkingLevel };
+
+			// The selection stays in agent state; only this request uses the routed model. A routing
+			// failure rejects, which ends the run with an error response. Only messages the user wrote
+			// start a turn; extension messages can follow them, e.g. from before_agent_start.
+			const lastResponse = context.messages.findLastIndex((message) => message.role === "assistant");
+			const userTurn = context.messages.slice(lastResponse + 1).some((message) => message.role === "user");
+			const state = getVirtualModelState(this.sessionManager.getBranch(), model.provider, model.id);
+			const route = await this._modelRuntime.resolveModel(model, convertToLlm(context.messages), {
+				reason: failed ? "retry" : userTurn ? "user" : "continuation",
+				thinkingLevel,
+				signal,
+				failed,
+				state,
+			});
+			if (route.state !== undefined && route.state !== state) {
+				const data: VirtualModelStateData = { provider: model.provider, modelId: model.id, state: route.state };
+				const entry = this.sessionManager.getEntry(
+					this.sessionManager.appendCustomEntry(VIRTUAL_MODEL_STATE_ENTRY, data),
+				);
+				if (entry) this._emit({ type: "entry_appended", entry });
+			}
+			// The route stands: the router already decided this request. The state entry does not change
+			// the projection.
+			if (this._exceedsCompactionThreshold(route.model, projection)) {
+				await this._runAutoCompaction("threshold", false);
+				({ previous, context } = await prepare());
+			}
+			return { ...previous, context, model: route.model, thinkingLevel: route.thinkingLevel };
+		};
+	}
+
+	private async _dispatchTurnEndBoundary(
+		message: AssistantMessage,
+		toolResults: ToolResultMessage[],
+	): Promise<boolean> {
+		this._lastActivityOutcome =
+			message.stopReason === "aborted" ? "aborted" : message.stopReason === "error" ? "error" : "completed";
+		const messageEntryId = this._findPersistedMessageEntryId(message);
+		if (!this._extensionRunner.hasHandlers("turn_end")) return false;
+		if (!messageEntryId) {
+			this._extensionRunner.emitError({
+				extensionPath: "<boundary>",
+				event: "turn_end",
+				error: "turn_end could not resolve the persisted assistant entry ID",
+			});
+			return false;
+		}
+		const toolResultEntryIds = toolResults.flatMap((result) => {
+			const entryId = this._findPersistedMessageEntryId(result);
+			return entryId ? [entryId] : [];
+		});
+		const boundary = await this._extensionRunner.emitBoundary(
+			{
+				type: "turn_end",
+				turnIndex: this._turnIndex,
+				message,
+				toolResults,
+				messageEntryId,
+				toolResultEntryIds,
+				outcome: this._lastActivityOutcome,
+			},
+			(entries) => this._buildBoundaryContext(entries, "turn_end"),
+		);
+		this._commitBoundaryDrafts(boundary.entries);
+		if (boundary.continue && !this._buildBoundaryContext([], "turn_end").canContinue) {
+			this._reportInvalidBoundaryContinuation("turn_end");
+			return false;
+		}
+		return boundary.continue;
+	}
+
+	private _installAgentBoundaryHooks(): void {
+		const previousFinishTurn = this.agent.finishTurn;
+		this.agent.finishTurn = async (turn, signal) => {
+			this._boundaryDispatchedMessages.add(turn.message);
+			const extensionContinue = await this._dispatchTurnEndBoundary(turn.message, turn.toolResults);
+			const previousDecision = await previousFinishTurn?.(turn, signal);
+			if (previousDecision?.action === "end") return previousDecision;
+			if (extensionContinue || previousDecision?.action === "continue") return { action: "continue" };
+			return undefined;
 		};
 	}
 
@@ -618,6 +893,106 @@ export class AgentSession {
 	// =========================================================================
 	// Event Subscription
 	// =========================================================================
+
+	private _refreshFinalizedContext(): void {
+		const projection = this.sessionManager.buildSessionProjection();
+		for (const entry of projection.entries) {
+			for (const message of entry.messages) this._entryIdsByMessage.set(message, entry.sourceEntry.id);
+		}
+		this.agent.state.messages = projection.messages;
+	}
+
+	private _applyBoundaryDrafts(manager: SessionManager, drafts: SessionBoundaryDraft[]): SessionEntry[] {
+		const appended: SessionEntry[] = [];
+		for (const draft of drafts) {
+			let entryId: string;
+			switch (draft.type) {
+				case "custom":
+					entryId = manager.appendCustomEntry(draft.customType, draft.data);
+					break;
+				case "custom_message":
+					entryId = manager.appendCustomMessageEntry(
+						draft.customType,
+						draft.content,
+						draft.display,
+						draft.details,
+					);
+					break;
+				case "context_edit":
+					entryId = manager.appendContextEdit(draft.targetId, draft.replacement);
+					break;
+				case "compaction": {
+					const tokensBefore = estimateProjectedContextTokens(
+						manager.buildSessionProjection(),
+						manager.getBranch(),
+					).tokens;
+					entryId = manager.appendCompaction(
+						draft.summary,
+						draft.firstKeptEntryId,
+						tokensBefore,
+						draft.details,
+						true,
+						draft.usage,
+					);
+					break;
+				}
+			}
+			const entry = manager.getEntry(entryId);
+			if (entry) appended.push(entry);
+		}
+		return appended;
+	}
+
+	private _createBoundaryPreviewManager(drafts: SessionBoundaryDraft[]): SessionManager {
+		const header = this.sessionManager.getHeader();
+		if (!header) throw new Error("Session header is missing");
+		const manager = SessionManager.inMemory(this._cwd, undefined, [header, ...this.sessionManager.getBranch()]);
+		this._applyBoundaryDrafts(manager, drafts);
+		return manager;
+	}
+
+	private _getPendingBoundaryMessages(): AgentMessage[] {
+		return [...this.agent.peekQueuedMessages(), ...this._pendingCustomMessages];
+	}
+
+	private _buildBoundaryContext(
+		drafts: SessionBoundaryDraft[],
+		boundary: "turn_end" | "agent_before_settle",
+	): BoundaryContextPreview {
+		const projection = this._createBoundaryPreviewManager(drafts).buildSessionProjection();
+		const pendingMessages = this._getPendingBoundaryMessages();
+		const llmMessages = convertToLlm(projection.messages);
+		const finalRole = llmMessages[llmMessages.length - 1]?.role;
+		const hasNonSystemContext = llmMessages.some((message) => message.role !== "system");
+		const contextCanContinue = hasNonSystemContext && finalRole !== "assistant";
+		const pendingCustomContext = this._pendingCustomMessages.length > 0;
+		return {
+			contextEntries: projection.entries,
+			contextMessages: projection.messages,
+			llmMessages,
+			pendingMessages,
+			canContinue:
+				contextCanContinue ||
+				pendingCustomContext ||
+				(boundary === "turn_end"
+					? this.agent.hasQueuedMessages()
+					: finalRole === "assistant" && this.agent.hasQueuedMessages()),
+		};
+	}
+
+	private _commitBoundaryDrafts(drafts: SessionBoundaryDraft[]): void {
+		const appended = this._applyBoundaryDrafts(this.sessionManager, drafts);
+		this._refreshFinalizedContext();
+		for (const entry of appended) this._emit({ type: "entry_appended", entry });
+	}
+
+	private _reportInvalidBoundaryContinuation(event: "turn_end" | "agent_before_settle"): void {
+		this._extensionRunner.emitError({
+			extensionPath: "<boundary>",
+			event,
+			error: `${event} requested continuation without runnable model context`,
+		});
+	}
 
 	/** Emit an event to all listeners */
 	private _emit(event: AgentSessionEvent): void {
@@ -662,19 +1037,41 @@ export class AgentSession {
 	private async _emitAgentSettled(): Promise<void> {
 		this._cacheWarmer?.onAgentSettled();
 		this._isAgentRunActive = false;
+		this._isEmittingAgentSettled = true;
 		try {
 			await this._extensionRunner.emit({ type: "agent_settled" });
 			this._emit({ type: "agent_settled" });
 		} finally {
-			this._resolveIdleWaitIfIdle();
+			this._isEmittingAgentSettled = false;
 		}
-	}
 
-	// Track last assistant message for auto-compaction check
-	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
+		const deferred = this._deferredSettledActions.splice(0);
+		if (deferred.length > 0) {
+			try {
+				for (const action of deferred) await action();
+			} finally {
+				this._resolveIdleWaitIfIdle();
+			}
+			return;
+		}
+		this._resolveIdleWaitIfIdle();
+	}
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
+		// Record the calls a tool made through ctx.executeTool() and their usage on its result message.
+		if (this._nestedToolCalls) {
+			if (event.type === "message_start" && event.message.role === "toolResult") {
+				const message = event.message;
+				const summary = this._nestedToolCalls.takeRecord(message.toolCallId);
+				if (summary?.calls) message.nestedCalls = summary.calls;
+				if (summary?.usage) {
+					message.usage = message.usage ? combineUsage(message.usage, summary.usage) : summary.usage;
+				}
+			} else if (event.type === "agent_end") {
+				this._nestedToolCalls.clear();
+			}
+		}
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -697,18 +1094,17 @@ export class AgentSession {
 			}
 		}
 
-		// Emit to extensions first
+		// Emit to extensions first, then notify public listeners.
 		await this._emitExtensionEvent(event);
-
-		// Notify all listeners
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
 
 		// Handle session persistence
 		if (event.type === "message_end") {
+			let entryId: string | undefined;
 			// Check if this is a custom message from extensions
 			if (event.message.role === "custom") {
 				// Persist as CustomMessageEntry
-				this.sessionManager.appendCustomMessageEntry(
+				entryId = this.sessionManager.appendCustomMessageEntry(
 					event.message.customType,
 					event.message.content,
 					event.message.display,
@@ -721,15 +1117,14 @@ export class AgentSession {
 				event.message.role === "toolResult"
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
-				this.sessionManager.appendMessage(event.message);
+				entryId = this.sessionManager.appendMessage(event.message);
 			}
+			if (entryId) this._entryIdsByMessage.set(event.message, entryId);
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
-			// Track assistant message for auto-compaction (checked on agent_end)
 			if (event.message.role === "assistant") {
-				this._lastAssistantMessage = event.message;
-
 				const assistantMsg = event.message as AssistantMessage;
+				this._lastAssistantMessage = assistantMsg;
 				if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
 					this._overflowRecoveryAttempted = false;
 				}
@@ -753,6 +1148,7 @@ export class AgentSession {
 		// extension and listener dispatch above also picks up messages that turn_end
 		// handlers queued.
 		if (event.type === "turn_end") {
+			this._lastAssistantToolResults = event.toolResults;
 			this._flushPendingCustomMessages();
 		}
 	};
@@ -771,6 +1167,47 @@ export class AgentSession {
 			}
 		}
 		return false;
+	}
+
+	private _findPersistedMessageEntryId(message: AgentMessage): string | undefined {
+		const mapped = this._entryIdsByMessage.get(message);
+		if (mapped) return mapped;
+		for (const entry of [...this.sessionManager.getBranch()].reverse()) {
+			if (entry.type === "message" && entry.message === message) return entry.id;
+		}
+
+		const messageIndex = this.agent.state.messages.indexOf(message);
+		if (messageIndex < 0) return undefined;
+		const projection = this.sessionManager.buildSessionProjection();
+		let projectedIndex = 0;
+		for (const entry of projection.entries) {
+			for (let i = 0; i < entry.messages.length; i++) {
+				if (projectedIndex === messageIndex) {
+					this._entryIdsByMessage.set(message, entry.sourceEntry.id);
+					return entry.sourceEntry.id;
+				}
+				projectedIndex++;
+			}
+		}
+		return undefined;
+	}
+
+	private _omitRecoveryAttempt(message: AssistantMessage, toolResults: AgentMessage[] = []): void {
+		const targets = [message, ...toolResults];
+		const targetIds = targets.map((target) => this._findPersistedMessageEntryId(target));
+		const unresolvedProjectedTarget = targets.some(
+			(target, index) => targetIds[index] === undefined && this.agent.state.messages.includes(target),
+		);
+		if (unresolvedProjectedTarget) {
+			throw new Error("Cannot persist recovery omission because a projected message has no source entry");
+		}
+		for (const targetId of targetIds) {
+			if (!targetId) continue;
+			const editId = this.sessionManager.appendContextEdit(targetId, null);
+			const entry = this.sessionManager.getEntry(editId);
+			if (entry) this._emit({ type: "entry_appended", entry });
+		}
+		this._refreshFinalizedContext();
 	}
 
 	/** Find the last assistant message in agent state (including aborted ones) */
@@ -816,13 +1253,9 @@ export class AgentSession {
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		} else if (event.type === "turn_end") {
-			const extensionEvent: TurnEndEvent = {
-				type: "turn_end",
-				turnIndex: this._turnIndex,
-				message: event.message,
-				toolResults: event.toolResults,
-			};
-			await this._extensionRunner.emit(extensionEvent);
+			if (event.message.role === "assistant" && !this._boundaryDispatchedMessages.delete(event.message)) {
+				await this._dispatchTurnEndBoundary(event.message, event.toolResults);
+			}
 			this._turnIndex++;
 		} else if (event.type === "message_start") {
 			const extensionEvent: MessageStartEvent = {
@@ -941,6 +1374,11 @@ export class AgentSession {
 	// Read-only State Access
 	// =========================================================================
 
+	/** Refresh the public finalized transcript from the canonical session projection. */
+	refreshContext(): void {
+		this._refreshFinalizedContext();
+	}
+
 	/** Full agent state */
 	get state(): AgentState {
 		return this.agent.state;
@@ -967,6 +1405,14 @@ export class AgentSession {
 		return this.agent.state.thinkingLevel;
 	}
 
+	/** Under a virtual selection, the physical model and thinking level of the latest successful response. */
+	get routedModel(): { model: Model<any>; thinkingLevel?: ThinkingLevel } | undefined {
+		if (!this.model || !isVirtualModel(this.model)) return undefined;
+		const latest = findLatestResponse(this.agent.state.messages);
+		const model = latest && this._modelRuntime.getPhysicalModel(latest.provider, latest.model);
+		return model && { model, thinkingLevel: latest?.thinkingLevel };
+	}
+
 	/** Whether the session is currently processing an agent run or post-run continuation. */
 	get isStreaming(): boolean {
 		return this._isAgentRunActive;
@@ -988,11 +1434,16 @@ export class AgentSession {
 	}
 
 	/**
-	 * Get the names of currently active tools.
-	 * Returns the names of tools currently set on the agent.
+	 * Get the names of currently active tools, which are the tools declared to the model.
+	 * Tools with `codemode` or `deferred` exposure are callable from other tools without being active.
 	 */
 	getActiveToolNames(): string[] {
 		return this.agent.state.tools.map((t) => t.name);
+	}
+
+	/** Get the names of the tools that tools can call through `ctx.executeTool()`. */
+	getCallableToolNames(): string[] {
+		return this._getCallableTools().map((t) => t.name);
 	}
 
 	/**
@@ -1004,6 +1455,9 @@ export class AgentSession {
 			description: definition.description,
 			parameters: definition.parameters,
 			promptGuidelines: definition.promptGuidelines,
+			exposure: this._getToolExposure(definition.name),
+			...(definition.namespace ? { namespace: definition.namespace } : {}),
+			...(definition.annotations ? { annotations: { ...definition.annotations } } : {}),
 			sourceInfo,
 		}));
 	}
@@ -1014,22 +1468,80 @@ export class AgentSession {
 
 	/**
 	 * Set active tools by name.
-	 * Only tools in the registry can be enabled. Unknown tool names are ignored.
+	 * Only tools in the registry can be enabled. Unknown and hidden tool names are ignored.
 	 * Also rebuilds the system prompt to reflect the new tool set.
 	 * Changes take effect on the next agent turn.
 	 */
 	setActiveToolsByName(toolNames: string[]): void {
-		const tools: AgentTool[] = [];
-		const validToolNames: string[] = [];
-		for (const name of toolNames) {
+		const tools = this._applyToolLoadout(toolNames);
+		this._rebuildSystemPrompt(tools.map((tool) => tool.name));
+	}
+
+	private _getToolExposure(name: string): ToolExposure {
+		return this._toolDefinitions.get(name)?.definition.exposure ?? "direct";
+	}
+
+	/**
+	 * Tools callable through `ctx.executeTool()`: the active `direct` tools and every registered
+	 * `codemode` or `deferred` tool.
+	 */
+	private _getCallableTools(active: ReadonlySet<string> = new Set(this.getActiveToolNames())): AgentTool[] {
+		return [...this._toolRegistry.values()].filter((tool) => {
+			const exposure = this._getToolExposure(tool.name);
+			return exposure === "codemode" || exposure === "deferred" || (exposure === "direct" && active.has(tool.name));
+		});
+	}
+
+	/**
+	 * Set the agent's tools for the given active tool names and return them. The active tools are
+	 * the registered, non-hidden ones; they are declared to the model. Active tools with a
+	 * `prepareLoadout` hook can change the declared descriptions and hide declarations from
+	 * requests (see {@link _installHiddenDeclarationsProjection}).
+	 */
+	private _applyToolLoadout(toolNames: string[]): AgentTool[] {
+		const tools = [...new Set(toolNames)].flatMap((name) => {
 			const tool = this._toolRegistry.get(name);
-			if (tool) {
-				tools.push(tool);
-				validToolNames.push(name);
+			return tool && this._getToolExposure(name) !== "hidden" ? [tool] : [];
+		});
+		const hooks = tools.flatMap((tool) => {
+			const entry = this._toolDefinitions.get(tool.name);
+			return entry?.definition.prepareLoadout ? [entry] : [];
+		});
+		const hidden = new Set<string>();
+		let declared = tools;
+		if (hooks.length > 0) {
+			const loadout: ToolLoadout = {
+				declared: tools,
+				callable: this._getCallableTools(new Set(tools.map((tool) => tool.name))),
+				registered: [...this._toolRegistry.values()],
+				getExposure: (name) => this._getToolExposure(name),
+				getNamespace: (name) => this._toolDefinitions.get(name)?.definition.namespace,
+			};
+			const descriptions = new Map<string, string>();
+			for (const { definition, sourceInfo } of hooks) {
+				try {
+					const changes = definition.prepareLoadout?.(loadout);
+					for (const [name, description] of Object.entries(changes?.descriptions ?? {})) {
+						descriptions.set(name, description);
+					}
+					for (const name of changes?.hiddenDeclarations ?? []) hidden.add(name);
+				} catch (error) {
+					this._extensionRunner.emitError({
+						extensionPath: sourceInfo.path,
+						event: "prepare_loadout",
+						error: error instanceof Error ? error.message : String(error),
+						stack: error instanceof Error ? error.stack : undefined,
+					});
+				}
 			}
+			declared = tools.map((tool) => {
+				const description = descriptions.get(tool.name);
+				return description === undefined ? tool : { ...tool, description };
+			});
 		}
-		this.agent.state.tools = tools;
-		this._rebuildSystemPrompt(validToolNames);
+		this._hiddenDeclarations = hidden;
+		this.agent.state.tools = declared;
+		return declared;
 	}
 
 	/** Whether compaction or branch summarization is currently running */
@@ -1150,11 +1662,7 @@ export class AgentSession {
 		options: NormalizedBuildSystemPromptOptions,
 		messages: AgentMessage[] = this.agent.state.messages,
 	): SystemMessage | undefined {
-		options.selectedTools = [...new Set(options.selectedTools)].filter((name) => this._toolRegistry.has(name));
-		this.agent.state.tools = options.selectedTools.flatMap((name) => {
-			const tool = this._toolRegistry.get(name);
-			return tool ? [tool] : [];
-		});
+		options.selectedTools = this._applyToolLoadout(options.selectedTools).map((tool) => tool.name);
 		const sections = diffSystemPromptSections(
 			getCurrentSystemMessage(messages)?.sections ?? {},
 			buildSystemPromptSections(options),
@@ -1172,6 +1680,31 @@ export class AgentSession {
 	 * collapse into one head holding the forced text and the current tools. Runs after the
 	 * `context` extension handlers.
 	 */
+	/**
+	 * Remove the declarations that `prepareLoadout` hooks hide from every request. The whole
+	 * transcript is filtered with the current set, so the projected declarations stay consistent
+	 * across requests and only change when the loadout does.
+	 */
+	private _installHiddenDeclarationsProjection(): void {
+		const previousTransformContext = this.agent.transformContext;
+		this.agent.transformContext = async (messages, signal) => {
+			const transformed = previousTransformContext ? await previousTransformContext(messages, signal) : messages;
+			const hidden = this._hiddenDeclarations;
+			if (hidden.size === 0) return transformed;
+			return transformed.map((message) => {
+				if (message.role !== "system" || (!message.toolsAdded && !message.toolsRemoved)) return message;
+				const { toolsAdded, toolsRemoved, ...rest } = message;
+				const added = toolsAdded?.filter((tool) => !hidden.has(tool.name)) ?? [];
+				const removed = toolsRemoved?.filter((tool) => !hidden.has(tool.name)) ?? [];
+				return {
+					...rest,
+					...(added.length > 0 ? { toolsAdded: added } : {}),
+					...(removed.length > 0 ? { toolsRemoved: removed } : {}),
+				};
+			});
+		};
+	}
+
 	private _installAgentForcedPromptProjection(): void {
 		const previousTransformContext = this.agent.transformContext;
 		this.agent.transformContext = async (messages, signal) => {
@@ -1189,18 +1722,15 @@ export class AgentSession {
 		};
 	}
 
-	/** Restore the active tool loadout declared by the session transcript, if it declares one. */
+	/**
+	 * Restore the active tool loadout declared by the session transcript, if it declares one.
+	 * Tools reachable only from other tools are never declared, but they do not depend on the active
+	 * set, so the transcript's declarations are the whole loadout.
+	 */
 	private _restoreToolsFromTranscript(): void {
 		const current = getCurrentSystemMessage(this.sessionManager.buildSessionContext().messages);
 		if (!current) return;
-		const toolNames = (current.toolsAdded ?? [])
-			.map((tool) => tool.name)
-			.filter((name) => this._toolRegistry.has(name));
-		this.agent.state.tools = toolNames.flatMap((name) => {
-			const registered = this._toolRegistry.get(name);
-			return registered ? [registered] : [];
-		});
-		this._rebuildSystemPrompt(toolNames);
+		this.setActiveToolsByName((current.toolsAdded ?? []).map((tool) => tool.name));
 	}
 
 	// =========================================================================
@@ -1209,15 +1739,25 @@ export class AgentSession {
 
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
 		this._agentRunAbortRequested = false;
+		// Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
+		this._failedResponse = undefined;
+		this._recordSelection();
 		this._isAgentRunActive = true;
 		try {
 			await this.agent.prompt(messages);
-			while (await this._handlePostAgentRun()) {
+			while (!this._agentRunAbortRequested) {
+				if (await this._handlePostAgentRun()) {
+					if (this._agentRunAbortRequested) break;
+					await this.agent.continue();
+					continue;
+				}
+				if (this._agentRunAbortRequested || !(await this._runBeforeSettleBoundary())) break;
 				if (this._agentRunAbortRequested) break;
 				await this.agent.continue();
 			}
 		} finally {
 			if (this._agentRunAbortRequested) this._finishCancelledRetry();
+			this._failedResponse = undefined;
 			this._runSystemPromptOptions = undefined;
 			this._flushPendingBashMessages();
 			this._flushPendingCustomMessages();
@@ -1226,18 +1766,19 @@ export class AgentSession {
 	}
 
 	private async _handlePostAgentRun(): Promise<boolean> {
-		const msg = this._lastAssistantMessage;
+		const message = this._lastAssistantMessage;
+		const toolResults = this._lastAssistantToolResults;
 		this._lastAssistantMessage = undefined;
+		this._lastAssistantToolResults = [];
 		if (this._agentRunAbortRequested) {
 			this._finishCancelledRetry();
 			return false;
 		}
-		if (!msg) {
-			return false;
-		}
+		if (!message) return this.agent.hasQueuedMessages();
 
-		if (this._isRetryableError(msg) && (await this._prepareRetry(msg))) {
+		if (this._isRetryableError(message) && (await this._prepareRetry(message))) {
 			if (this._agentRunAbortRequested) this._finishCancelledRetry();
+			this._failedResponse = message;
 			return !this._agentRunAbortRequested;
 		}
 		if (this._agentRunAbortRequested) {
@@ -1245,23 +1786,47 @@ export class AgentSession {
 			return false;
 		}
 
-		if (msg.stopReason === "error" && this._retryAttempt > 0) {
+		if (message.stopReason === "error" && this._retryAttempt > 0) {
 			this._emit({
 				type: "auto_retry_end",
 				success: false,
 				attempt: this._retryAttempt,
-				finalError: msg.errorMessage,
+				finalError: message.errorMessage,
 			});
 			this._retryAttempt = 0;
 		}
 
-		if (await this._checkCompaction(msg)) {
+		if (await this._checkCompaction(message, true, toolResults)) {
 			return !this._agentRunAbortRequested;
 		}
 
-		// The agent loop drains both queues before emitting agent_end. Any messages
-		// here were queued by agent_end extension handlers and need a continuation.
+		// The low-level loop drains both queues before agent_end. Messages queued by
+		// agent_end handlers require a fresh run before pre-settlement handlers fire.
 		return !this._agentRunAbortRequested && this.agent.hasQueuedMessages();
+	}
+
+	private async _runBeforeSettleBoundary(): Promise<boolean> {
+		if (!this._extensionRunner.hasHandlers("agent_before_settle")) return this.agent.hasQueuedMessages();
+		this._isBeforeSettle = true;
+		this._abortDuringBeforeSettle = false;
+		try {
+			const result = await this._extensionRunner.emitBoundary(
+				{ type: "agent_before_settle", outcome: this._lastActivityOutcome },
+				(entries) => this._buildBoundaryContext(entries, "agent_before_settle"),
+			);
+			this._commitBoundaryDrafts(result.entries);
+			this._flushPendingCustomMessages();
+			const finalContext = this._buildBoundaryContext([], "agent_before_settle");
+			if (this._abortDuringBeforeSettle) return false;
+			const shouldContinue = result.continue || this.agent.hasQueuedMessages();
+			if (shouldContinue && !finalContext.canContinue) {
+				if (result.continue) this._reportInvalidBoundaryContinuation("agent_before_settle");
+				return false;
+			}
+			return shouldContinue;
+		} finally {
+			this._isBeforeSettle = false;
+		}
 	}
 
 	private async _runInputHandlers(
@@ -1284,6 +1849,28 @@ export class AgentSession {
 		return { text, images };
 	}
 
+	private async _normalizePromptImages(
+		images: ImageContent[] | undefined,
+	): Promise<{ images: ImageContent[]; hints: string[] }> {
+		if (!images) return { images: [], hints: [] };
+
+		const normalizedImages: ImageContent[] = [];
+		const hints: string[] = [];
+		for (const image of images) {
+			const processed = await processImage(Buffer.from(image.data, "base64"), image.mimeType, {
+				autoResizeImages: this.settingsManager.getImageAutoResize(),
+				resizeOptions: this._limitsModel()?.inputLimits?.images?.resize,
+			});
+			if (!processed.ok) {
+				hints.push(processed.message);
+				continue;
+			}
+			normalizedImages.push({ type: "image", data: processed.data, mimeType: processed.mimeType });
+			hints.push(...processed.hints);
+		}
+		return { images: normalizedImages, hints };
+	}
+
 	/**
 	 * Send a prompt to the agent.
 	 * - Handles extension commands (registered via pi.registerCommand) immediately, even during streaming
@@ -1294,153 +1881,147 @@ export class AgentSession {
 	 * @throws Error if no model selected or no API key available (when not streaming)
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
+		if (this._isEmittingAgentSettled) {
+			this._deferredSettledActions.push(async () => await this.prompt(text, options));
+			return;
+		}
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
-		let messages: AgentMessage[] | undefined;
-
-		try {
-			// Handle extension commands first (execute immediately, even during streaming)
-			// Extension commands manage their own LLM interaction via pi.sendMessage()
-			if (expandPromptTemplates && text.startsWith("/")) {
-				const handled = await this._tryExecuteExtensionCommand(text);
-				if (handled) {
-					// Extension command executed, no prompt to send
-					preflightResult?.(true);
-					return;
-				}
-			}
-
-			if (this._compactionAbortController !== undefined) {
-				throw new Error(
-					"Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.",
-				);
-			}
-
-			// Emit input event for extension interception (before skill/template expansion)
-			const processedInput = await this._runInputHandlers(
-				text,
-				options?.images,
-				options?.source ?? "interactive",
-				this.isStreaming ? options?.streamingBehavior : undefined,
-			);
-			if (!processedInput) {
-				preflightResult?.(true);
+		// Handle extension commands first (execute immediately, even during streaming)
+		// Extension commands manage their own LLM interaction via pi.sendMessage()
+		if (expandPromptTemplates && text.startsWith("/")) {
+			const handled = await this._tryExecuteExtensionCommand(text);
+			if (handled) {
+				// Extension command executed, no prompt to send
+				preflightResult?.("handled");
 				return;
 			}
-			const { text: currentText, images: currentImages } = processedInput;
-
-			// Expand skill commands (/skill:name args) and prompt templates (/template args)
-			let expandedText = currentText;
-			if (expandPromptTemplates) {
-				expandedText = this._expandSkillCommand(expandedText);
-				expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
-			}
-
-			// If streaming, queue via steer() or followUp() based on option
-			if (this.isStreaming) {
-				if (!options?.streamingBehavior) {
-					throw new Error(
-						"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
-					);
-				}
-				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages);
-				} else {
-					await this._queueSteer(expandedText, currentImages);
-				}
-				preflightResult?.(true);
-				return;
-			}
-
-			// Flush any pending bash and custom messages before the new prompt
-			this._flushPendingBashMessages();
-			this._flushPendingCustomMessages();
-
-			// Validate model
-			if (!this.model) {
-				throw new Error(formatNoModelSelectedMessage());
-			}
-
-			const hasConfiguredAuth =
-				this._modelRuntime.hasConfiguredAuth(this.model.provider) ||
-				(await this._modelRuntime.checkAuth(this.model.provider)) !== undefined;
-			if (!hasConfiguredAuth) {
-				const isOAuth = this._modelRuntime.isUsingOAuth(this.model.provider);
-				if (isOAuth) {
-					throw new Error(
-						`Authentication failed for "${this.model.provider}". ` +
-							`Credentials may have expired or network is unavailable. ` +
-							`Run '/login ${this.model.provider}' to re-authenticate.`,
-					);
-				}
-				throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
-			}
-
-			// Check if we need to compact before sending (catches aborted responses).
-			// The user's new prompt is sent below, so do not call agent.continue() here.
-			const lastAssistant = this._findLastAssistantMessage();
-			if (lastAssistant) {
-				await this._checkCompaction(lastAssistant, false);
-			}
-
-			// Build messages array (custom message if any, then user message)
-			messages = [];
-
-			// Add user message
-			const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
-			if (currentImages) {
-				userContent.push(...currentImages);
-			}
-			messages.push({
-				role: "user",
-				content: userContent,
-				timestamp: Date.now(),
-			});
-
-			// Inject any pending "nextTurn" messages as context alongside the user message
-			for (const msg of this._pendingNextTurnMessages) {
-				messages.push(msg);
-			}
-			this._pendingNextTurnMessages = [];
-
-			// Emit before_agent_start extension event
-			const selectedToolsBefore = this._baseSystemPromptOptions.selectedTools;
-			const result = await this._extensionRunner.emitBeforeAgentStart(
-				expandedText,
-				currentImages,
-				this._baseSystemPromptOptions,
-			);
-			// Handlers may edit event.systemPromptOptions.selectedTools or call setActiveTools(),
-			// which updates the live loadout instead. An explicit edit wins; otherwise the live
-			// loadout is authoritative, so a setActiveTools() call is not undone here.
-			const handlerEditedTools =
-				result.systemPromptOptions.selectedTools.length !== selectedToolsBefore.length ||
-				result.systemPromptOptions.selectedTools.some((name, index) => name !== selectedToolsBefore[index]);
-			if (!handlerEditedTools) result.systemPromptOptions.selectedTools = this.getActiveToolNames();
-			for (const msg of result.messages) {
-				messages.push({
-					role: "custom",
-					customType: msg.customType,
-					// Untyped extensions can pass null/missing content; normalize at ingestion.
-					content: msg.content ?? [],
-					display: msg.display,
-					details: msg.details,
-					timestamp: Date.now(),
-				});
-			}
-			const updateMessage = this._preparePromptAndToolLoadout(result.systemPromptOptions);
-			this._runSystemPromptOptions = result.systemPromptOptions;
-			if (updateMessage) messages.unshift(updateMessage);
-		} catch (error) {
-			preflightResult?.(false);
-			throw error;
 		}
 
-		if (!messages) {
+		if (this._compactionAbortController !== undefined) {
+			throw new Error(
+				"Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.",
+			);
+		}
+
+		// Emit input event for extension interception (before skill/template expansion)
+		const processedInput = await this._runInputHandlers(
+			text,
+			options?.images,
+			options?.source ?? "interactive",
+			this.isStreaming ? options?.streamingBehavior : undefined,
+		);
+		if (!processedInput) {
+			preflightResult?.("handled");
+			return;
+		}
+		const { text: currentText, images: currentImages } = processedInput;
+
+		// Expand skill commands (/skill:name args) and prompt templates (/template args)
+		let expandedText = currentText;
+		if (expandPromptTemplates) {
+			expandedText = this._expandSkillCommand(expandedText);
+			expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+		}
+
+		// If streaming, queue via steer() or followUp() based on option
+		if (this.isStreaming) {
+			if (!options?.streamingBehavior) {
+				throw new Error(
+					"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+				);
+			}
+			if (options.streamingBehavior === "followUp") {
+				await this._queueFollowUp(expandedText, currentImages);
+			} else {
+				await this._queueSteer(expandedText, currentImages);
+			}
+			preflightResult?.("queued");
 			return;
 		}
 
-		preflightResult?.(true);
+		// Flush any pending bash and custom messages before the new prompt
+		this._flushPendingBashMessages();
+		this._flushPendingCustomMessages();
+
+		// Validate model
+		if (!this.model) {
+			throw new Error(formatNoModelSelectedMessage());
+		}
+
+		const hasConfiguredAuth =
+			this._modelRuntime.hasConfiguredAuth(this.model.provider) ||
+			(await this._modelRuntime.checkAuth(this.model.provider)) !== undefined;
+		if (!hasConfiguredAuth) {
+			const isOAuth = this._modelRuntime.isUsingOAuth(this.model.provider);
+			if (isOAuth) {
+				throw new Error(
+					`Authentication failed for "${this.model.provider}". ` +
+						`Credentials may have expired or network is unavailable. ` +
+						`Run '/login ${this.model.provider}' to re-authenticate.`,
+				);
+			}
+			throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
+		}
+
+		// Check if we need to compact before sending (catches aborted responses).
+		// The user's new prompt is sent below, so do not call agent.continue() here.
+		const lastAssistant = this._findLastAssistantMessage();
+		if (lastAssistant) {
+			await this._checkCompaction(lastAssistant, false);
+		}
+
+		// Emit before_agent_start before normalizing images so extension-driven model
+		// selection determines the resize profile used for the request and history.
+		const selectedToolsBefore = this._baseSystemPromptOptions.selectedTools;
+		const result = await this._extensionRunner.emitBeforeAgentStart(
+			expandedText,
+			currentImages,
+			this._baseSystemPromptOptions,
+		);
+		// Handlers may edit event.systemPromptOptions.selectedTools or call setActiveTools(),
+		// which updates the live loadout instead. An explicit edit wins; otherwise the live
+		// loadout is authoritative, so a setActiveTools() call is not undone here.
+		const handlerEditedTools =
+			result.systemPromptOptions.selectedTools.length !== selectedToolsBefore.length ||
+			result.systemPromptOptions.selectedTools.some((name, index) => name !== selectedToolsBefore[index]);
+		if (!handlerEditedTools) result.systemPromptOptions.selectedTools = this.getActiveToolNames();
+
+		const normalized = await this._normalizePromptImages(currentImages);
+		const userText = normalized.hints.length > 0 ? `${expandedText}\n\n${normalized.hints.join("\n")}` : expandedText;
+
+		// Build messages only after hooks and image normalization have completed.
+		const messages: AgentMessage[] = [];
+		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: userText }];
+		userContent.push(...normalized.images);
+		messages.push({
+			role: "user",
+			content: userContent,
+			timestamp: Date.now(),
+		});
+
+		// Inject any pending "nextTurn" messages as context alongside the user message
+		for (const msg of this._pendingNextTurnMessages) {
+			messages.push(msg);
+		}
+		this._pendingNextTurnMessages = [];
+
+		for (const msg of result.messages) {
+			messages.push({
+				role: "custom",
+				customType: msg.customType,
+				// Untyped extensions can pass null/missing content; normalize at ingestion.
+				content: msg.content ?? [],
+				display: msg.display,
+				details: msg.details,
+				timestamp: Date.now(),
+			});
+		}
+		const updateMessage = this._preparePromptAndToolLoadout(result.systemPromptOptions);
+		this._runSystemPromptOptions = result.systemPromptOptions;
+		if (updateMessage) messages.unshift(updateMessage);
+
+		preflightResult?.("started");
 		await this._runAgentPrompt(messages);
 	}
 
@@ -1509,7 +2090,7 @@ export class AgentSession {
 		images: ImageContent[] | undefined,
 		behavior: "steer" | "followUp",
 		source: InputSource,
-	): Promise<void> {
+	): Promise<QueuedInputDisposition> {
 		if (text.startsWith("/")) {
 			this._throwIfExtensionCommand(text);
 		}
@@ -1520,7 +2101,7 @@ export class AgentSession {
 			source,
 			this.isStreaming ? behavior : undefined,
 		);
-		if (!processedInput) return;
+		if (!processedInput) return "handled";
 
 		let expandedText = this._expandSkillCommand(processedInput.text);
 		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
@@ -1530,6 +2111,7 @@ export class AgentSession {
 		} else {
 			await this._queueFollowUp(expandedText, processedInput.images);
 		}
+		return "queued";
 	}
 
 	/**
@@ -1541,8 +2123,12 @@ export class AgentSession {
 	 * @param options Input source; defaults to interactive
 	 * @throws Error if text is an extension command
 	 */
-	async steer(text: string, images?: ImageContent[], options?: { source?: InputSource }): Promise<void> {
-		await this._queueUserInput(text, images, "steer", options?.source ?? "interactive");
+	async steer(
+		text: string,
+		images?: ImageContent[],
+		options?: { source?: InputSource },
+	): Promise<QueuedInputDisposition> {
+		return this._queueUserInput(text, images, "steer", options?.source ?? "interactive");
 	}
 
 	/**
@@ -1553,8 +2139,12 @@ export class AgentSession {
 	 * @param options Input source; defaults to interactive
 	 * @throws Error if text is an extension command
 	 */
-	async followUp(text: string, images?: ImageContent[], options?: { source?: InputSource }): Promise<void> {
-		await this._queueUserInput(text, images, "followUp", options?.source ?? "interactive");
+	async followUp(
+		text: string,
+		images?: ImageContent[],
+		options?: { source?: InputSource },
+	): Promise<QueuedInputDisposition> {
+		return this._queueUserInput(text, images, "followUp", options?.source ?? "interactive");
 	}
 
 	/**
@@ -1584,11 +2174,7 @@ export class AgentSession {
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.followUp({
-			role: "user",
-			content,
-			timestamp: Date.now(),
-		});
+		this.agent.followUp({ role: "user", content, timestamp: Date.now() });
 	}
 
 	/**
@@ -1641,6 +2227,10 @@ export class AgentSession {
 				this.agent.steer(appMessage);
 			}
 		} else if (options?.triggerTurn) {
+			if (this._isEmittingAgentSettled) {
+				this._deferredSettledActions.push(async () => await this._runAgentPrompt(appMessage));
+				return;
+			}
 			await this._runAgentPrompt(appMessage);
 		} else if (this.isStreaming) {
 			// Appending now would put the message between an assistant tool call and its
@@ -1654,13 +2244,13 @@ export class AgentSession {
 	}
 
 	private _appendCustomMessage(appMessage: CustomMessage): void {
-		this.agent.state.messages.push(appMessage);
 		this.sessionManager.appendCustomMessageEntry(
 			appMessage.customType,
 			appMessage.content,
 			appMessage.display,
 			appMessage.details,
 		);
+		this._refreshFinalizedContext();
 		this._emit({ type: "message_start", message: appMessage });
 		this._emit({ type: "message_end", message: appMessage });
 	}
@@ -1763,6 +2353,7 @@ export class AgentSession {
 		this.abortRetry();
 		this.abortCompaction();
 		this.abortBranchSummary();
+		if (this._isBeforeSettle) this._abortDuringBeforeSettle = true;
 		this.agent.abort();
 		await this.waitForIdle();
 	}
@@ -2042,24 +2633,23 @@ export class AgentSession {
 	/** Generate Pi's built-in compaction summary for manual and automatic compaction. */
 	private async _runDefaultCompaction(
 		preparation: CompactionPreparation,
-		requestModel: Model<any>,
-		apiKey: string | undefined,
-		headers: Record<string, string> | undefined,
+		model: Model<any>,
 		customInstructions: string | undefined,
 		signal: AbortSignal,
-		env: Record<string, string> | undefined,
 		reason: "manual" | "threshold" | "overflow",
 	): Promise<CompactionResult> {
+		// Resolve the request only when Pi summarizes itself: routing may call models or fail.
+		const request = await this._getSummarizationRequestAuth(model, signal);
 		return compact(
 			preparation,
-			requestModel,
-			apiKey,
-			headers,
+			request.model,
+			request.apiKey,
+			request.headers,
 			customInstructions,
 			signal,
-			this.thinkingLevel,
+			request.thinkingLevel,
 			this.agent.streamFunction,
-			env,
+			request.env,
 			this.settingsManager.getRetrySettings(),
 			this._summarizationRetryCallbacks({ source: "compaction", reason }),
 			undefined, // sessionId
@@ -2100,13 +2690,6 @@ export class AgentSession {
 			}
 
 			const settings = this.settingsManager.getCompactionSettings(model);
-			const {
-				model: requestModel,
-				apiKey,
-				headers,
-				env,
-			} = await this._getSummarizationRequestAuth(model, this._compactionAbortController.signal);
-
 			const pathEntries = this.sessionManager.getBranch();
 
 			const preparation = prepareCompaction(pathEntries, settings);
@@ -2160,12 +2743,9 @@ export class AgentSession {
 				// Shared default summary generator, also used by automatic compaction.
 				const result = await this._runDefaultCompaction(
 					preparation,
-					requestModel,
-					apiKey,
-					headers,
+					model,
 					customInstructions,
 					this._compactionAbortController.signal,
-					env,
 					"manual",
 				);
 				summary = result.summary;
@@ -2181,9 +2761,8 @@ export class AgentSession {
 
 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
 			const newEntries = this.sessionManager.getEntries();
-			const sessionContext = this.sessionManager.buildSessionContext();
-			this.agent.state.messages = sessionContext.messages;
-			const estimatedTokensAfter = estimateMessagesTokens(sessionContext.messages);
+			this._refreshFinalizedContext();
+			const estimatedTokensAfter = estimateMessagesTokens(this.sessionManager.buildSessionProjection().messages);
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -2280,21 +2859,25 @@ export class AgentSession {
 	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
 	 * @returns Whether the post-run loop should call `agent.continue()` for overflow recovery or queued messages
 	 */
-	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<boolean> {
+	private async _checkCompaction(
+		assistantMessage: AssistantMessage,
+		skipAbortedCheck = true,
+		toolResults: AgentMessage[] = [],
+	): Promise<boolean> {
 		const settings = this.settingsManager.getCompactionSettings(this.model);
 		if (!settings.enabled) return false;
 
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return false;
 
-		const contextWindow = this.model?.contextWindow ?? 0;
-
 		// Skip overflow check if the message came from a different model.
 		// This handles the case where user switched from a smaller-context model (e.g. opus)
 		// to a larger-context model (e.g. codex) - the overflow error from the old model
-		// shouldn't trigger compaction for the new model.
-		const sameModel =
-			this.model && assistantMessage.provider === this.model.provider && assistantMessage.model === this.model.id;
+		// shouldn't trigger compaction for the new model. Under a virtual selection, the
+		// physical model that produced the message supplies the limits.
+		const messageModel = this._modelForMessage(assistantMessage);
+		const sameModel = messageModel !== undefined;
+		const contextWindow = (messageModel ?? this.model)?.contextWindow ?? 0;
 
 		// Skip compaction checks if this assistant message is older than the latest
 		// compaction boundary. This prevents a stale pre-compaction usage/error
@@ -2309,8 +2892,36 @@ export class AgentSession {
 		// Automatic cases 1 and 2: context overflow.
 		// A length stop is recoverable when output ended below the model's original desired limit,
 		// independent of the configured context size or any context-clamped provider request limit.
-		const contextOverflow = sameModel && isContextOverflow(assistantMessage, contextWindow);
-		const recoverableLength = sameModel && isRecoverableLength(assistantMessage, this.model?.maxTokens ?? 0);
+		const currentProjection = this.sessionManager.buildSessionProjection();
+		const assistantEntryId = this._findPersistedMessageEntryId(assistantMessage);
+		const assistantIsProjected =
+			assistantEntryId === undefined ||
+			currentProjection.entries.some(
+				(entry) =>
+					entry.sourceEntry.id === assistantEntryId &&
+					entry.messages.some((message) => message.role === "assistant"),
+			);
+		const branch = this.sessionManager.getBranch();
+		const assistantIndex = assistantEntryId ? branch.findIndex((entry) => entry.id === assistantEntryId) : -1;
+		const entriesAfterAssistant = assistantIndex >= 0 ? branch.slice(assistantIndex + 1) : [];
+		const hasPostAssistantContextEdit = entriesAfterAssistant.some((entry) => entry.type === "context_edit");
+		const latestAssistantEdit = entriesAfterAssistant
+			.filter(
+				(entry): entry is ContextEditEntry => entry.type === "context_edit" && entry.targetId === assistantEntryId,
+			)
+			.at(-1);
+		const assistantRetainedForExplicitRecovery =
+			assistantEntryId === undefined ||
+			(!entriesAfterAssistant.some((entry) => entry.type === "compaction") &&
+				latestAssistantEdit?.replacement !== null);
+		const assistantUsageMatchesProjection = assistantIsProjected && !hasPostAssistantContextEdit;
+		const explicitOverflow = assistantMessage.stopReason === "error" && isContextOverflow(assistantMessage);
+		const contextOverflow =
+			sameModel &&
+			((explicitOverflow && assistantRetainedForExplicitRecovery) ||
+				(assistantUsageMatchesProjection && isContextOverflow(assistantMessage, contextWindow)));
+		const recoverableLength =
+			sameModel && assistantIsProjected && isRecoverableLength(assistantMessage, messageModel.maxTokens);
 		if (contextOverflow || recoverableLength) {
 			const willRetry = assistantMessage.stopReason !== "stop";
 
@@ -2342,14 +2953,12 @@ export class AgentSession {
 				return false;
 			}
 
-			// Case 1: remove the failed or truncated message from agent state, compact, and
-			// retry once. The message remains in session history but is excluded from retry context.
+			// Persistently omit the selected final attempt before post-run recovery compaction.
 			this._overflowRecoveryAttempted = true;
-			const messages = this.agent.state.messages;
-			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-				this.agent.state.messages = messages.slice(0, -1);
-			}
-			return await this._runAutoCompaction("overflow", willRetry);
+			this._omitRecoveryAttempt(assistantMessage, toolResults);
+			const retry = await this._runAutoCompaction("overflow", willRetry);
+			if (retry) this._failedResponse = assistantMessage;
+			return retry;
 		}
 
 		// Case 3: threshold compaction without retry.
@@ -2357,8 +2966,12 @@ export class AgentSession {
 		// This ensures sessions that hit persistent API errors (e.g. 529) or malformed zero-usage
 		// responses can still compact and do not reset context accounting.
 		let contextTokens: number;
+		const projection = currentProjection;
+		const hasContextEdits = projection.entries.some((entry) => entry.sourceEntry.type === "context_edit");
 		const directContextTokens = assistantMessage.usage ? calculateContextTokens(assistantMessage.usage) : 0;
-		if (assistantMessage.stopReason === "error" || directContextTokens === 0) {
+		if (hasContextEdits) {
+			contextTokens = estimateProjectedContextTokens(projection, branch).tokens;
+		} else if (assistantMessage.stopReason === "error" || directContextTokens === 0) {
 			const messages = this.agent.state.messages;
 			const estimate = estimateContextTokens(messages);
 			// Without provider usage, estimate.tokens is the pure message-size estimate.
@@ -2421,14 +3034,6 @@ export class AgentSession {
 			this._emit({ type: "compaction_start", reason });
 			abortController.signal.throwIfAborted();
 
-			const {
-				model: requestModel,
-				apiKey,
-				headers,
-				env,
-			} = await this._getSummarizationRequestAuth(model, abortController.signal);
-			abortController.signal.throwIfAborted();
-
 			let extensionCompaction: CompactionResult | undefined;
 
 			if (this._extensionRunner.hasHandlers("session_before_compact")) {
@@ -2471,12 +3076,9 @@ export class AgentSession {
 				// Shared default summary generator, also used by manual compaction.
 				const compactResult = await this._runDefaultCompaction(
 					preparation,
-					requestModel,
-					apiKey,
-					headers,
+					model,
 					undefined,
 					abortController.signal,
-					env,
 					reason,
 				);
 				summary = compactResult.summary;
@@ -2489,9 +3091,8 @@ export class AgentSession {
 
 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
 			const newEntries = this.sessionManager.getEntries();
-			const sessionContext = this.sessionManager.buildSessionContext();
-			this.agent.state.messages = sessionContext.messages;
-			const estimatedTokensAfter = estimateMessagesTokens(sessionContext.messages);
+			this._refreshFinalizedContext();
+			const estimatedTokensAfter = estimateMessagesTokens(this.sessionManager.buildSessionProjection().messages);
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -2518,18 +3119,7 @@ export class AgentSession {
 			};
 			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry });
 
-			if (willRetry) {
-				const messages = this.agent.state.messages;
-				const lastMsg = messages[messages.length - 1];
-				// The overflow response was persisted on message_end before _checkCompaction() removed it
-				// from agent state. Rebuilding state from the new compaction can restore that kept entry,
-				// leaving an assistant as the final message. agent.continue() rejects that state, so remove
-				// the retriable error or truncated-length response again before continuing the interrupted turn.
-				if (lastMsg?.role === "assistant" && (lastMsg.stopReason === "error" || lastMsg.stopReason === "length")) {
-					this.agent.state.messages = messages.slice(0, -1);
-				}
-				return true;
-			}
+			if (willRetry) return true;
 
 			// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
 			// Continue once so queued messages are delivered.
@@ -2602,6 +3192,7 @@ export class AgentSession {
 
 		this._applyExtensionBindings(this._extensionRunner);
 		await this._extensionRunner.emit(this._sessionStartEvent);
+		this._extensionRunner.reportUnhandledMcpServers();
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
 	}
 
@@ -2635,7 +3226,7 @@ export class AgentSession {
 	}> {
 		return entries.map((entry) => {
 			const source = this.getExtensionSourceLabel(entry.extensionPath);
-			const baseDir = entry.extensionPath.startsWith("<") ? undefined : dirname(entry.extensionPath);
+			const baseDir = isSyntheticPath(entry.extensionPath) ? undefined : dirname(entry.extensionPath);
 			return {
 				path: entry.path,
 				metadata: {
@@ -2649,7 +3240,7 @@ export class AgentSession {
 	}
 
 	private getExtensionSourceLabel(extensionPath: string): string {
-		if (extensionPath.startsWith("<")) {
+		if (isSyntheticPath(extensionPath)) {
 			return `extension:${extensionPath.replace(/[<>]/g, "")}`;
 		}
 		const base = basename(extensionPath);
@@ -2745,6 +3336,7 @@ export class AgentSession {
 				},
 				getActiveTools: () => this.getActiveToolNames(),
 				getAllTools: () => this.getAllTools(),
+				getSettings: () => this.settingsManager.getSettings(),
 				setActiveTools: (toolNames) => this.setActiveToolsByName(toolNames),
 				refreshTools: () => this._refreshToolRegistry(),
 				getCommands,
@@ -2787,6 +3379,8 @@ export class AgentSession {
 				},
 				getSystemPrompt: () => this.systemPrompt,
 				getSystemPromptOptions: () => this._baseSystemPromptOptions,
+				executeTool: (callerId, name, args, options) => this._executeNestedToolCall(callerId, name, args, options),
+				getCallableTools: () => this._getCallableTools(),
 			},
 			{
 				registerProvider: (name, config) => {
@@ -2801,12 +3395,24 @@ export class AgentSession {
 					this._modelRuntime.unregisterProvider(name);
 					this._refreshCurrentModelFromRegistry();
 				},
+				registerVirtualModel: (definition) => {
+					this._modelRuntime.registerVirtualModel(definition);
+					this._refreshCurrentModelFromRegistry();
+				},
+				unregisterVirtualModel: (provider, id) => {
+					this._modelRuntime.unregisterVirtualModel(provider, id);
+					this._refreshCurrentModelFromRegistry();
+				},
 			},
 		);
 	}
 
 	private _refreshToolRegistry(options?: { activeToolNames?: string[]; includeAllExtensionTools?: boolean }): void {
-		const previousRegistryNames = new Set(this._toolRegistry.keys());
+		// Tools that were already activated on registration. A tool whose exposure changes to
+		// `direct` or `model-only` (for example from `hidden`) is activated like a new tool.
+		const previousActivatedOnRegistration = new Set(
+			[...this._toolRegistry.keys()].filter((name) => this._isActivatedOnRegistration(name)),
+		);
 		const previousActiveToolNames = this.getActiveToolNames();
 		const allowedToolNames = this._allowedToolNames;
 		const excludedToolNames = this._excludedToolNames;
@@ -2828,7 +3434,7 @@ export class AgentSession {
 					name,
 					{
 						definition,
-						sourceInfo: createSyntheticSourceInfo(`<builtin:${name}>`, { source: "builtin" }),
+						sourceInfo: createSyntheticSourceInfo(`${BUILTIN_PATH_PREFIX}${name}`, { source: "builtin" }),
 					},
 				]),
 		);
@@ -2862,7 +3468,9 @@ export class AgentSession {
 				.filter((definition) => isAllowedTool(definition.name))
 				.map((definition) => ({
 					definition,
-					sourceInfo: createSyntheticSourceInfo(`<builtin:${definition.name}>`, { source: "builtin" }),
+					sourceInfo: createSyntheticSourceInfo(`${BUILTIN_PATH_PREFIX}${definition.name}`, {
+						source: "builtin",
+					}),
 				})),
 			runner,
 		);
@@ -2879,23 +3487,35 @@ export class AgentSession {
 
 		if (allowedToolNames) {
 			for (const toolName of this._toolRegistry.keys()) {
-				if (allowedToolNames.has(toolName)) {
+				// Naming a tool activates it even when it is not active by default.
+				if (allowedToolNames.has(toolName) && this._isDeclarable(toolName)) {
 					nextActiveToolNames.push(toolName);
 				}
 			}
 		} else if (options?.includeAllExtensionTools) {
 			for (const tool of wrappedExtensionTools) {
-				nextActiveToolNames.push(tool.name);
+				if (this._isActivatedOnRegistration(tool.name)) nextActiveToolNames.push(tool.name);
 			}
 		} else if (!options?.activeToolNames) {
 			for (const toolName of this._toolRegistry.keys()) {
-				if (!previousRegistryNames.has(toolName)) {
+				if (!previousActivatedOnRegistration.has(toolName) && this._isActivatedOnRegistration(toolName)) {
 					nextActiveToolNames.push(toolName);
 				}
 			}
 		}
 
 		this.setActiveToolsByName([...new Set(nextActiveToolNames)]);
+	}
+
+	/** Whether activating the tool declares it to the model. */
+	private _isDeclarable(name: string): boolean {
+		const exposure = this._getToolExposure(name);
+		return exposure === "direct" || exposure === "model-only";
+	}
+
+	/** Whether registering the tool activates it, which declares it to the model. */
+	private _isActivatedOnRegistration(name: string): boolean {
+		return this._isDeclarable(name) && this._toolDefinitions.get(name)?.definition.defaultActive !== false;
 	}
 
 	private _buildRuntime(options: {
@@ -2975,6 +3595,7 @@ export class AgentSession {
 		if (hasBindings) {
 			await options?.beforeSessionStart?.();
 			await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
+			this._extensionRunner.reportUnhandledMcpServers();
 			await this.extendResourcesFromExtensions("reload");
 		}
 	}
@@ -2989,7 +3610,7 @@ export class AgentSession {
 	 */
 	private _isRetryableError(message: AssistantMessage): boolean {
 		// Context overflow is handled by compaction, not retry.
-		if (isContextOverflow(message, this.model?.contextWindow ?? 0)) return false;
+		if (isContextOverflow(message, (this._modelForMessage(message) ?? this.model)?.contextWindow ?? 0)) return false;
 		return isRetryableAssistantError(message);
 	}
 
@@ -3064,11 +3685,8 @@ export class AgentSession {
 			errorMessage: message.errorMessage || "Unknown error",
 		});
 
-		// Remove error message from agent state (keep in session for history)
-		const messages = this.agent.state.messages;
-		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-			this.agent.state.messages = messages.slice(0, -1);
-		}
+		// Keep the failed attempt in raw history while durably omitting it from model projection.
+		this._omitRecoveryAttempt(message);
 
 		// Wait with exponential backoff (abortable)
 		this._retryAbortController = new AbortController();
@@ -3178,11 +3796,8 @@ export class AgentSession {
 			// Queue for later - will be flushed on agent_end
 			this._pendingBashMessages.push(bashMessage);
 		} else {
-			// Add to agent state immediately
-			this.agent.state.messages.push(bashMessage);
-
-			// Save to session
 			this.sessionManager.appendMessage(bashMessage);
+			this._refreshFinalizedContext();
 		}
 	}
 
@@ -3213,14 +3828,10 @@ export class AgentSession {
 		if (this._pendingBashMessages.length === 0) return;
 
 		for (const bashMessage of this._pendingBashMessages) {
-			// Add to agent state
-			this.agent.state.messages.push(bashMessage);
-
-			// Save to session
 			this.sessionManager.appendMessage(bashMessage);
 		}
-
 		this._pendingBashMessages = [];
+		this._refreshFinalizedContext();
 	}
 
 	// =========================================================================
@@ -3346,15 +3957,11 @@ export class AgentSession {
 			let summaryDetails: unknown;
 			let summaryUsage: Usage | undefined;
 			if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
-				const model = this.model!;
-				const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
+				const signal = this._branchSummaryAbortController.signal;
 				const branchSummarySettings = this.settingsManager.getBranchSummarySettings();
 				const result = await generateBranchSummary(entriesToSummarize, {
-					model: requestModel,
-					apiKey,
-					headers,
-					env,
-					signal: this._branchSummaryAbortController.signal,
+					...(await this._getSummarizationRequestAuth(this.model!, signal)),
+					signal,
 					customInstructions,
 					replaceInstructions,
 					reserveTokens: branchSummarySettings.reserveTokens,
@@ -3428,9 +4035,8 @@ export class AgentSession {
 				this.sessionManager.appendLabelChange(targetId, label);
 			}
 
-			// Update agent state
-			const sessionContext = this.sessionManager.buildSessionContext();
-			this.agent.state.messages = sessionContext.messages;
+			// Update finalized context from the canonical session projection.
+			this._refreshFinalizedContext();
 			this._restoreToolsFromTranscript();
 
 			// Emit session_tree event
@@ -3531,7 +4137,7 @@ export class AgentSession {
 	}
 
 	getContextUsage(): ContextUsage | undefined {
-		const model = this.model;
+		const model = this._limitsModel();
 		if (!model) return undefined;
 
 		const contextWindow = model.contextWindow ?? 0;
@@ -3540,33 +4146,32 @@ export class AgentSession {
 		// After compaction, the last assistant usage reflects pre-compaction context size.
 		// We can only trust usage from an assistant that responded after the latest compaction.
 		// If no such assistant exists, context token count is unknown until the next LLM response.
-		const branchEntries = this.sessionManager.getBranch();
-		const latestCompaction = getLatestCompactionEntry(branchEntries);
+		const projection = this.sessionManager.buildSessionProjection();
+		const branch = this.sessionManager.getBranch();
+		const latestCompaction = getLatestCompactionEntry(branch);
 
 		if (latestCompaction) {
-			// Check if there's a valid assistant usage after the compaction boundary
-			const compactionIndex = branchEntries.lastIndexOf(latestCompaction);
-			let hasPostCompactionUsage = false;
-			for (let i = branchEntries.length - 1; i > compactionIndex; i--) {
-				const entry = branchEntries[i];
-				if (entry.type === "message" && entry.message.role === "assistant") {
-					const assistant = entry.message;
-					if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error") {
-						const contextTokens = calculateContextTokens(assistant.usage);
-						if (contextTokens > 0) {
-							hasPostCompactionUsage = true;
-							break;
-						}
-					}
-				}
-			}
-
-			if (!hasPostCompactionUsage) {
-				return { tokens: null, contextWindow, percent: null };
-			}
+			const projectedAssistants = new Set(
+				projection.entries.flatMap((entry) =>
+					entry.messages.some(
+						(message) =>
+							message.role === "assistant" &&
+							message.stopReason !== "aborted" &&
+							message.stopReason !== "error" &&
+							calculateContextTokens(message.usage) > 0,
+					)
+						? [entry.sourceEntry.id]
+						: [],
+				),
+			);
+			const compactionIndex = branch.findIndex((entry) => entry.id === latestCompaction.id);
+			const hasPostCompactionUsage = branch
+				.slice(compactionIndex + 1)
+				.some((entry) => projectedAssistants.has(entry.id));
+			if (!hasPostCompactionUsage) return { tokens: null, contextWindow, percent: null };
 		}
 
-		const estimate = estimateContextTokens(this.messages);
+		const estimate = estimateProjectedContextTokens(projection, branch);
 		const percent = (estimate.tokens / contextWindow) * 100;
 
 		return {
@@ -3620,16 +4225,11 @@ export class AgentSession {
 		if (!model) {
 			throw new Error("No model selected");
 		}
-		const { model: requestModel, apiKey, headers, env } = await this._getSummarizationRequestAuth(model);
 		return generateBugReportSummary({
+			...(await this._getSummarizationRequestAuth(model, options.signal)),
 			messages: this.messages,
 			hint: options.hint,
-			model: requestModel,
-			apiKey,
-			headers,
-			env,
 			signal: options.signal,
-			thinkingLevel: this.thinkingLevel,
 			streamFn: this.agent.streamFunction,
 			retry: this.settingsManager.getRetrySettings(),
 			sessionId: this.sessionId,

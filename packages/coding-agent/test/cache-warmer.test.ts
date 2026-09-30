@@ -84,7 +84,7 @@ function branchWithPrompt(promptTokens: number): SessionEntry[] {
 function fakeRuntime(
 	options: {
 		result?: (model: Model<Api>) => Promise<AssistantMessage>;
-		decide?: (event: CacheWarmingDecisionEvent) => CacheWarmingAction;
+		decide?: (event: CacheWarmingDecisionEvent) => CacheWarmingAction | Promise<CacheWarmingAction>;
 		mode?: CacheWarmingMode;
 		branch?: SessionEntry[];
 	} = {},
@@ -177,6 +177,44 @@ describe("cache warming", () => {
 		await vi.advanceTimersByTimeAsync(270_000);
 		expect(calls).toHaveLength(2);
 		warmer.cancel();
+	});
+
+	it("does not issue refreshes after their safe deadline", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const { warmer, calls } = fakeRuntime();
+		warmer.start(request(), current);
+
+		// A five-minute cache is scheduled for 4m30s and retains 15 seconds of
+		// the 30-second expiry margin. Simulate a timer delayed by sleep.
+		vi.setSystemTime(285_001);
+		vi.clearAllTimers();
+		const internal = warmer as unknown as { run: object | undefined; refresh: (run: object) => Promise<void> };
+		if (!internal.run) throw new Error("expected an active cache-warming run");
+		await internal.refresh(internal.run);
+
+		expect(calls).toHaveLength(0);
+		expect(warmer.status).toMatchObject({ state: "inactive", reason: "cache refresh deadline missed" });
+	});
+
+	it("rechecks the deadline after an extension decision", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const { warmer, calls } = fakeRuntime({
+			decide: async () => {
+				await Promise.resolve();
+				vi.setSystemTime(285_001);
+				return "warm" as const;
+			},
+		});
+		warmer.start(request(), current);
+		vi.clearAllTimers();
+		const internal = warmer as unknown as { run: object | undefined; refresh: (run: object) => Promise<void> };
+		if (!internal.run) throw new Error("expected an active cache-warming run");
+		await internal.refresh(internal.run);
+
+		expect(calls).toHaveLength(0);
+		expect(warmer.status).toMatchObject({ state: "inactive", reason: "cache refresh deadline missed" });
 	});
 
 	it("applies economic decisions and extension overrides", async () => {
