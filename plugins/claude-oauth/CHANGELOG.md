@@ -1,5 +1,11 @@
 # @pi-plugins/claude-oauth
 
+## 0.3.8
+
+### Patch Changes
+
+- d51b022: Update Claude Code compatibility to 2.1.280 for Opus 5.5.
+
 ## 0.3.7
 
 ### Patch Changes
