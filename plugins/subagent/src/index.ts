@@ -38,6 +38,29 @@ const subagentSchema = Type.Object({
 
 export type SubagentInput = Static<typeof subagentSchema>
 
+const subagentOutputSchema = Type.Object({
+  output: Type.String({
+    description: "The subagent's final response, not truncated",
+  }),
+  sessionId: Type.Optional(Type.String()),
+  model: Type.Optional(Type.String()),
+  toolCalls: Type.Number(),
+  durationMs: Type.Number(),
+  usage: Type.Object({
+    turns: Type.Number(),
+    input: Type.Number(),
+    output: Type.Number(),
+    cacheRead: Type.Number(),
+    cacheWrite: Type.Number(),
+    cost: Type.Number({ description: 'Total cost in USD' }),
+    contextTokens: Type.Number({
+      description: 'Context size in tokens after the final turn',
+    }),
+  }),
+})
+
+export type SubagentOutput = Static<typeof subagentOutputSchema>
+
 interface SubagentDetails extends SubagentResult {
   cwd?: string | undefined
   model?: string | undefined
@@ -60,6 +83,7 @@ export default function subagent(pi: ExtensionAPI) {
     promptSnippet:
       'Delegate self-contained tasks to subagents (isolated headless pi instances).',
     parameters: subagentSchema,
+    outputSchema: subagentOutputSchema,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const model =
         params.model ??
@@ -99,15 +123,28 @@ export default function subagent(pi: ExtensionAPI) {
           })
         },
       }).pipe(
-        Effect.map((result) => ({
-          content: [
-            {
-              type: 'text' as const,
-              text: result.output ? capToolOutput(result.output) : '(no output)',
-            },
-          ],
-          details: { ...result, model, cwd },
-        })),
+        Effect.map((result) => {
+          const structuredContent: SubagentOutput = {
+            output: result.output,
+            ...(result.sessionId === undefined
+              ? {}
+              : { sessionId: result.sessionId }),
+            ...(model === undefined ? {} : { model }),
+            toolCalls: result.toolCalls,
+            durationMs: result.durationMs ?? 0,
+            usage: { ...result.usage, cost: result.usage.cost.total },
+          }
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: result.output ? capToolOutput(result.output) : '(no output)',
+              },
+            ],
+            details: { ...result, model, cwd },
+            structuredContent,
+          }
+        }),
         Effect.catch((error) => {
           const result = 'result' in error ? error.result : emptyResult
           const label = error._tag === 'SubagentStopError' ? error.reason : 'failed'

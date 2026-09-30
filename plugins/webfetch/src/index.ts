@@ -34,6 +34,15 @@ const webFetchSchema = Type.Object({
 
 export type WebFetchInput = Static<typeof webFetchSchema>
 
+const webFetchOutputSchema = Type.Object({
+  content: Type.String({
+    description:
+      "Full response body, not truncated. With format 'markdown', HTML is converted to Markdown and other content types are returned as is.",
+  }),
+})
+
+export type WebFetchOutput = Static<typeof webFetchOutputSchema>
+
 interface WebFetchDetails {
   truncation: TruncationResult
 }
@@ -46,6 +55,7 @@ export default function webFetch(pi: ExtensionAPI) {
       'Fetch an HTTP(S) page and return its content as Markdown (default) or the raw HTML.',
     promptSnippet: 'Fetch HTTP(S) pages as Markdown or raw HTML.',
     parameters: webFetchSchema,
+    outputSchema: webFetchOutputSchema,
     async execute(_toolCallId, params, signal) {
       const format: WebFetchFormat = params.format ?? 'markdown'
       const timeoutSeconds = Number.clamp(
@@ -62,7 +72,9 @@ export default function webFetch(pi: ExtensionAPI) {
         })
       }).pipe(Effect.provide(WebFetch.layer))
 
-      const truncation = truncateHead(await runTool(program, { signal }))
+      const content = await runTool(program, { signal })
+      const truncation = truncateHead(content)
+      const structuredContent: WebFetchOutput = { content }
 
       return {
         content: [
@@ -76,6 +88,7 @@ export default function webFetch(pi: ExtensionAPI) {
         details: {
           truncation,
         },
+        structuredContent,
       }
     },
     renderResult({ details }, { expanded }, theme, context) {

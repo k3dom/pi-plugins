@@ -28,6 +28,19 @@ const webSearchSchema = Type.Object({
 
 export type WebSearchInput = Static<typeof webSearchSchema>
 
+const webSearchOutputSchema = Type.Object({
+  results: Type.Array(
+    Type.Object({
+      title: Type.String(),
+      url: Type.String(),
+      content: Type.String({ description: 'Short excerpt of the page content' }),
+      publishedAt: Type.Optional(Type.String({ description: 'ISO 8601 timestamp' })),
+    }),
+  ),
+})
+
+export type WebSearchOutput = Static<typeof webSearchOutputSchema>
+
 interface WebSearchDetails {
   results: ReadonlyArray<SearchResult>
   truncation: TruncationResult
@@ -41,6 +54,7 @@ export default function webSearch(pi: ExtensionAPI) {
       'Search the web and return matching pages with their title, URL and a short content excerpt.',
     promptSnippet: 'Search the web.',
     parameters: webSearchSchema,
+    outputSchema: webSearchOutputSchema,
     async execute(_toolCallId, params, signal) {
       const maxResults = Number.clamp(params.maxResults ?? DEFAULT_MAX_RESULTS, {
         minimum: 1,
@@ -72,6 +86,17 @@ export default function webSearch(pi: ExtensionAPI) {
         }),
       )
 
+      const structuredContent: WebSearchOutput = {
+        results: results.map((result) => ({
+          title: result.title,
+          url: result.url,
+          content: result.content,
+          ...(result.publishedAt
+            ? { publishedAt: DateTime.formatIso(result.publishedAt) }
+            : {}),
+        })),
+      }
+
       return {
         content: [
           {
@@ -85,6 +110,7 @@ export default function webSearch(pi: ExtensionAPI) {
           results,
           truncation,
         },
+        structuredContent,
       }
     },
     renderResult({ details }, { expanded }, theme, context) {
