@@ -1,5 +1,13 @@
 # @pi-plugins/webfetch
 
+## 0.3.0
+
+### Minor Changes
+
+- a5bf0ca: Declare an output schema for `web_fetch` and return the page as structured content.
+  Codemode scripts now receive `{ content }` with the full, untruncated response body
+  instead of the truncated text the model reads.
+
 ## 0.2.6
 
 ### Patch Changes

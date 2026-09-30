@@ -1,5 +1,18 @@
 # @pi-plugins/subagent
 
+## 0.4.0
+
+### Minor Changes
+
+- a5bf0ca: Declare an output schema for `subagent` and return the run as structured content.
+  Codemode scripts now receive `{ output, sessionId?, model?, toolCalls, durationMs, usage }`
+  with the full, untruncated final response. Failed runs still reject with the error
+  text.
+- c557b04: Report subagent token usage and cost on the tool result, so pi counts both toward the
+  session totals. This replaces the `message_end` hook that added only the cost to the
+  next assistant message. Tool results in sessions recorded with earlier versions no
+  longer show the subagent cost.
+
 ## 0.3.1
 
 ### Patch Changes

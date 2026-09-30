@@ -1,5 +1,13 @@
 # @pi-plugins/websearch
 
+## 0.2.0
+
+### Minor Changes
+
+- a5bf0ca: Declare an output schema for `web_search` and return the results as structured
+  content. Codemode scripts now receive `{ results: [{ title, url, content, publishedAt? }] }`
+  instead of the Markdown text.
+
 ## 0.1.1
 
 ### Patch Changes
