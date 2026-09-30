@@ -1,5 +1,12 @@
 # @pi-plugins/fast-mode
 
+## 0.1.13
+
+### Patch Changes
+
+- c69fddc: Add GPT-6 Sol, GPT-6 Luna, and GPT-6.1 Sol to the default fast-mode models for OpenAI
+  and OpenAI Codex.
+
 ## 0.1.12
 
 ### Patch Changes
