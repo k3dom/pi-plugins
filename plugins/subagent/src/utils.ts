@@ -56,8 +56,8 @@ export function formatStats(result: SubagentResult): string {
   if (usage.cacheWrite > 0) {
     parts.push(`W${formatTokens(usage.cacheWrite)}`)
   }
-  if (usage.cost > 0) {
-    parts.push(`$${usage.cost.toFixed(4)}`)
+  if (usage.cost.total > 0) {
+    parts.push(`$${usage.cost.total.toFixed(4)}`)
   }
   if (result.durationMs !== undefined) {
     parts.push(formatDuration(result.durationMs))

@@ -13,7 +13,13 @@ export interface SubagentUsage {
   output: number
   cacheRead: number
   cacheWrite: number
-  cost: number
+  cost: {
+    input: number
+    output: number
+    cacheRead: number
+    cacheWrite: number
+    total: number
+  }
   contextTokens: number
 }
 
@@ -34,7 +40,7 @@ export const emptyResult: SubagentResult = {
     output: 0,
     cacheRead: 0,
     cacheWrite: 0,
-    cost: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     contextTokens: 0,
   },
 }
@@ -97,7 +103,13 @@ const AssistantMessageEnd = Schema.Struct({
         cacheWrite: Schema.optional(Schema.Number),
         totalTokens: Schema.optional(Schema.Number),
         cost: Schema.optional(
-          Schema.Struct({ total: Schema.optional(Schema.Number) }),
+          Schema.Struct({
+            input: Schema.optional(Schema.Number),
+            output: Schema.optional(Schema.Number),
+            cacheRead: Schema.optional(Schema.Number),
+            cacheWrite: Schema.optional(Schema.Number),
+            total: Schema.optional(Schema.Number),
+          }),
         ),
       }),
     ),
@@ -143,7 +155,13 @@ function foldMessage(
         output: result.usage.output + (usage?.output ?? 0),
         cacheRead: result.usage.cacheRead + (usage?.cacheRead ?? 0),
         cacheWrite: result.usage.cacheWrite + (usage?.cacheWrite ?? 0),
-        cost: result.usage.cost + (usage?.cost?.total ?? 0),
+        cost: {
+          input: result.usage.cost.input + (usage?.cost?.input ?? 0),
+          output: result.usage.cost.output + (usage?.cost?.output ?? 0),
+          cacheRead: result.usage.cost.cacheRead + (usage?.cost?.cacheRead ?? 0),
+          cacheWrite: result.usage.cost.cacheWrite + (usage?.cost?.cacheWrite ?? 0),
+          total: result.usage.cost.total + (usage?.cost?.total ?? 0),
+        },
         contextTokens: usage?.totalTokens ?? result.usage.contextTokens,
       },
     },

@@ -7,12 +7,7 @@ import { runTool } from '@pi-plugins/shared/run'
 import { ExpandableText, TextPreview } from '@pi-plugins/shared/ui'
 import { Effect } from 'effect'
 import { Type, type Static } from 'typebox'
-import {
-  emptyResult,
-  runSubagent,
-  type SubagentResult,
-  type SubagentUsage,
-} from './runner'
+import { emptyResult, runSubagent, type SubagentResult } from './runner'
 import { capToolOutput, formatStats } from './utils'
 
 // Wrapped terminal rows, not source lines, so a row's height stays bounded.
@@ -52,26 +47,6 @@ interface SubagentDetails extends SubagentResult {
 }
 
 export default function subagent(pi: ExtensionAPI) {
-  const pending: SubagentUsage[] = []
-
-  // Folds subagent cost into the parent session so the footer's cumulative cost
-  // includes delegated work. Only `cost.total`: the token fields feed pi's
-  // auto-compaction heuristics and must stay untouched.
-  pi.on('message_end', ({ message }) => {
-    if (
-      message.role !== 'assistant' ||
-      message.usage.totalTokens <= 0 ||
-      pending.length === 0
-    ) {
-      return undefined
-    }
-    const cost = { ...message.usage.cost }
-    for (const run of pending.splice(0)) {
-      cost.total += run.cost
-    }
-    return { message: { ...message, usage: { ...message.usage, cost } } }
-  })
-
   pi.registerTool<typeof subagentSchema, SubagentDetails>({
     name: 'subagent',
     label: 'Subagent',
@@ -158,7 +133,20 @@ export default function subagent(pi: ExtensionAPI) {
             isError: true,
           })
         }),
-        Effect.tap(({ details }) => Effect.sync(() => pending.push(details.usage))),
+        Effect.map((result) => {
+          const { input, output, cacheRead, cacheWrite, cost } = result.details.usage
+          return {
+            ...result,
+            usage: {
+              input,
+              output,
+              cacheRead,
+              cacheWrite,
+              totalTokens: input + output + cacheRead + cacheWrite,
+              cost,
+            },
+          }
+        }),
         Effect.provide(NodeServices.layer),
       )
 
