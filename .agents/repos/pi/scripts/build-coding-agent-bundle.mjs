@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { chmodSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -147,6 +147,7 @@ for (const entry of [
 	join(codingAgentDistDir, "index.js"),
 	join(codingAgentDistDir, "rpc-entry.js"),
 	join(codingAgentDistDir, "utils", "image-resize-worker.js"),
+	join(codingAgentDistDir, "extensions", "codemode", "worker.js"),
 	join(aiDistDir, "api", "bedrock-converse-stream.js"),
 	join(aiDistDir, "auth", "oauth", "anthropic.js"),
 ]) {
@@ -162,7 +163,7 @@ const mainResult = await build({
 	...commonBuildOptions(),
 	entryNames: "[name]",
 	entryPoints: {
-		cli: join(codingAgentDistDir, "cli.js"),
+		"cli-runtime": join(codingAgentDistDir, "cli.js"),
 		index: join(codingAgentDistDir, "index.js"),
 		"rpc-entry": join(codingAgentDistDir, "rpc-entry.js"),
 	},
@@ -174,6 +175,7 @@ const mainResult = await build({
 const bedrockLoaderOutput = findContainingOutput(mainResult.metafile, "packages/ai/dist/api/bedrock-converse-stream.lazy.js");
 const oauthLoaderOutput = findContainingOutput(mainResult.metafile, "packages/ai/dist/auth/oauth/load.js");
 const imageResizeOutput = findContainingOutput(mainResult.metafile, "packages/coding-agent/dist/utils/image-resize.js");
+const configOutput = findContainingOutput(mainResult.metafile, "packages/coding-agent/dist/config.js");
 if (dirname(bedrockLoaderOutput) !== dirname(oauthLoaderOutput)) {
 	throw new Error("Bedrock and OAuth lazy loaders were emitted into different directories");
 }
@@ -181,20 +183,34 @@ if (dirname(bedrockLoaderOutput) !== dirname(oauthLoaderOutput)) {
 // These implementations are reached through variable-specifier imports or a
 // worker URL, so the main bundle cannot follow them. Emit one self-contained
 // file per implementation beside the code that resolves it.
+const lazyEntryPoints = {
+	anthropic: join(aiDistDir, "auth", "oauth", "anthropic.js"),
+	"bedrock-converse-stream": join(aiDistDir, "api", "bedrock-converse-stream.js"),
+	"codemode-worker": join(codingAgentDistDir, "extensions", "codemode", "worker.js"),
+	"github-copilot": join(aiDistDir, "auth", "oauth", "github-copilot.js"),
+	"image-resize-worker": join(codingAgentDistDir, "utils", "image-resize-worker.js"),
+	"kimi-coding": join(aiDistDir, "auth", "oauth", "kimi-coding.js"),
+	meta: join(aiDistDir, "auth", "oauth", "meta.js"),
+	"openai-chatgpt": join(aiDistDir, "auth", "oauth", "openai-chatgpt.js"),
+	"openai-codex": join(aiDistDir, "auth", "oauth", "openai-codex.js"),
+	openrouter: join(aiDistDir, "auth", "oauth", "openrouter.js"),
+	radius: join(aiDistDir, "auth", "oauth", "radius.js"),
+	xai: join(aiDistDir, "auth", "oauth", "xai.js"),
+};
+
+// Every OAuth flow loaded through importOAuthModule() must have a lazy entry,
+// otherwise the flow fails at runtime with a missing module error.
+const oauthLoadSource = readFileSync(join(repoRoot, "packages", "ai", "src", "auth", "oauth", "load.ts"), "utf8");
+for (const match of oauthLoadSource.matchAll(/importOAuthModule\("\.\/([^"]+)\.ts"\)/g)) {
+	if (!(match[1] in lazyEntryPoints)) {
+		throw new Error(`OAuth flow "${match[1]}" is lazily imported but has no lazy bundle entry`);
+	}
+}
+
 const lazyResult = await build({
 	...commonBuildOptions(),
 	entryNames: "[name]",
-	entryPoints: {
-		anthropic: join(aiDistDir, "auth", "oauth", "anthropic.js"),
-		"bedrock-converse-stream": join(aiDistDir, "api", "bedrock-converse-stream.js"),
-		"github-copilot": join(aiDistDir, "auth", "oauth", "github-copilot.js"),
-		"image-resize-worker": join(codingAgentDistDir, "utils", "image-resize-worker.js"),
-		"kimi-coding": join(aiDistDir, "auth", "oauth", "kimi-coding.js"),
-		"openai-codex": join(aiDistDir, "auth", "oauth", "openai-codex.js"),
-		openrouter: join(aiDistDir, "auth", "oauth", "openrouter.js"),
-		radius: join(aiDistDir, "auth", "oauth", "radius.js"),
-		xai: join(aiDistDir, "auth", "oauth", "xai.js"),
-	},
+	entryPoints: lazyEntryPoints,
 	outdir: dirname(bedrockLoaderOutput),
 	splitting: false,
 });
@@ -203,11 +219,23 @@ const imageResizeWorkerOutput = resolve(dirname(bedrockLoaderOutput), "image-res
 if (dirname(imageResizeOutput) !== dirname(imageResizeWorkerOutput)) {
 	throw new Error("Image resize implementation and worker were emitted into different directories");
 }
+// getCodemodeWorkerUrl() in config.ts resolves the worker next to its own chunk.
+if (dirname(configOutput) !== dirname(bedrockLoaderOutput)) {
+	throw new Error("config.ts and the codemode worker were emitted into different directories");
+}
 
 validateExternalImports([mainResult.metafile, lazyResult.metafile]);
+const cliLauncher = `#!/usr/bin/env node
+import { createRequire, enableCompileCache } from "node:module";
+
+enableCompileCache();
+createRequire(import.meta.url)("./cli-runtime.js");
+`;
+writeFileSync(join(bundleDir, "cli.js"), cliLauncher);
 chmodSync(join(bundleDir, "cli.js"), 0o755);
 chmodSync(join(bundleDir, "rpc-entry.js"), 0o755);
 
-const files = new Set([...Object.keys(mainResult.metafile.outputs), ...Object.keys(lazyResult.metafile.outputs)]).size;
-const mib = outputBytes([mainResult.metafile, lazyResult.metafile]) / (1024 * 1024);
+const files =
+	new Set([...Object.keys(mainResult.metafile.outputs), ...Object.keys(lazyResult.metafile.outputs)]).size + 1;
+const mib = (outputBytes([mainResult.metafile, lazyResult.metafile]) + cliLauncher.length) / (1024 * 1024);
 console.log(`Built ${relative(repoRoot, bundleDir)} (${files} files, ${mib.toFixed(1)} MiB)`);
