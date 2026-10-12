@@ -1,31 +1,32 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import * as Statusline from '@pi-plugins/shared/statusline'
-import { recentText, streamingText } from './render'
-import { createSpeedTracker, type FirstToken } from './service'
-
-const SEGMENT_KEY = 'speed'
+import { Duration, Effect, Option, pipe } from 'effect'
+import * as Render from './render'
+import * as Tracker from './tracker'
 
 export default function speed(pi: ExtensionAPI) {
-  const tracker = createSpeedTracker()
+  const tracker = Effect.runSync(Tracker.Tracker.make)
 
-  function showWidget(ctx: ExtensionContext, firstToken?: FirstToken): void {
+  function showWidget(ctx: ExtensionContext, ttft?: Duration.Duration): void {
     const recent =
       ctx.model === undefined
-        ? undefined
-        : tracker.recent(`${ctx.model.provider}/${ctx.model.id}`)
-    const text =
-      firstToken === undefined
-        ? recentText(recent)
-        : streamingText(recent, firstToken)
+        ? Option.none()
+        : Effect.runSync(tracker.recent(`${ctx.model.provider}/${ctx.model.id}`))
     Statusline.setSegment(
       ctx,
-      SEGMENT_KEY,
-      text === undefined ? undefined : { text, align: 'left' },
+      'speed',
+      pipe(
+        ttft === undefined
+          ? Render.recentText(recent)
+          : Option.some(Render.streamingText(recent, ttft)),
+        Option.map((text): Statusline.Segment => ({ text, align: 'left' })),
+        Option.getOrUndefined,
+      ),
     )
   }
 
   pi.on('session_start', (_event, ctx) => {
-    tracker.reset()
+    Effect.runSync(tracker.reset())
     showWidget(ctx)
   })
 
@@ -38,7 +39,7 @@ export default function speed(pi: ExtensionAPI) {
   })
 
   pi.on('before_provider_request', () => {
-    tracker.beginRequest()
+    Effect.runSync(tracker.beginRequest())
   })
 
   pi.on('message_update', (event, ctx) => {
@@ -46,16 +47,18 @@ export default function speed(pi: ExtensionAPI) {
     if (!('delta' in streamEvent)) {
       return
     }
-    const firstToken = tracker.recordDelta(
-      streamEvent.type === 'thinking_delta' ? 'thinking' : 'visible',
-      streamEvent.delta.length,
+    const ttft = Effect.runSync(
+      tracker.recordDelta(
+        streamEvent.type === 'thinking_delta' ? 'thinking' : 'visible',
+        streamEvent.delta.length,
+      ),
     )
     if (
-      firstToken !== undefined &&
+      Option.isSome(ttft) &&
       streamEvent.partial.provider === ctx.model?.provider &&
       streamEvent.partial.model === ctx.model?.id
     ) {
-      showWidget(ctx, firstToken)
+      showWidget(ctx, ttft.value)
     }
   })
 
@@ -64,12 +67,14 @@ export default function speed(pi: ExtensionAPI) {
     if (message.role !== 'assistant') {
       return
     }
-    tracker.endRequest({
-      model: `${message.provider}/${message.model}`,
-      stopReason: message.stopReason,
-      outputTokens: message.usage.output,
-      reasoningTokens: message.usage.reasoning,
-    })
+    Effect.runSync(
+      tracker.endRequest({
+        model: `${message.provider}/${message.model}`,
+        stopReason: message.stopReason,
+        outputTokens: message.usage.output,
+        reasoningTokens: message.usage.reasoning,
+      }),
+    )
     showWidget(ctx)
   })
 }
