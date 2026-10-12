@@ -1,10 +1,13 @@
 import {
+  Array,
   Config,
   DateTime,
-  Duration,
+  type Duration,
   Effect,
+  flow,
   Layer,
   Option,
+  pipe,
   Schedule,
   Schema,
 } from 'effect'
@@ -15,9 +18,7 @@ import {
   HttpClientRequest,
   HttpClientResponse,
 } from 'effect/unstable/http'
-import { SearchResult, WebSearch, WebSearchError } from './search'
-
-const ENDPOINT = 'https://api.tavily.com/search'
+import * as WebSearch from './web-search'
 
 const SearchResponse = Schema.Struct({
   results: Schema.Array(
@@ -42,12 +43,12 @@ class TavilyError extends Schema.Error<TavilyError>(
 }
 
 export const layer = Layer.effect(
-  WebSearch,
+  WebSearch.WebSearch,
   Effect.gen(function* () {
     const apiKey = yield* Config.option(Config.Redacted('TAVILY_API_KEY'))
     const http = (yield* HttpClient.HttpClient).pipe(
-      HttpClient.mapRequest((request) =>
-        request.pipe(
+      HttpClient.mapRequest(
+        flow(
           HttpClientRequest.acceptJson,
           HttpClientRequest.setHeader('X-Client-Name', '@pi-plugins/websearch'),
           Option.match(apiKey, {
@@ -68,10 +69,10 @@ export const layer = Layer.effect(
       function* (options: {
         readonly query: string
         readonly maxResults: number
-        readonly timeout: Duration.Input
+        readonly timeout: Duration.Duration
       }) {
         const body = yield* http
-          .post(ENDPOINT, {
+          .post('https://api.tavily.com/search', {
             body: HttpBody.jsonUnsafe({
               query: options.query,
               search_depth: 'basic',
@@ -93,40 +94,43 @@ export const layer = Layer.effect(
             Effect.flatMap(HttpClientResponse.schemaBodyJson(SearchResponse)),
             Effect.mapError(
               (cause) =>
-                new WebSearchError({
-                  message: `Tavily search failed: ${cause.message}`,
-                  cause,
+                new WebSearch.WebSearchError({
+                  reason: new WebSearch.RequestError({ provider: 'Tavily', cause }),
                 }),
             ),
           )
 
-        return body.results.map(
+        return Array.map(
+          body.results,
           (result) =>
-            new SearchResult({
+            new WebSearch.Result({
               title: result.title,
               url: result.url,
               content: result.content,
-              publishedAt: Option.getOrUndefined(
-                Option.flatMap(
-                  Option.fromNullishOr(result.published_date),
-                  DateTime.make,
-                ),
+              publishedAt: pipe(
+                result.published_date,
+                Option.fromNullishOr,
+                Option.flatMap(DateTime.make),
+                Option.getOrUndefined,
               ),
             }),
         )
       },
-      (_, options) =>
-        Effect.timeoutOrElse(_, {
-          duration: options.timeout,
-          orElse: () =>
-            new WebSearchError({
-              message: `Tavily search timed out after ${Duration.format(
-                Duration.fromInputUnsafe(options.timeout),
-              )}`,
-            }),
-        }),
+      (effect, options) =>
+        effect.pipe(
+          Effect.timeoutOrElse({
+            duration: options.timeout,
+            orElse: () =>
+              new WebSearch.WebSearchError({
+                reason: new WebSearch.TimeoutError({
+                  provider: 'Tavily',
+                  timeout: options.timeout,
+                }),
+              }),
+          }),
+        ),
     )
 
-    return { search } as const
+    return { search }
   }),
 ).pipe(Layer.provide(FetchHttpClient.layer))

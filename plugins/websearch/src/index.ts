@@ -4,13 +4,11 @@ import * as Run from '@pi-plugins/shared/run'
 import * as Ui from '@pi-plugins/shared/ui'
 import { Array, DateTime, Duration, Effect, flow, Number } from 'effect'
 import { Type, type Static } from 'typebox'
-import { type SearchResult, WebSearch } from './search'
 import * as Tavily from './tavily'
+import * as WebSearch from './web-search'
 
 const DEFAULT_MAX_RESULTS = 8
 const MAX_RESULTS_LIMIT = 20
-const TIMEOUT = Duration.seconds(30)
-const PREVIEW_LINES = 5
 
 const webSearchSchema = Type.Object({
   query: Type.String({
@@ -41,13 +39,14 @@ const webSearchOutputSchema = Type.Object({
 
 export type WebSearchOutput = Static<typeof webSearchOutputSchema>
 
-interface WebSearchDetails {
-  results: ReadonlyArray<SearchResult>
-  truncation: TruncationResult
-}
-
 export default function webSearch(pi: ExtensionAPI) {
-  pi.registerTool<typeof webSearchSchema, WebSearchDetails>({
+  pi.registerTool<
+    typeof webSearchSchema,
+    {
+      results: ReadonlyArray<WebSearch.Result>
+      truncation: TruncationResult
+    }
+  >({
     name: 'web_search',
     label: 'WebSearch',
     description:
@@ -62,11 +61,11 @@ export default function webSearch(pi: ExtensionAPI) {
       })
 
       const program = Effect.gen(function* () {
-        const websearch = yield* WebSearch
+        const websearch = yield* WebSearch.WebSearch
         return yield* websearch.search({
           query: params.query,
           maxResults,
-          timeout: TIMEOUT,
+          timeout: Duration.seconds(30),
         })
       }).pipe(Effect.provide(Tavily.layer))
 
@@ -87,7 +86,7 @@ export default function webSearch(pi: ExtensionAPI) {
       )
 
       const structuredContent: WebSearchOutput = {
-        results: results.map((result) => ({
+        results: Array.map(results, (result) => ({
           title: result.title,
           url: result.url,
           content: result.content,
@@ -98,12 +97,7 @@ export default function webSearch(pi: ExtensionAPI) {
       }
 
       return {
-        content: [
-          {
-            type: 'text' as const,
-            text: Ui.truncatedText(truncation),
-          },
-        ],
+        content: [{ type: 'text' as const, text: Ui.truncatedText(truncation) }],
         details: {
           results,
           truncation,
@@ -121,7 +115,7 @@ export default function webSearch(pi: ExtensionAPI) {
       return new Ui.ExpandableText({
         header,
         content: details.truncation.content,
-        maxLines: PREVIEW_LINES,
+        maxLines: 5,
         expanded,
         theme,
         truncation: details.truncation,
