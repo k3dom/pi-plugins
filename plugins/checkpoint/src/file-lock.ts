@@ -1,27 +1,21 @@
 import {
-  Data,
   DateTime,
   Duration,
   Effect,
   FileSystem,
   Option,
   Schedule,
+  Schema,
   Scope,
 } from 'effect'
 
-export class FileLockError extends Data.TaggedError('FileLockError')<{
-  lockPath: string
-  cause: unknown
-}> {
+export class FileLockError extends Schema.TaggedError<FileLockError>()(
+  'FileLockError',
+  { lockPath: Schema.String, cause: Schema.Defect() },
+) {
   override get message(): string {
     return `Could not acquire file lock: ${this.lockPath}`
   }
-}
-
-export interface FileLock {
-  withLock<A, E, R>(
-    self: Effect.Effect<A, E, R>,
-  ): Effect.Effect<A, E | FileLockError, R>
 }
 
 export const make = Effect.fnUntraced(function* (lockPath: string) {
@@ -62,16 +56,14 @@ export const make = Effect.fnUntraced(function* (lockPath: string) {
     yield* fs.utimes(lockPath, now, now)
   }).pipe(Effect.ignore, Effect.repeat(Schedule.spaced('10 seconds')))
 
-  const lock: FileLock = {
-    withLock: (self) =>
-      Effect.scopedWith((scope) =>
-        Effect.gen(function* () {
-          yield* Scope.provide(scope)(acquire)
-          yield* Scope.provide(scope)(Effect.forkScoped(heartbeat))
-          return yield* self
-        }),
-      ),
-  }
+  const withLock = <A, E, R>(self: Effect.Effect<A, E, R>) =>
+    Effect.scopedWith(
+      Effect.fnUntraced(function* (scope: Scope.Scope) {
+        yield* acquire.pipe(Scope.provide(scope))
+        yield* Effect.forkScoped(heartbeat).pipe(Scope.provide(scope))
+        return yield* self
+      }),
+    )
 
-  return lock
+  return { withLock }
 })

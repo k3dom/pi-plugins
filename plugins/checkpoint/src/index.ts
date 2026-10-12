@@ -6,58 +6,34 @@ import type {
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import * as Run from '@pi-plugins/shared/run'
 import { Array, Effect, Option, pipe, Schema } from 'effect'
-import { Snapshotter, SnapshotterError } from './snapshot'
+import * as Snapshotter from './snapshotter'
 
 const CHECKPOINT_TYPE = 'file-checkpoint'
 
-const CHOICE_CONVERSATION = 'Conversation only (keep files as they are)'
-const CHOICE_RESTORE = 'Conversation and files'
-const CHOICE_CANCEL = 'Cancel navigation'
+const Checkpoint = Schema.Struct({ tree: Schema.String })
 
-function checkpointOf(entry: SessionEntry | undefined): string | undefined {
-  if (entry?.type !== 'custom' || entry.customType !== CHECKPOINT_TYPE) {
-    return undefined
+function checkpointOf(entry: SessionEntry): Option.Option<string> {
+  if (entry.type !== 'custom' || entry.customType !== CHECKPOINT_TYPE) {
+    return Option.none()
   }
 
   return pipe(
-    Schema.decodeUnknownOption(Schema.Struct({ tree: Schema.String }))(entry.data),
+    Schema.decodeUnknownOption(Checkpoint)(entry.data),
     Option.map((data) => data.tree),
-    Option.getOrUndefined,
   )
 }
 
-function nearestCheckpoint(
-  session: ExtensionContext['sessionManager'],
-  fromId: string | null,
-): string | undefined {
-  for (let id = fromId; id !== null;) {
-    const entry = session.getEntry(id)
-    if (!entry) {
-      return undefined
-    }
-
-    const tree = checkpointOf(entry)
-    if (tree) {
-      return tree
-    }
-
-    id = entry.parentId
-  }
-
-  return undefined
-}
-
 export default function checkpoint(pi: ExtensionAPI) {
-  let snapshotter: Snapshotter['Service'] | undefined
+  let snapshotter: Snapshotter.Snapshotter['Service'] | undefined
 
   pi.on('session_start', async (_event, ctx) => {
     snapshotter = await Run.handler(
-      Snapshotter.make(ctx.cwd).pipe(
+      Snapshotter.Snapshotter.make(ctx.cwd).pipe(
         Effect.provide(NodeServices.layer),
-        Effect.catchIf(
-          (error) =>
-            error instanceof SnapshotterError && error.kind === 'NotAWorktree',
-          () => Effect.succeed(undefined),
+        Effect.catchReason(
+          'SnapshotterError',
+          'NotAWorktree',
+          () => Effect.undefined,
         ),
       ),
       {
@@ -71,17 +47,20 @@ export default function checkpoint(pi: ExtensionAPI) {
     )
   })
 
+  const appendCheckpoint = (ctx: ExtensionContext, tree: string) => {
+    const nearest = Array.findLast(ctx.sessionManager.getBranch(), checkpointOf)
+    if (!Option.contains(nearest, tree)) {
+      pi.appendEntry<typeof Checkpoint.Encoded>(CHECKPOINT_TYPE, { tree })
+    }
+  }
+
   const recordCheckpoint = async (ctx: ExtensionContext) => {
     if (!snapshotter) {
       return
     }
     const tree = await Run.handler(snapshotter.track())
-    if (!tree) {
-      return
-    }
-    const session = ctx.sessionManager
-    if (nearestCheckpoint(session, session.getLeafId()) !== tree) {
-      pi.appendEntry(CHECKPOINT_TYPE, { tree })
+    if (tree) {
+      appendCheckpoint(ctx, tree)
     }
   }
 
@@ -110,10 +89,7 @@ export default function checkpoint(pi: ExtensionAPI) {
         snapshotter.cleanup().pipe(
           Effect.tap((tree) =>
             Effect.sync(() => {
-              const session = ctx.sessionManager
-              if (nearestCheckpoint(session, session.getLeafId()) !== tree) {
-                pi.appendEntry(CHECKPOINT_TYPE, { tree })
-              }
+              appendCheckpoint(ctx, tree)
               ctx.ui.notify('File checkpoint history cleaned up', 'info')
             }),
           ),
@@ -136,37 +112,36 @@ export default function checkpoint(pi: ExtensionAPI) {
     const target = pipe(
       session.getEntries(),
       Array.findFirst((entry) =>
-        entry.parentId === targetId
-          ? Option.fromUndefinedOr(checkpointOf(entry))
-          : Option.none(),
+        entry.parentId === targetId ? checkpointOf(entry) : Option.none(),
       ),
-      Option.getOrElse(() => nearestCheckpoint(session, targetId)),
+      Option.orElse(() => Array.findLast(session.getBranch(targetId), checkpointOf)),
     )
-    if (!target) {
+    if (Option.isNone(target)) {
       return undefined
     }
 
     const current = await Run.handler(snapshotter.track())
-    if (!current || current === target) {
+    if (!current || current === target.value) {
       return undefined
     }
 
+    const conversationOnly = 'Conversation only (keep files as they are)'
+    const restoreFiles = 'Conversation and files'
+    const cancelNavigation = 'Cancel navigation'
     const choice = await ctx.ui.select(
       'Files changed since that point in the conversation. What should be restored?',
-      [CHOICE_CONVERSATION, CHOICE_RESTORE, CHOICE_CANCEL],
+      [conversationOnly, restoreFiles, cancelNavigation],
     )
-    if (choice !== CHOICE_RESTORE) {
-      return choice === CHOICE_CANCEL ? { cancel: true } : undefined
+    if (choice !== restoreFiles) {
+      return choice === cancelNavigation ? { cancel: true } : undefined
     }
 
     // Checkpoint the abandoned state on the old branch so navigating back can
     // restore it again (redo).
-    if (nearestCheckpoint(session, session.getLeafId()) !== current) {
-      pi.appendEntry(CHECKPOINT_TYPE, { tree: current })
-    }
+    appendCheckpoint(ctx, current)
 
     return Run.handler(
-      snapshotter.restore(target).pipe(
+      snapshotter.restore(target.value).pipe(
         Effect.map(() => {
           ctx.ui.notify('Files restored to the selected point', 'info')
           return undefined
