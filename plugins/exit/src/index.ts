@@ -1,13 +1,10 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
-
-const EXIT_COMMANDS = new Set(['exit', 'quit'])
+import { Array, pipe, String } from 'effect'
 
 export default function exit(pi: ExtensionAPI) {
   pi.on('input', (event, ctx) => {
-    if (
-      event.source === 'extension' ||
-      !EXIT_COMMANDS.has(event.text.trim().toLowerCase())
-    ) {
+    const command = pipe(event.text, String.trim, String.toLowerCase)
+    if (event.source === 'extension' || !Array.contains(['exit', 'quit'], command)) {
       return { action: 'continue' }
     }
 
