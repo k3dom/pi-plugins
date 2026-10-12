@@ -1,8 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
-import { loadExtensionConfig } from '@pi-plugins/shared/config'
-import { runHandler } from '@pi-plugins/shared/run'
-import { setStatuslineSegment } from '@pi-plugins/shared/statusline'
+import * as ExtensionConfig from '@pi-plugins/shared/config'
+import * as Run from '@pi-plugins/shared/run'
+import * as Statusline from '@pi-plugins/shared/statusline'
 import { Effect, Record, Schema } from 'effect'
 import { ZAI_BASE_URL, type ZaiProvider } from './provider/zai'
 import {
@@ -82,7 +82,7 @@ export default function usage(pi: ExtensionAPI): void {
       provider === undefined
         ? undefined
         : widgetText(limitsCache.get(provider), new Date())
-    setStatuslineSegment(
+    Statusline.setSegment(
       ctx,
       EXTENSION_ID,
       text === undefined ? undefined : { text, align: 'right' },
@@ -116,7 +116,7 @@ export default function usage(pi: ExtensionAPI): void {
 
     let limits: WidgetLimit[] | undefined
     try {
-      limits = await runHandler(program)
+      limits = await Run.handler(program)
     } finally {
       inFlight.delete(provider)
       // Stamped on failure too, so a broken provider (e.g. not logged in) is not
@@ -130,7 +130,7 @@ export default function usage(pi: ExtensionAPI): void {
   }
 
   pi.on('session_start', async (_event, ctx) => {
-    config = await loadExtensionConfig(ctx, UsageConfig, EXTENSION_ID, config)
+    config = await ExtensionConfig.load(ctx, UsageConfig, EXTENSION_ID, config)
     await refreshWidget(ctx)
   })
 
@@ -208,7 +208,7 @@ export default function usage(pi: ExtensionAPI): void {
         return { fetchedAt: now.getTime(), sections } satisfies UsageReport
       }).pipe(Effect.provide(UsageService.layer(ctx.modelRegistry)))
 
-      const report = await runHandler(program, {
+      const report = await Run.handler(program, {
         onError: (message) => {
           ctx.ui.notify(`Failed to fetch usage: ${message}`, 'error')
           return undefined

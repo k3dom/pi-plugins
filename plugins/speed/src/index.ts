@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
-import { setStatuslineSegment } from '@pi-plugins/shared/statusline'
+import * as Statusline from '@pi-plugins/shared/statusline'
 import { recentText, streamingText } from './render'
 import { createSpeedTracker, type FirstToken } from './service'
 
@@ -17,7 +17,7 @@ export default function speed(pi: ExtensionAPI) {
       firstToken === undefined
         ? recentText(recent)
         : streamingText(recent, firstToken)
-    setStatuslineSegment(
+    Statusline.setSegment(
       ctx,
       SEGMENT_KEY,
       text === undefined ? undefined : { text, align: 'left' },

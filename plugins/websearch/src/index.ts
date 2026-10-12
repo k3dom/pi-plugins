@@ -1,7 +1,7 @@
 import type { ExtensionAPI, TruncationResult } from '@earendil-works/pi-coding-agent'
 import { truncateHead } from '@earendil-works/pi-coding-agent'
-import { runTool } from '@pi-plugins/shared/run'
-import { ExpandableText, formatTruncationNotice } from '@pi-plugins/shared/ui'
+import * as Run from '@pi-plugins/shared/run'
+import * as Ui from '@pi-plugins/shared/ui'
 import { Array, DateTime, Duration, Effect, flow, Number } from 'effect'
 import { Type, type Static } from 'typebox'
 import { type SearchResult, WebSearch } from './search'
@@ -70,7 +70,7 @@ export default function webSearch(pi: ExtensionAPI) {
         })
       }).pipe(Effect.provide(Tavily.layer))
 
-      const results = await runTool(program, { signal })
+      const results = await Run.tool(program, { signal })
       const truncation = truncateHead(
         Array.match(results, {
           onEmpty: () => `No results found for "${params.query}".`,
@@ -101,9 +101,7 @@ export default function webSearch(pi: ExtensionAPI) {
         content: [
           {
             type: 'text' as const,
-            text: truncation.truncated
-              ? `${truncation.content}\n\n${formatTruncationNotice(truncation)}`
-              : truncation.content,
+            text: Ui.truncatedText(truncation),
           },
         ],
         details: {
@@ -120,7 +118,7 @@ export default function webSearch(pi: ExtensionAPI) {
         `(${count} ${count === 1 ? 'result' : 'results'})`,
       )}`
 
-      return new ExpandableText({
+      return new Ui.ExpandableText({
         header,
         content: details.truncation.content,
         maxLines: PREVIEW_LINES,

@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
-import { loadExtensionConfig } from '@pi-plugins/shared/config'
-import { setStatuslineSegment } from '@pi-plugins/shared/statusline'
+import * as ExtensionConfig from '@pi-plugins/shared/config'
+import * as Statusline from '@pi-plugins/shared/statusline'
 import {
   Array,
   Data,
@@ -111,7 +111,7 @@ export default function fastMode(pi: ExtensionAPI) {
       enabled &&
       Eligibility.$is('Eligible')(checkEligibility(ctx.model))
 
-    setStatuslineSegment(
+    Statusline.setSegment(
       ctx,
       SEGMENT_KEY,
       active ? { text: SEGMENT_LABEL, align: 'right' } : undefined,
@@ -135,7 +135,7 @@ export default function fastMode(pi: ExtensionAPI) {
   }
 
   pi.on('session_start', async (_event, ctx) => {
-    config = await loadExtensionConfig(ctx, FastModeConfig, EXTENSION_ID, config)
+    config = await ExtensionConfig.load(ctx, FastModeConfig, EXTENSION_ID, config)
     enabled = pi.getFlag('fast') === true || config.enabled
     updateStatus(ctx)
   })

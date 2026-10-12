@@ -4,7 +4,7 @@ import type {
   SessionEntry,
 } from '@earendil-works/pi-coding-agent'
 import * as NodeServices from '@effect/platform-node/NodeServices'
-import { runHandler } from '@pi-plugins/shared/run'
+import * as Run from '@pi-plugins/shared/run'
 import { Array, Effect, Option, pipe, Schema } from 'effect'
 import { Snapshotter, SnapshotterError } from './snapshot'
 
@@ -51,7 +51,7 @@ export default function checkpoint(pi: ExtensionAPI) {
   let snapshotter: Snapshotter['Service'] | undefined
 
   pi.on('session_start', async (_event, ctx) => {
-    snapshotter = await runHandler(
+    snapshotter = await Run.handler(
       Snapshotter.make(ctx.cwd).pipe(
         Effect.provide(NodeServices.layer),
         Effect.catchIf(
@@ -75,7 +75,7 @@ export default function checkpoint(pi: ExtensionAPI) {
     if (!snapshotter) {
       return
     }
-    const tree = await runHandler(snapshotter.track())
+    const tree = await Run.handler(snapshotter.track())
     if (!tree) {
       return
     }
@@ -106,7 +106,7 @@ export default function checkpoint(pi: ExtensionAPI) {
         return undefined
       }
 
-      await runHandler(
+      await Run.handler(
         snapshotter.cleanup().pipe(
           Effect.tap((tree) =>
             Effect.sync(() => {
@@ -146,7 +146,7 @@ export default function checkpoint(pi: ExtensionAPI) {
       return undefined
     }
 
-    const current = await runHandler(snapshotter.track())
+    const current = await Run.handler(snapshotter.track())
     if (!current || current === target) {
       return undefined
     }
@@ -165,7 +165,7 @@ export default function checkpoint(pi: ExtensionAPI) {
       pi.appendEntry(CHECKPOINT_TYPE, { tree: current })
     }
 
-    return runHandler(
+    return Run.handler(
       snapshotter.restore(target).pipe(
         Effect.map(() => {
           ctx.ui.notify('Files restored to the selected point', 'info')

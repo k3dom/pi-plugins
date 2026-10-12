@@ -1,8 +1,13 @@
-import { Cause, Effect, Exit, Inspectable } from 'effect'
-
-export interface RunOptions {
-  readonly signal?: AbortSignal | undefined
-}
+import {
+  Array,
+  Cause,
+  Effect,
+  Exit,
+  Inspectable,
+  Option,
+  pipe,
+  Predicate,
+} from 'effect'
 
 function causeMessage(cause: Cause.Cause<unknown>): string {
   if (Cause.hasInterruptsOnly(cause)) {
@@ -12,21 +17,23 @@ function causeMessage(cause: Cause.Cause<unknown>): string {
   if (Cause.hasDies(cause)) {
     return Cause.pretty(cause)
   }
-  return cause.reasons
-    .filter(Cause.isFailReason)
-    .map(({ error }) => {
+  return pipe(
+    cause.reasons,
+    Array.filter(Cause.isFailReason),
+    Array.map(({ error }) => {
       if (error instanceof Error) {
         return error.message || error.name
       }
-      return typeof error === 'string' ? error : Inspectable.toStringUnknown(error)
-    })
-    .join('\n')
+      return Predicate.isString(error) ? error : Inspectable.toStringUnknown(error)
+    }),
+    Array.join('\n'),
+  )
 }
 
 /** The rejection message is what the model reads back as the tool result. */
-export async function runTool<A, E>(
+export async function tool<A, E>(
   effect: Effect.Effect<A, E>,
-  options?: RunOptions,
+  options?: { readonly signal?: AbortSignal | undefined },
 ): Promise<A> {
   const exit = await Effect.runPromiseExit(effect, options)
   if (Exit.isFailure(exit)) {
@@ -35,13 +42,9 @@ export async function runTool<A, E>(
   return exit.value
 }
 
-export interface RunHandlerOptions<B> {
-  readonly onError?: (message: string) => B
-}
-
-export async function runHandler<A, E, B = undefined>(
+export async function handler<A, E, B = undefined>(
   effect: Effect.Effect<A, E>,
-  options?: RunHandlerOptions<B>,
+  options?: { readonly onError?: (message: string) => B },
 ): Promise<A | B> {
   const exit = await Effect.runPromiseExit(effect)
   if (Exit.isSuccess(exit)) {
@@ -50,9 +53,9 @@ export async function runHandler<A, E, B = undefined>(
   if (options?.onError) {
     return options.onError(causeMessage(exit.cause))
   }
-  const die = exit.cause.reasons.find(Cause.isDieReason)
-  if (die !== undefined) {
-    throw die.defect
+  const die = Array.findFirst(exit.cause.reasons, Cause.isDieReason)
+  if (Option.isSome(die)) {
+    throw die.value.defect
   }
   return undefined as B
 }

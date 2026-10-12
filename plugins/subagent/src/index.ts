@@ -3,8 +3,8 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 import * as NodeServices from '@effect/platform-node/NodeServices'
-import { runTool } from '@pi-plugins/shared/run'
-import { ExpandableText, TextPreview } from '@pi-plugins/shared/ui'
+import * as Run from '@pi-plugins/shared/run'
+import * as Ui from '@pi-plugins/shared/ui'
 import { Effect } from 'effect'
 import { Type, type Static } from 'typebox'
 import { emptyResult, runSubagent, type SubagentResult } from './runner'
@@ -187,7 +187,7 @@ export default function subagent(pi: ExtensionAPI) {
         Effect.provide(NodeServices.layer),
       )
 
-      return await runTool(program, { signal })
+      return await Run.tool(program, { signal })
     },
     renderCall(args, theme, { expanded }) {
       const title = new Text(
@@ -200,7 +200,7 @@ export default function subagent(pi: ExtensionAPI) {
         return title
       }
 
-      const preview = new TextPreview({
+      const preview = new Ui.TextPreview({
         text: args.prompt,
         maxLines: PROMPT_PREVIEW_LINES,
         expanded,
@@ -256,7 +256,7 @@ export default function subagent(pi: ExtensionAPI) {
         header += `\n${theme.fg('error', `Error: ${details.errorMessage}`)}`
       }
 
-      return new ExpandableText({
+      return new Ui.ExpandableText({
         header,
         content: expanded ? content : capToolOutput(content),
         maxLines: OUTPUT_PREVIEW_LINES,

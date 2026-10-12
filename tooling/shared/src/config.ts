@@ -2,9 +2,9 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import { Effect, FileSystem, Path, PlatformError, Schema } from 'effect'
-import { runHandler } from './run'
+import * as Run from './run'
 
-export const loadExtensionConfig = Effect.fnUntraced(
+export const load = Effect.fnUntraced(
   function* <S extends Schema.Codec<unknown>>(
     _ctx: ExtensionContext,
     schema: S,
@@ -17,17 +17,16 @@ export const loadExtensionConfig = Effect.fnUntraced(
   > {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
-    const file = path.join(getAgentDir(), 'extensions', `${name}.json`)
-    const contents = yield* fs.readFileString(file)
+    const contents = yield* fs.readFileString(
+      path.join(getAgentDir(), 'extensions', `${name}.json`),
+    )
     return yield* Schema.decodeEffect(Schema.fromJsonString(schema))(contents)
   },
-  (load, ctx, _schema, name, defaults) =>
-    runHandler(
-      load.pipe(
-        Effect.catchIf(
-          (error) =>
-            error._tag === 'PlatformError' && error.reason._tag === 'NotFound',
-          () => Effect.succeed(defaults),
+  (effect, ctx, _schema, name, defaults) =>
+    Run.handler(
+      effect.pipe(
+        Effect.catchReason('PlatformError', 'NotFound', () =>
+          Effect.succeed(defaults),
         ),
         Effect.provide(NodeServices.layer),
       ),

@@ -1,12 +1,9 @@
 import { truncateHead } from '@earendil-works/pi-coding-agent'
-import { formatTruncationNotice } from '@pi-plugins/shared/ui'
+import * as Ui from '@pi-plugins/shared/ui'
 import type { SubagentResult } from './runner'
 
 export function capToolOutput(text: string): string {
-  const truncation = truncateHead(text)
-  return truncation.truncated
-    ? `${truncation.content}\n\n${formatTruncationNotice(truncation)}`
-    : truncation.content
+  return Ui.truncatedText(truncateHead(text))
 }
 
 function formatTokens(count: number): string {
