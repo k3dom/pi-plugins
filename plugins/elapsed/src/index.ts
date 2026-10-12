@@ -1,36 +1,27 @@
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import { Clock, Duration, Effect, Fiber, Schedule, String } from 'effect'
 
-// pi's own default working message, so the clock reads as an extension of it.
-const WORKING_LABEL = 'Working...'
-const TICK_MS = 1000
+function formatElapsed(duration: Duration.Duration): string {
+  const { days, hours, minutes, seconds } = Duration.parts(duration)
+  const pad = String.padStart(2, '0')
 
-function pad(value: number): string {
-  return value.toString().padStart(2, '0')
-}
-
-export function formatElapsed(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000)
-  const seconds = totalSeconds % 60
-  const minutes = Math.floor(totalSeconds / 60) % 60
-  const hours = Math.floor(totalSeconds / 3600)
-
-  if (hours > 0) {
-    return `${hours}h ${pad(minutes)}m ${pad(seconds)}s`
+  if (days > 0 || hours > 0) {
+    return `${days * 24 + hours}h ${pad(`${minutes}`)}m ${pad(`${seconds}`)}s`
   }
   if (minutes > 0) {
-    return `${minutes}m ${pad(seconds)}s`
+    return `${minutes}m ${pad(`${seconds}`)}s`
   }
   return `${seconds}s`
 }
 
 export default function elapsed(pi: ExtensionAPI) {
-  let ticker: NodeJS.Timeout | undefined
+  let ticker: Fiber.Fiber<void> | undefined
 
   function stop(ctx: ExtensionContext): void {
     if (ticker === undefined) {
       return
     }
-    clearInterval(ticker)
+    Effect.runFork(Fiber.interrupt(ticker))
     ticker = undefined
     ctx.ui.setWorkingMessage()
   }
@@ -41,16 +32,18 @@ export default function elapsed(pi: ExtensionAPI) {
     }
     stop(ctx)
 
-    const startedAt = performance.now()
-    const show = () => {
-      ctx.ui.setWorkingMessage(
-        `${WORKING_LABEL} ${formatElapsed(performance.now() - startedAt)}`,
-      )
-    }
-
-    show()
-    ticker = setInterval(show, TICK_MS)
-    ticker.unref()
+    ticker = Effect.runFork(
+      Effect.gen(function* () {
+        const startedAt = yield* Clock.monotonicTimeNanos
+        yield* Effect.gen(function* () {
+          const now = yield* Clock.monotonicTimeNanos
+          // pi's own default working message, so the clock reads as an extension of it.
+          ctx.ui.setWorkingMessage(
+            `Working... ${formatElapsed(Duration.nanos(now - startedAt))}`,
+          )
+        }).pipe(Effect.repeat(Schedule.spaced('1 second')))
+      }),
+    )
   })
 
   pi.on('agent_end', (_event, ctx) => {
