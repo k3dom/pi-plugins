@@ -1,110 +1,95 @@
-import { Array } from 'effect'
-import type { ClaudeUsage, UsageWindow } from './provider/anthropic'
-import type { CodexUsage } from './provider/openai'
-import { glmRateLimits, type GlmUsage } from './provider/zai'
-import { codexResetsAt, formatCompactDuration, parseResetsAt } from './reset'
+import {
+  Array,
+  DateTime,
+  Duration,
+  Match,
+  Number,
+  Option,
+  pipe,
+  Predicate,
+} from 'effect'
+import * as Bar from './bar'
+import type * as Anthropic from './provider/anthropic'
+import * as OpenAI from './provider/openai'
+import * as Zai from './provider/zai'
 
-export interface WidgetLimit {
+export interface Limit {
   readonly label: string
   readonly percent: number
-  readonly resetsAt?: Date | null | undefined
+  readonly resetsAt?: DateTime.Utc | null | undefined
 }
 
-const BAR_WIDTH = 5
-
-export function widgetText(
-  limits: readonly WidgetLimit[] | undefined,
-  now: Date,
-): string | undefined {
-  if (limits === undefined || limits.length === 0) {
-    return undefined
-  }
-  return limits
-    .map((limit) => {
-      const clamped = Math.min(Math.max(limit.percent, 0), 100)
-      const filled = Math.round((clamped / 100) * BAR_WIDTH)
-      const bar = `${'█'.repeat(filled)}${'░'.repeat(BAR_WIDTH - filled)}`
-      const text = `${limit.label} ${bar} ${Math.round(limit.percent)}%`
+export function text(limits: ReadonlyArray<Limit>, now: DateTime.Utc): string {
+  return pipe(
+    limits,
+    Array.map((limit) => {
+      const usage = `${limit.label} ${Bar.render(limit.percent, 5)} ${Math.round(limit.percent)}%`
       if (!limit.resetsAt) {
-        return text
+        return usage
       }
-      const delta = limit.resetsAt.getTime() - now.getTime()
-      return `${text} (${delta > 0 ? formatCompactDuration(delta) : 'now'})`
-    })
-    .join(' · ')
+      const delta = DateTime.distance(now, limit.resetsAt)
+      return `${usage} (${Duration.isPositive(delta) ? formatDuration(delta) : 'now'})`
+    }),
+    Array.join(' · '),
+  )
 }
 
-export function claudeWidgetLimits(usage: ClaudeUsage): WidgetLimit[] {
+function formatDuration(duration: Duration.Duration): string {
+  return Match.value(Duration.parts(duration)).pipe(
+    Match.when({ days: Number.isGreaterThan(0) }, ({ days }) => `${days}d`),
+    Match.when(
+      { hours: Number.isGreaterThan(0) },
+      ({ hours, minutes }) => `${hours}h${minutes}m`,
+    ),
+    Match.orElse(({ minutes }) => `${Number.max(minutes, 1)}m`),
+  )
+}
+
+export function claudeLimits(usage: Anthropic.Usage): Limit[] {
   const limits = usage.limits ?? []
-  if (limits.length > 0) {
-    return limits.flatMap((limit) => {
-      const label =
-        limit.kind === 'session'
-          ? '5h'
-          : limit.kind === 'weekly_all'
-            ? 'wk'
-            : undefined
-      return label !== undefined && typeof limit.percent === 'number'
-        ? [
-            {
-              label,
-              percent: limit.percent,
-              resetsAt: parseResetsAt(limit.resets_at),
-            },
-          ]
+  if (Array.isReadonlyArrayNonEmpty(limits)) {
+    return Array.flatMap(limits, (limit) => {
+      const label = Match.value(limit.kind).pipe(
+        Match.when('session', () => '5h'),
+        Match.when('weekly_all', () => 'wk'),
+        Match.option,
+      )
+      return Option.isSome(label) && Predicate.isNumber(limit.percent)
+        ? [{ label: label.value, percent: limit.percent, resetsAt: limit.resets_at }]
         : []
     })
   }
 
-  const windows: [string, UsageWindow | null | undefined][] = [
-    ['5h', usage.five_hour],
-    ['wk', usage.seven_day],
-  ]
-  return windows.flatMap(([label, window]) =>
-    typeof window?.utilization === 'number'
-      ? [
-          {
-            label,
-            percent: window.utilization,
-            resetsAt: parseResetsAt(window.resets_at),
-          },
-        ]
-      : [],
+  return Array.flatMap(
+    [
+      ['5h', usage.five_hour],
+      ['wk', usage.seven_day],
+    ] as const,
+    ([label, window]) =>
+      Predicate.isNumber(window?.utilization)
+        ? [{ label, percent: window.utilization, resetsAt: window.resets_at }]
+        : [],
   )
 }
 
-function codexWindowLabel(seconds: number | null | undefined): string {
-  if (typeof seconds !== 'number' || seconds <= 0) {
-    return '?'
-  }
-  if (seconds >= 604_800 * 0.9) {
-    return 'wk'
-  }
-  if (seconds >= 86_400) {
-    return `${Math.round(seconds / 86_400)}d`
-  }
-  return `${Math.round(seconds / 3600)}h`
-}
-
-export function codexWidgetLimits(usage: CodexUsage, now: Date): WidgetLimit[] {
-  const details = usage.rate_limit
-  return [details?.primary_window, details?.secondary_window].flatMap((window) =>
-    window
-      ? [
-          {
-            label: codexWindowLabel(window.limit_window_seconds),
-            percent: window.used_percent,
-            resetsAt: codexResetsAt(window, now),
-          },
-        ]
-      : [],
+export function codexLimits(usage: OpenAI.Usage, now: DateTime.Utc): Limit[] {
+  return pipe(
+    [usage.rate_limit?.primary_window, usage.rate_limit?.secondary_window],
+    Array.filter(Predicate.isNotNullish),
+    Array.map((window) => ({
+      label: OpenAI.windowName(window, { unknown: '?', week: 'wk' }),
+      percent: window.used_percent,
+      resetsAt: Option.getOrUndefined(OpenAI.resetsAt(window, now)),
+    })),
   )
 }
 
-export function glmWidgetLimits(usage: GlmUsage): WidgetLimit[] {
-  return Array.zip(['5h', 'wk'], glmRateLimits(usage)).flatMap(([label, limit]) =>
-    typeof limit.percentage === 'number'
-      ? [{ label, percent: limit.percentage, resetsAt: limit.nextResetTime }]
-      : [],
+export function glmLimits(usage: Zai.Usage): Limit[] {
+  return Array.flatMap(
+    Array.zip(['5h', 'wk'], Zai.rateLimits(usage)),
+    ([label, limit]) =>
+      Predicate.isNumber(limit.percentage)
+        ? [{ label, percent: limit.percentage, resetsAt: limit.nextResetTime }]
+        : [],
   )
 }

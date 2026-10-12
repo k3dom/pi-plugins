@@ -3,90 +3,74 @@ import { Text } from '@earendil-works/pi-tui'
 import * as ExtensionConfig from '@pi-plugins/shared/config'
 import * as Run from '@pi-plugins/shared/run'
 import * as Statusline from '@pi-plugins/shared/statusline'
-import { Effect, Record, Schema } from 'effect'
-import { ZAI_BASE_URL, type ZaiProvider } from './provider/zai'
-import {
-  claudeSection,
-  codexSection,
-  glmSection,
-  renderReport,
-  type UsageReport,
-  type UsageSection,
-} from './render'
-import { UsageService, type UsageServiceError } from './service'
-import {
-  claudeWidgetLimits,
-  codexWidgetLimits,
-  glmWidgetLimits,
-  widgetText,
-  type WidgetLimit,
-} from './widget'
+import { Array, DateTime, Effect, Match, Option, pipe, Record, Schema } from 'effect'
+import * as Zai from './provider/zai'
+import * as Report from './report'
+import * as UsageService from './usage-service'
+import * as Widget from './widget'
 
 const EXTENSION_ID = 'usage'
 const REPORT_ENTRY_TYPE = 'usage-report'
-const WIDGET_REFRESH_MS = 30_000
 
 const UsageConfig = Schema.Struct({
   showWidget: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 })
 
-type WidgetProvider = 'claude' | 'codex' | ZaiProvider
+type WidgetProvider = 'claude' | 'codex' | Zai.Provider
 
 function widgetProvider(
   model: ExtensionContext['model'],
-): WidgetProvider | undefined {
-  switch (model?.provider) {
-    case 'anthropic':
-      return 'claude'
-    case 'openai-codex':
-      return 'codex'
-    case 'zai':
-    case 'zai-coding-cn':
-      return model.provider
-    default:
-      return undefined
-  }
+): Option.Option<WidgetProvider> {
+  return Match.value(model?.provider).pipe(
+    Match.when('anthropic', (): WidgetProvider => 'claude'),
+    Match.when('openai-codex', (): WidgetProvider => 'codex'),
+    Match.whenOr('zai', 'zai-coding-cn', (provider) => provider),
+    Match.option,
+  )
 }
 
 function section<A>(
   title: string,
-  fetch: Effect.Effect<A, UsageServiceError>,
-  toSection: (usage: A) => UsageSection,
-): Effect.Effect<UsageSection> {
+  fetch: Effect.Effect<A, UsageService.UsageServiceError>,
+  toSection: (usage: A) => Report.Section,
+): Effect.Effect<Report.Section> {
   return fetch.pipe(
     Effect.map(toSection),
-    Effect.catch((error) => Effect.succeed({ title, error: error.message })),
+    Effect.catchTag('UsageServiceError', (error) =>
+      Effect.succeed({ title, error: error.message }),
+    ),
   )
 }
 
 export default function usage(pi: ExtensionAPI): void {
   let config = Schema.decodeUnknownSync(UsageConfig)({})
-  const limitsCache = new Map<WidgetProvider, readonly WidgetLimit[]>()
-  const fetchedAt = new Map<WidgetProvider, number>()
+  const limitsCache = new Map<WidgetProvider, readonly Widget.Limit[]>()
+  const fetchedAt = new Map<WidgetProvider, DateTime.Utc>()
   const inFlight = new Set<WidgetProvider>()
 
-  function recordLimits(
+  const recordLimits = Effect.fnUntraced(function* (
     provider: WidgetProvider,
-    limits: readonly WidgetLimit[],
-  ): void {
+    limits: readonly Widget.Limit[],
+  ) {
     limitsCache.set(provider, limits)
-    fetchedAt.set(provider, Date.now())
-  }
+    fetchedAt.set(provider, yield* DateTime.now)
+  })
 
   function renderWidget(ctx: ExtensionContext): void {
     if (!ctx.hasUI) {
       return
     }
-    const provider = config.showWidget ? widgetProvider(ctx.model) : undefined
-    const text =
-      provider === undefined
-        ? undefined
-        : widgetText(limitsCache.get(provider), new Date())
-    Statusline.setSegment(
-      ctx,
-      EXTENSION_ID,
-      text === undefined ? undefined : { text, align: 'right' },
+    const segment = pipe(
+      widgetProvider(ctx.model),
+      Option.filter(() => config.showWidget),
+      Option.flatMapNullishOr((provider) => limitsCache.get(provider)),
+      Option.filter(Array.isReadonlyArrayNonEmpty),
+      Option.map((limits): Statusline.Segment => ({
+        text: Widget.text(limits, DateTime.nowUnsafe()),
+        align: 'right',
+      })),
     )
+    Statusline.setSegment(ctx, EXTENSION_ID, Option.getOrUndefined(segment))
   }
 
   async function refreshWidget(ctx: ExtensionContext): Promise<void> {
@@ -95,33 +79,42 @@ export default function usage(pi: ExtensionAPI): void {
       return
     }
 
-    const provider = widgetProvider(ctx.model)
+    const provider = Option.getOrUndefined(widgetProvider(ctx.model))
     if (provider === undefined || inFlight.has(provider)) {
       return
     }
     const last = fetchedAt.get(provider)
-    if (last !== undefined && Date.now() - last < WIDGET_REFRESH_MS) {
+    if (
+      last !== undefined &&
+      DateTime.isLessThan(
+        DateTime.nowUnsafe(),
+        DateTime.addDuration(last, '30 seconds'),
+      )
+    ) {
       return
     }
 
     inFlight.add(provider)
     const program = Effect.gen(function* () {
-      const service = yield* UsageService
-      return provider === 'claude'
-        ? claudeWidgetLimits((yield* service.claude()).usage)
-        : provider === 'codex'
-          ? codexWidgetLimits(yield* service.codex(), new Date())
-          : glmWidgetLimits(yield* service.glm(provider))
+      const service = yield* UsageService.UsageService
+      switch (provider) {
+        case 'claude':
+          return Widget.claudeLimits((yield* service.claude()).usage)
+        case 'codex':
+          return Widget.codexLimits(yield* service.codex(), yield* DateTime.now)
+        default:
+          return Widget.glmLimits(yield* service.glm(provider))
+      }
     }).pipe(Effect.provide(UsageService.layer(ctx.modelRegistry)))
 
-    let limits: WidgetLimit[] | undefined
+    let limits: Widget.Limit[] | undefined
     try {
       limits = await Run.handler(program)
     } finally {
       inFlight.delete(provider)
       // Stamped on failure too, so a broken provider (e.g. not logged in) is not
       // re-queried on every event.
-      fetchedAt.set(provider, Date.now())
+      fetchedAt.set(provider, DateTime.nowUnsafe())
     }
     if (limits !== undefined) {
       limitsCache.set(provider, limits)
@@ -143,24 +136,27 @@ export default function usage(pi: ExtensionAPI): void {
     await refreshWidget(ctx)
   })
 
-  pi.registerEntryRenderer<UsageReport>(
-    REPORT_ENTRY_TYPE,
-    (entry, _options, theme) =>
-      entry.data === undefined
-        ? undefined
-        : new Text(renderReport(entry.data, theme), 1, 0),
+  pi.registerEntryRenderer(REPORT_ENTRY_TYPE, (entry, _options, theme) =>
+    pipe(
+      Schema.decodeUnknownOption(Report.Report)(entry.data),
+      Option.map((report) => new Text(Report.render(report, theme), 1, 0)),
+      Option.getOrUndefined,
+    ),
   )
 
   pi.registerCommand('usage', {
     description: 'Show subscription plan usage and rate limits',
     handler: async (_args, ctx) => {
-      const now = new Date()
-      const glmProvider =
-        Record.keys(ZAI_BASE_URL).find(
+      const glmProvider = pipe(
+        Record.keys(Zai.BASE_URL),
+        Array.findFirst(
           (id) => ctx.modelRegistry.getProviderAuthStatus(id).configured,
-        ) ?? 'zai'
+        ),
+        Option.getOrElse((): Zai.Provider => 'zai'),
+      )
       const program = Effect.gen(function* () {
-        const service = yield* UsageService
+        const service = yield* UsageService.UsageService
+        const now = yield* DateTime.now
         const sections = yield* Effect.all(
           [
             section(
@@ -169,12 +165,10 @@ export default function usage(pi: ExtensionAPI): void {
                 .claude()
                 .pipe(
                   Effect.tap((data) =>
-                    Effect.sync(() =>
-                      recordLimits('claude', claudeWidgetLimits(data.usage)),
-                    ),
+                    recordLimits('claude', Widget.claudeLimits(data.usage)),
                   ),
                 ),
-              claudeSection,
+              Report.claudeSection,
             ),
             section(
               'OpenAI Codex',
@@ -182,12 +176,10 @@ export default function usage(pi: ExtensionAPI): void {
                 .codex()
                 .pipe(
                   Effect.tap((data) =>
-                    Effect.sync(() =>
-                      recordLimits('codex', codexWidgetLimits(data, now)),
-                    ),
+                    recordLimits('codex', Widget.codexLimits(data, now)),
                   ),
                 ),
-              (data) => codexSection(data, now),
+              (data) => Report.codexSection(data, now),
             ),
             section(
               'GLM Coding',
@@ -195,17 +187,18 @@ export default function usage(pi: ExtensionAPI): void {
                 .glm(glmProvider)
                 .pipe(
                   Effect.tap((data) =>
-                    Effect.sync(() =>
-                      recordLimits(glmProvider, glmWidgetLimits(data)),
-                    ),
+                    recordLimits(glmProvider, Widget.glmLimits(data)),
                   ),
                 ),
-              glmSection,
+              Report.glmSection,
             ),
           ],
           { concurrency: 'unbounded' },
         )
-        return { fetchedAt: now.getTime(), sections } satisfies UsageReport
+        return yield* Schema.encodeEffect(Report.Report)({
+          fetchedAt: now,
+          sections,
+        }).pipe(Effect.orDie)
       }).pipe(Effect.provide(UsageService.layer(ctx.modelRegistry)))
 
       const report = await Run.handler(program, {
