@@ -1,4 +1,3 @@
-import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import {
   Array,
   Context,
@@ -68,7 +67,7 @@ export class SnapshotterError extends Schema.TaggedError<SnapshotterError>()(
 export class Snapshotter extends Context.Service<Snapshotter>()(
   '@pi-plugins/checkpoint/Snapshotter',
   {
-    make: Effect.fnUntraced(function* (cwd: string) {
+    make: Effect.fnUntraced(function* (cwd: string, agentDir: string) {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
       const crypto = yield* Crypto.Crypto
@@ -82,10 +81,15 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
               forceKillAfter: '5 seconds',
             }),
           )
-          const stderrFiber = yield* Effect.forkScoped(
-            Stream.mkString(Stream.decodeText(handle.stderr)),
+          const stderrFiber = yield* handle.stderr.pipe(
+            Stream.decodeText,
+            Stream.mkString,
+            Effect.forkScoped,
           )
-          const stdout = yield* Stream.mkString(Stream.decodeText(handle.stdout))
+          const stdout = yield* handle.stdout.pipe(
+            Stream.decodeText,
+            Stream.mkString,
+          )
           const exitCode = yield* handle.exitCode
           const stderr = yield* Fiber.join(stderrFiber)
 
@@ -125,7 +129,7 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
         new TextEncoder().encode(worktree),
       )
       const gitdir = path.join(
-        getAgentDir(),
+        agentDir,
         'checkpoints',
         String.takeLeft(Encoding.encodeHex(digest), 16),
       )
@@ -177,7 +181,7 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
 
         yield* Effect.forEach(
           Array.difference(before, after),
-          (file) => Effect.ignore(fs.remove(path.join(worktree, file))),
+          (file) => fs.remove(path.join(worktree, file)).pipe(Effect.ignore),
           { discard: true, concurrency: 'unbounded' },
         )
       })

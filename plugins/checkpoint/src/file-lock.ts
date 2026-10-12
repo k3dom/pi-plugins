@@ -37,7 +37,7 @@ export const make = Effect.fnUntraced(function* (lockPath: string) {
   }, Effect.ignore)
 
   const acquire = Effect.acquireRelease(fs.makeDirectory(lockPath), () =>
-    Effect.ignore(fs.remove(lockPath, { recursive: true })),
+    fs.remove(lockPath, { recursive: true }).pipe(Effect.ignore),
   ).pipe(
     Effect.tapError((error) =>
       error.reason._tag === 'AlreadyExists' ? breakIfStale() : Effect.void,
@@ -60,7 +60,7 @@ export const make = Effect.fnUntraced(function* (lockPath: string) {
     Effect.scopedWith(
       Effect.fnUntraced(function* (scope: Scope.Scope) {
         yield* acquire.pipe(Scope.provide(scope))
-        yield* Effect.forkScoped(heartbeat).pipe(Scope.provide(scope))
+        yield* heartbeat.pipe(Effect.forkScoped, Scope.provide(scope))
         return yield* self
       }),
     )

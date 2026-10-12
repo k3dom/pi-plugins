@@ -3,6 +3,7 @@ import type {
   ExtensionContext,
   SessionEntry,
 } from '@earendil-works/pi-coding-agent'
+import { getAgentDir } from '@earendil-works/pi-coding-agent'
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import * as Run from '@pi-plugins/shared/run'
 import { Array, Effect, Option, pipe, Schema } from 'effect'
@@ -28,7 +29,7 @@ export default function checkpoint(pi: ExtensionAPI) {
 
   pi.on('session_start', async (_event, ctx) => {
     snapshotter = await Run.handler(
-      Snapshotter.Snapshotter.make(ctx.cwd).pipe(
+      Snapshotter.Snapshotter.make(ctx.cwd, getAgentDir()).pipe(
         Effect.provide(NodeServices.layer),
         Effect.catchReason(
           'SnapshotterError',

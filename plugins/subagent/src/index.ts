@@ -89,17 +89,15 @@ function formatTokens(count: number): string {
 }
 
 function formatDuration(duration: Duration.Duration): string {
-  const totalSeconds = Math.round(Duration.toSeconds(duration))
-  if (totalSeconds < 60) {
-    return `${totalSeconds}s`
-  }
+  const { days, hours, minutes, seconds } = Duration.parts(
+    Duration.seconds(Math.round(Duration.toSeconds(duration))),
+  )
   const pad = String.padStart(2, '0')
-  const seconds = pad(`${totalSeconds % 60}`)
-  const minutes = Math.floor(totalSeconds / 60) % 60
-  const hours = Math.floor(totalSeconds / 3600)
-  return hours > 0
-    ? `${hours}h${pad(`${minutes}`)}m${seconds}s`
-    : `${minutes}m${seconds}s`
+  const totalHours = days * 24 + hours
+  if (totalHours > 0) {
+    return `${totalHours}h${pad(`${minutes}`)}m${pad(`${seconds}`)}s`
+  }
+  return minutes > 0 ? `${minutes}m${pad(`${seconds}`)}s` : `${seconds}s`
 }
 
 function ifPositive(

@@ -10,8 +10,8 @@ export interface Segment {
 const WIDGET_KEY = 'pi-plugins:statusline'
 
 // Each plugin bundles its own copy of this module, so `Symbol.for` on
-// `globalThis` gives them all the same registry inside one pi process. It stays a
-// native Map because those copies don't share Effect's data structures.
+// `globalThis` gives them all the same registry inside one pi process. A native
+// Map, since those copies don't share Effect's data structures.
 const REGISTRY_KEY = Symbol.for('@pi-plugins/statusline-registry')
 
 type Registry = Map<string, Segment>

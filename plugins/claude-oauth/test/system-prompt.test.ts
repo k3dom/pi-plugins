@@ -1,11 +1,6 @@
 import { assert, describe, it } from '@effect/vitest'
 import * as SystemPrompt from '../src/system-prompt'
-import {
-  CLAUDE_PREAMBLE,
-  NIX_INSTALL_ROOT,
-  PI_PREAMBLE,
-  piDocsSection,
-} from './helpers'
+import * as Helpers from './helpers'
 
 const CWD = '<cwd>\n/home/user/project\n</cwd>'
 
@@ -16,10 +11,12 @@ describe('sanitize', () => {
   ])(
     'removes the pi documentation section (%s) when the install path lacks pi-coding-agent',
     (_, frame) => {
-      const docs = frame(piDocsSection(NIX_INSTALL_ROOT))
-      const sanitized = SystemPrompt.sanitize(`${PI_PREAMBLE}\n\n${docs}\n\n${CWD}`)
+      const docs = frame(Helpers.piDocsSection(Helpers.NIX_INSTALL_ROOT))
+      const sanitized = SystemPrompt.sanitize(
+        `${Helpers.PI_PREAMBLE}\n\n${docs}\n\n${CWD}`,
+      )
 
-      assert.strictEqual(sanitized, `${CLAUDE_PREAMBLE}\n\n${CWD}`)
+      assert.strictEqual(sanitized, `${Helpers.CLAUDE_PREAMBLE}\n\n${CWD}`)
     },
   )
 

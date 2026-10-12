@@ -11,18 +11,12 @@ import { deepStrictEqual } from '@effect/vitest/utils'
 import { Schema } from 'effect'
 import * as Cch from '../src/cch'
 import * as ClaudeCode from '../src/claude-code'
-import {
-  CLAUDE_PREAMBLE,
-  NIX_INSTALL_ROOT,
-  PI_PREAMBLE,
-  cacheControls,
-  piDocsSection,
-} from './helpers'
+import * as Helpers from './helpers'
 
 const NATIVE_MODEL = getModel('anthropic', 'claude-fable-5-1')
 const COLLAPSED_MODEL = getModel('anthropic', 'claude-opus-4-6')
 
-const DOCS = `<docs>\n${piDocsSection(NIX_INSTALL_ROOT)}\n</docs>`
+const DOCS = `<docs>\n${Helpers.piDocsSection(Helpers.NIX_INSTALL_ROOT)}\n</docs>`
 const RULES_UPDATE = '<rules>\nUse pi carefully.\n</rules>'
 const SANITIZED_RULES_UPDATE = '<rules>\nUse Claude Code carefully.\n</rules>'
 
@@ -54,7 +48,7 @@ const context = (model: Model<'anthropic-messages'>): Context => ({
   messages: [
     {
       role: 'system',
-      content: PI_PREAMBLE,
+      content: Helpers.PI_PREAMBLE,
       sections: { docs: DOCS },
       toolsAdded: [tool('read')],
       timestamp: 0,
@@ -97,7 +91,7 @@ async function send(
     apiKey,
     fetch: Cch.wrapFetch(recording, ClaudeCode.headers()),
     onPayload: (payload) => {
-      originalCacheControls = structuredClone(cacheControls(payload))
+      originalCacheControls = structuredClone(Helpers.cacheControls(payload))
       return ClaudeCode.rewrite(payload)
     },
     maxRetries: 0,
@@ -143,7 +137,7 @@ describe('through the pi anthropic adapter', () => {
       body.system.slice(1).map((block) => block.text),
       [
         "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
-        CLAUDE_PREAMBLE,
+        Helpers.CLAUDE_PREAMBLE,
       ],
     )
     assert.strictEqual(
@@ -241,7 +235,7 @@ describe('through the pi anthropic adapter', () => {
       'sk-ant-api-test',
     )
 
-    assert.include(body.system[0]?.text ?? '', PI_PREAMBLE)
+    assert.include(body.system[0]?.text ?? '', Helpers.PI_PREAMBLE)
     assert.include(raw, 'Pi documentation')
     assert.notInclude(raw, 'x-anthropic-billing-header')
     assert.strictEqual(headers.get('x-api-key'), 'sk-ant-api-test')
@@ -257,7 +251,7 @@ describe('through the pi anthropic adapter', () => {
     assert.isFalse(body.messages.some((message) => message.role === 'system'))
     assert.strictEqual(
       body.system.at(-1)?.text,
-      `${CLAUDE_PREAMBLE}\n\n${SANITIZED_RULES_UPDATE}`,
+      `${Helpers.CLAUDE_PREAMBLE}\n\n${SANITIZED_RULES_UPDATE}`,
     )
   })
 
@@ -271,7 +265,7 @@ describe('through the pi anthropic adapter', () => {
       } else {
         assert.isNotEmpty(originalCacheControls)
       }
-      deepStrictEqual(cacheControls(body), originalCacheControls)
+      deepStrictEqual(Helpers.cacheControls(body), originalCacheControls)
     },
   )
 })

@@ -2,7 +2,7 @@ import { assert, describe, it } from '@effect/vitest'
 import { deepStrictEqual } from '@effect/vitest/utils'
 import { Schema } from 'effect'
 import * as ClaudeCode from '../src/claude-code'
-import { NIX_INSTALL_ROOT, piDocsSection } from './helpers'
+import * as Helpers from './helpers'
 
 const system = [
   {
@@ -51,7 +51,7 @@ describe('rewrite', () => {
   it('drops identity-only updates without altering conversation, tools or effort', () => {
     const docs = {
       type: 'text',
-      text: `Updated system prompt section "docs":\n\n<docs>\n${piDocsSection(NIX_INSTALL_ROOT)}\n</docs>`,
+      text: `Updated system prompt section "docs":\n\n<docs>\n${Helpers.piDocsSection(Helpers.NIX_INSTALL_ROOT)}\n</docs>`,
     }
     const toolChanges = [
       { type: 'tool_removal', tool: { type: 'tool_reference', name: 'Grep' } },

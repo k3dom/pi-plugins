@@ -14,6 +14,8 @@ import {
   String,
 } from 'effect'
 
+const EXTENSION_ID = 'fast-mode'
+
 const FastModeConfig = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   models: Schema.Array(Schema.String).pipe(
@@ -104,7 +106,7 @@ export default function fastMode(pi: ExtensionAPI) {
 
     Statusline.setSegment(
       ctx,
-      'fast-mode',
+      EXTENSION_ID,
       active ? { text: '[fast mode]', align: 'right' } : undefined,
     )
   }
@@ -129,7 +131,7 @@ export default function fastMode(pi: ExtensionAPI) {
   }
 
   pi.on('session_start', async (_event, ctx) => {
-    config = await ExtensionConfig.load(ctx, FastModeConfig, 'fast-mode', config)
+    config = await ExtensionConfig.load(ctx, FastModeConfig, EXTENSION_ID, config)
     enabled = pi.getFlag('fast') === true || config.enabled
     updateStatus(ctx)
   })
