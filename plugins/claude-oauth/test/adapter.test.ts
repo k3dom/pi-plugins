@@ -6,9 +6,11 @@ import type {
   Tool,
 } from '@earendil-works/pi-ai'
 import { getModel, streamSimple } from '@earendil-works/pi-ai/compat'
-import { describe, expect, test } from 'vitest'
-import { wrapFetchForCch } from '../src/cch'
-import { buildProviderHeaders, rewriteForClaudeCode } from '../src/request'
+import { assert, describe, it } from '@effect/vitest'
+import { deepStrictEqual } from '@effect/vitest/utils'
+import { Schema } from 'effect'
+import * as Cch from '../src/cch'
+import * as ClaudeCode from '../src/claude-code'
 import {
   CLAUDE_PREAMBLE,
   NIX_INSTALL_ROOT,
@@ -80,8 +82,35 @@ const sseResponse = () =>
     { status: 200, headers: { 'content-type': 'text/event-stream' } },
   )
 
-interface SentRequest {
-  body: {
+async function send(
+  model: Model<'anthropic-messages'>,
+  cacheRetention?: CacheRetention,
+  apiKey = 'sk-ant-oat01-test',
+) {
+  const calls: RequestInit[] = []
+  let originalCacheControls: unknown[] = []
+  const recording: typeof fetch = async (_input, init) => {
+    calls.push(init ?? {})
+    return sseResponse()
+  }
+  const message = await streamSimple(model, context(model), {
+    apiKey,
+    fetch: Cch.wrapFetch(recording, ClaudeCode.headers()),
+    onPayload: (payload) => {
+      originalCacheControls = structuredClone(cacheControls(payload))
+      return ClaudeCode.rewrite(payload)
+    },
+    maxRetries: 0,
+    reasoning: 'medium',
+    cacheRetention,
+    env: { PI_CACHE_RETENTION: 'short' },
+  }).result()
+
+  assert.strictEqual(message.stopReason, 'stop')
+  assert.lengthOf(calls, 1)
+  const init = calls[0]!
+  const raw = Buffer.from(init.body as Uint8Array).toString()
+  const body: {
     model: string
     max_tokens: number
     thinking?: unknown
@@ -93,42 +122,9 @@ interface SentRequest {
     messages: Array<{ role: string; content: unknown; output_config?: unknown }>
     tools?: Array<{ name: string; cache_control?: unknown }>
     metadata: { user_id: string }
-  }
-  headers: Headers
-  raw: string
-  originalCacheControls: unknown[]
-}
-
-async function send(
-  model: Model<'anthropic-messages'>,
-  cacheRetention?: CacheRetention,
-  apiKey = 'sk-ant-oat01-test',
-): Promise<SentRequest> {
-  const calls: RequestInit[] = []
-  let originalCacheControls: unknown[] = []
-  const recording: typeof fetch = async (_input, init) => {
-    calls.push(init ?? {})
-    return sseResponse()
-  }
-  const message = await streamSimple(model, context(model), {
-    apiKey,
-    fetch: wrapFetchForCch(recording, buildProviderHeaders()),
-    onPayload: (payload) => {
-      originalCacheControls = structuredClone(cacheControls(payload))
-      return rewriteForClaudeCode(payload)
-    },
-    maxRetries: 0,
-    reasoning: 'medium',
-    cacheRetention,
-    env: { PI_CACHE_RETENTION: 'short' },
-  }).result()
-
-  expect(message.stopReason).toBe('stop')
-  expect(calls).toHaveLength(1)
-  const init = calls[0]!
-  const raw = Buffer.from(init.body as Uint8Array).toString()
+  } = JSON.parse(raw)
   return {
-    body: JSON.parse(raw),
+    body,
     headers: new Headers(init.headers),
     raw,
     originalCacheControls,
@@ -136,30 +132,37 @@ async function send(
 }
 
 describe('through the pi anthropic adapter', () => {
-  test('matches the captured Claude Code 2.1.280 identity and headers', async () => {
+  it('matches the captured Claude Code 2.1.280 identity and headers', async () => {
     const { body, headers } = await send(NATIVE_MODEL)
 
-    expect(body.system[0]?.text).toMatch(
+    assert.match(
+      body.system[0]?.text ?? '',
       /^x-anthropic-billing-header: cc_version=2\.1\.280\.d7b; cc_entrypoint=local-agent; cch=[0-9a-f]{5}; cc_prompt_id=[0-9a-f-]{36}; cc_turn_origin=sdk;$/,
     )
-    expect(body.system.slice(1).map((block) => block.text)).toEqual([
-      "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
-      CLAUDE_PREAMBLE,
-    ])
-    expect(headers.get('user-agent')).toBe(
+    deepStrictEqual(
+      body.system.slice(1).map((block) => block.text),
+      [
+        "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+        CLAUDE_PREAMBLE,
+      ],
+    )
+    assert.strictEqual(
+      headers.get('user-agent'),
       'claude-cli/2.1.280 (external, local-agent, agent-sdk/0.3.280)',
     )
-    expect(headers.get('x-stainless-package-version')).toBe('0.112.1')
-    expect(headers.get('x-stainless-runtime-version')).toBe('v26.3.0')
-    expect(headers.get('x-stainless-timeout')).toBe('600')
-    expect(headers.get('authorization')).toBe('Bearer sk-ant-oat01-test')
+    assert.strictEqual(headers.get('x-stainless-package-version'), '0.112.1')
+    assert.strictEqual(headers.get('x-stainless-runtime-version'), 'v26.3.0')
+    assert.strictEqual(headers.get('x-stainless-timeout'), '600')
+    assert.strictEqual(headers.get('authorization'), 'Bearer sk-ant-oat01-test')
 
-    const identity = JSON.parse(body.metadata.user_id) as Record<string, string>
-    expect(identity['session_id']).toMatch(/^[0-9a-f-]{36}$/)
-    expect(headers.get('x-claude-code-session-id')).toBe(identity['session_id'])
+    const identity = Schema.decodeUnknownSync(
+      Schema.fromJsonString(Schema.Struct({ session_id: Schema.String })),
+    )(body.metadata.user_id)
+    assert.match(identity.session_id, /^[0-9a-f-]{36}$/)
+    assert.strictEqual(headers.get('x-claude-code-session-id'), identity.session_id)
   })
 
-  test('preserves native prompt updates, tools, thinking and model-specific options', async () => {
+  it('preserves native prompt updates, tools, thinking and model-specific options', async () => {
     const { body, headers } = await send({
       ...NATIVE_MODEL,
       maxTokens: 8192,
@@ -175,99 +178,100 @@ describe('through the pi anthropic adapter', () => {
       },
     })
 
-    expect(body.model).toBe('claude-fable-5-1')
-    expect(body.max_tokens).toBe(8192)
-    expect(body.thinking).toEqual({
+    assert.strictEqual(body.model, 'claude-fable-5-1')
+    assert.strictEqual(body.max_tokens, 8192)
+    deepStrictEqual(body.thinking, {
       type: 'adaptive',
       display: 'summarized',
       block_binding: { prefix_mismatch_behavior: 'drop_block' },
     })
-    expect(body.output_config).toEqual({ effort: 'high' })
-    expect(body.messages).toContainEqual({
+    deepStrictEqual(body.output_config, { effort: 'high' })
+    assert.deepInclude(body.messages, {
       role: 'system',
       content: [],
       output_config: { effort: 'medium' },
     })
-    expect(body.context_management).toEqual({
+    deepStrictEqual(body.context_management, {
       edits: [{ type: 'clear_thinking_20251015', keep: 'all' }],
     })
-    expect(body.diagnostics).toEqual({ previous_message_id: null })
-    expect(body.fallbacks).toEqual([{ model: 'claude-opus-5' }])
-    expect(headers.get('anthropic-beta')?.split(',')).toEqual(
-      expect.arrayContaining([
-        'oauth-2025-04-20',
-        'per-turn-control-2026-07-01',
-        'mid-conversation-tool-changes-2026-07-01',
-        'mid-conversation-system-clear-at-2026-08-21',
-        'thinking-binding-controls-2026-08-01',
-        'mid-conversation-output-config-2026-07-01',
-        'server-side-fallback-2026-07-01',
-      ]),
-    )
-    expect(headers.get('anthropic-beta')).not.toContain(
-      'server-side-fallback-2026-06-01',
-    )
-    expect(
+    deepStrictEqual(body.diagnostics, { previous_message_id: null })
+    deepStrictEqual(body.fallbacks, [{ model: 'claude-opus-5' }])
+    const betas = headers.get('anthropic-beta') ?? ''
+    assert.includeMembers(betas.split(','), [
+      'oauth-2025-04-20',
+      'per-turn-control-2026-07-01',
+      'mid-conversation-tool-changes-2026-07-01',
+      'mid-conversation-system-clear-at-2026-08-21',
+      'thinking-binding-controls-2026-08-01',
+      'mid-conversation-output-config-2026-07-01',
+      'server-side-fallback-2026-07-01',
+    ])
+    assert.notInclude(betas, 'server-side-fallback-2026-06-01')
+    deepStrictEqual(
       body.messages.filter(
         (message) =>
           message.role === 'system' &&
           Array.isArray(message.content) &&
           message.content.length > 0,
       ),
-    ).toEqual([
-      {
-        role: 'system',
-        content: [
-          {
-            type: 'text',
-            text: `Updated system prompt section "rules":\n\n${SANITIZED_RULES_UPDATE}`,
-          },
-          {
-            type: 'tool_addition',
-            tool: { type: 'tool_reference', name: 'Bash' },
-            cache_control: { type: 'ephemeral' },
-          },
-        ],
-      },
-    ])
-    expect(body.tools?.map((declared) => declared.name)).toContain('Bash')
+      [
+        {
+          role: 'system',
+          content: [
+            {
+              type: 'text',
+              text: `Updated system prompt section "rules":\n\n${SANITIZED_RULES_UPDATE}`,
+            },
+            {
+              type: 'tool_addition',
+              tool: { type: 'tool_reference', name: 'Bash' },
+              cache_control: { type: 'ephemeral' },
+            },
+          ],
+        },
+      ],
+    )
+    assert.include(body.tools?.map((declared) => declared.name) ?? [], 'Bash')
   })
 
-  test('leaves API-key requests without OAuth identity or header overrides', async () => {
+  it('leaves API-key requests without OAuth identity or header overrides', async () => {
     const { body, headers, raw } = await send(
       NATIVE_MODEL,
       'short',
       'sk-ant-api-test',
     )
 
-    expect(body.system[0]?.text).toContain(PI_PREAMBLE)
-    expect(raw).toContain('Pi documentation')
-    expect(raw).not.toContain('x-anthropic-billing-header')
-    expect(headers.get('x-api-key')).toBe('sk-ant-api-test')
-    expect(headers.get('user-agent')).not.toContain('claude-cli/')
-    expect(headers.get('x-claude-code-session-id')).toBeNull()
+    assert.include(body.system[0]?.text ?? '', PI_PREAMBLE)
+    assert.include(raw, 'Pi documentation')
+    assert.notInclude(raw, 'x-anthropic-billing-header')
+    assert.strictEqual(headers.get('x-api-key'), 'sk-ant-api-test')
+    const userAgent = headers.get('user-agent')
+    assert.isNotNull(userAgent)
+    assert.notInclude(userAgent, 'claude-cli/')
+    assert.isNull(headers.get('x-claude-code-session-id'))
   })
 
-  test('collapsed transcripts carry the update in the leading prompt', async () => {
+  it('collapsed transcripts carry the update in the leading prompt', async () => {
     const { body } = await send(COLLAPSED_MODEL)
 
-    expect(body.messages.some((message) => message.role === 'system')).toBe(false)
-    expect(body.system.at(-1)?.text).toBe(
+    assert.isFalse(body.messages.some((message) => message.role === 'system'))
+    assert.strictEqual(
+      body.system.at(-1)?.text,
       `${CLAUDE_PREAMBLE}\n\n${SANITIZED_RULES_UPDATE}`,
     )
   })
 
-  test.each<CacheRetention>(['short', 'long', 'none'])(
+  it.each<CacheRetention>(['short', 'long', 'none'])(
     'preserves exactly the cache markers pi emits for %s retention',
     async (retention) => {
       const { body, originalCacheControls } = await send(NATIVE_MODEL, retention)
 
       if (retention === 'none') {
-        expect(originalCacheControls).toHaveLength(0)
+        assert.isEmpty(originalCacheControls)
       } else {
-        expect(originalCacheControls.length).toBeGreaterThan(0)
+        assert.isNotEmpty(originalCacheControls)
       }
-      expect(cacheControls(body)).toEqual(originalCacheControls)
+      deepStrictEqual(cacheControls(body), originalCacheControls)
     },
   )
 })

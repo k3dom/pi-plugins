@@ -1,5 +1,6 @@
-import { describe, expect, test, vi } from 'vitest'
-import { wrapFetchForCch } from '../src/cch'
+import { assert, describe, it } from '@effect/vitest'
+import { deepStrictEqual } from '@effect/vitest/utils'
+import * as Cch from '../src/cch'
 
 const REQUEST_URL = 'https://api.anthropic.com/v1/messages'
 
@@ -18,29 +19,35 @@ const requestBody = JSON.stringify({
   stream: true,
 })
 
-describe('wrapFetchForCch', () => {
-  test('matches the libxxhash 0.8.3 vector after excluding routing fields', async () => {
-    const base = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }))
-    const wrapped = wrapFetchForCch(base, {})
+const recordingFetch = () => {
+  const calls: Array<Parameters<typeof fetch>> = []
+  const base: typeof fetch = async (...args) => {
+    calls.push(args)
+    return new Response(null, { status: 204 })
+  }
+  return { base, calls }
+}
 
-    await wrapped(REQUEST_URL, { method: 'POST', body: requestBody })
+describe('wrapFetch', () => {
+  it('matches the libxxhash 0.8.3 vector after excluding routing fields', async () => {
+    const { base, calls } = recordingFetch()
 
-    expect(base).toHaveBeenCalledOnce()
-    const sentBody = Buffer.from(
-      base.mock.lastCall![1]!.body as Uint8Array,
-    ).toString()
-    expect(sentBody).toBe(
+    await Cch.wrapFetch(base, {})(REQUEST_URL, { method: 'POST', body: requestBody })
+
+    assert.lengthOf(calls, 1)
+    const sentBody = Buffer.from(calls[0]?.[1]?.body as Uint8Array).toString()
+    assert.strictEqual(
+      sentBody,
       requestBody.replace('cch=00000; cc_prompt_id=', 'cch=17df5; cc_prompt_id='),
     )
   })
 
-  test('merges and deduplicates request betas without dropping pi-specific features', async () => {
-    const base = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }))
-    const wrapped = wrapFetchForCch(base, {
-      'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
-    })
+  it('merges and deduplicates request betas without dropping pi-specific features', async () => {
+    const { base, calls } = recordingFetch()
 
-    await wrapped(REQUEST_URL, {
+    await Cch.wrapFetch(base, {
+      'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
+    })(REQUEST_URL, {
       method: 'POST',
       headers: {
         'anthropic-beta':
@@ -49,8 +56,8 @@ describe('wrapFetchForCch', () => {
       body: requestBody,
     })
 
-    const sentHeaders = new Headers(base.mock.lastCall?.[1]?.headers)
-    expect(sentHeaders.get('anthropic-beta')?.split(',')).toEqual([
+    const sentHeaders = new Headers(calls[0]?.[1]?.headers)
+    deepStrictEqual(sentHeaders.get('anthropic-beta')?.split(','), [
       'claude-code-20250219',
       'oauth-2025-04-20',
       'server-side-fallback-2026-07-01',
@@ -58,11 +65,8 @@ describe('wrapFetchForCch', () => {
     ])
   })
 
-  test('passes unrelated requests through untouched', async () => {
-    const base = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }))
-    const wrapped = wrapFetchForCch(base, {
-      'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
-    })
+  it('passes unrelated requests through untouched', async () => {
+    const { base, calls } = recordingFetch()
     const init = {
       method: 'POST',
       headers: { authorization: 'Bearer unrelated-token' },
@@ -71,11 +75,10 @@ describe('wrapFetchForCch', () => {
 
     const expected = structuredClone(init)
 
-    await wrapped('https://example.com/messages', init)
+    await Cch.wrapFetch(base, {
+      'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
+    })('https://example.com/messages', init)
 
-    expect(base).toHaveBeenCalledExactlyOnceWith(
-      'https://example.com/messages',
-      expected,
-    )
+    deepStrictEqual(calls, [['https://example.com/messages', expected]])
   })
 })

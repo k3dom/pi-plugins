@@ -76,7 +76,7 @@ const BACKSLASH = 0x5c
 const OPEN_BRACKET = 0x5b
 const CLOSE_BRACKET = 0x5d
 
-// ── xxh64 (mirror of src/utils.ts, kept inline so the script has no imports) ──
+// ── xxh64 (mirror of src/cch.ts, kept inline so the script has no imports) ────
 
 const MASK = (1n << 64n) - 1n
 const P1 = 11400714785074694791n

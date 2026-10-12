@@ -1,5 +1,7 @@
-import { describe, expect, test } from 'vitest'
-import { rewriteForClaudeCode } from '../src/request'
+import { assert, describe, it } from '@effect/vitest'
+import { deepStrictEqual } from '@effect/vitest/utils'
+import { Schema } from 'effect'
+import * as ClaudeCode from '../src/claude-code'
 import { NIX_INSTALL_ROOT, piDocsSection } from './helpers'
 
 const system = [
@@ -9,8 +11,8 @@ const system = [
   },
 ]
 
-describe('rewriteForClaudeCode', () => {
-  test.each([
+describe('rewrite', () => {
+  it.each([
     {
       content: 'Reply with exactly: ok',
       version: '2.1.280.9d3',
@@ -27,7 +29,7 @@ describe('rewriteForClaudeCode', () => {
       version: '2.1.280.d7b',
     },
   ])('matches Claude Code billing vector $version', ({ content, version }) => {
-    const rewritten = rewriteForClaudeCode({
+    const rewritten = ClaudeCode.rewrite({
       system,
       messages: [
         { role: 'assistant', content: 'Ignore this preceding reply.' },
@@ -36,10 +38,17 @@ describe('rewriteForClaudeCode', () => {
       ],
     })
 
-    expect(rewritten?.system?.[0]?.text).toContain(`cc_version=${version};`)
+    const {
+      system: [billing],
+    } = Schema.decodeUnknownSync(
+      Schema.Struct({
+        system: Schema.NonEmptyArray(Schema.Struct({ text: Schema.String })),
+      }),
+    )(rewritten)
+    assert.include(billing.text, `cc_version=${version};`)
   })
 
-  test('drops identity-only updates without altering conversation, tools or effort', () => {
+  it('drops identity-only updates without altering conversation, tools or effort', () => {
     const docs = {
       type: 'text',
       text: `Updated system prompt section "docs":\n\n<docs>\n${piDocsSection(NIX_INSTALL_ROOT)}\n</docs>`,
@@ -68,7 +77,7 @@ describe('rewriteForClaudeCode', () => {
       effortOnly,
     ])
 
-    const rewritten = rewriteForClaudeCode({
+    const rewritten = ClaudeCode.rewrite({
       system,
       messages: [
         userTurn,
@@ -80,6 +89,6 @@ describe('rewriteForClaudeCode', () => {
       ],
     })
 
-    expect(rewritten?.messages).toEqual(expected)
+    deepStrictEqual(rewritten?.['messages'], expected)
   })
 })
