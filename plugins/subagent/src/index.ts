@@ -1,14 +1,23 @@
-import * as path from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
-import { getAgentDir } from '@earendil-works/pi-coding-agent'
+import { truncateHead } from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
-import * as NodeServices from '@effect/platform-node/NodeServices'
+import * as NodePath from '@effect/platform-node/NodePath'
 import * as Run from '@pi-plugins/shared/run'
 import * as Ui from '@pi-plugins/shared/ui'
-import { Effect } from 'effect'
+import {
+  Array,
+  Duration,
+  Effect,
+  Match,
+  Number,
+  Option,
+  Path,
+  pipe,
+  Schema,
+  String,
+} from 'effect'
 import { Type, type Static } from 'typebox'
-import { emptyResult, runSubagent, type SubagentResult } from './runner'
-import { capToolOutput, formatStats } from './utils'
+import * as Subagent from './subagent'
 
 // Wrapped terminal rows, not source lines, so a row's height stays bounded.
 const PROMPT_PREVIEW_LINES = 3
@@ -61,16 +70,67 @@ const subagentOutputSchema = Type.Object({
 
 export type SubagentOutput = Static<typeof subagentOutputSchema>
 
-interface SubagentDetails extends SubagentResult {
-  cwd?: string | undefined
-  model?: string | undefined
-  failed?: boolean | undefined
-  errorMessage?: string | undefined
-  stderr?: string | undefined
+const Details = Schema.Struct({
+  ...Subagent.Result.fields,
+  cwd: Schema.optional(Schema.String),
+  model: Schema.optional(Schema.String),
+  failed: Schema.optional(Schema.Boolean),
+  errorMessage: Schema.optional(Schema.String),
+  stderr: Schema.optional(Schema.String),
+})
+
+function formatTokens(count: number): string {
+  return Match.value(count).pipe(
+    Match.when(Number.isLessThan(1000), (n) => `${n}`),
+    Match.when(Number.isLessThan(10000), (n) => `${(n / 1000).toFixed(1)}k`),
+    Match.when(Number.isLessThan(1000000), (n) => `${Math.round(n / 1000)}k`),
+    Match.orElse((n) => `${(n / 1000000).toFixed(1)}M`),
+  )
+}
+
+function formatDuration(duration: Duration.Duration): string {
+  const totalSeconds = Math.round(Duration.toSeconds(duration))
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`
+  }
+  const pad = String.padStart(2, '0')
+  const seconds = pad(`${totalSeconds % 60}`)
+  const minutes = Math.floor(totalSeconds / 60) % 60
+  const hours = Math.floor(totalSeconds / 3600)
+  return hours > 0
+    ? `${hours}h${pad(`${minutes}`)}m${seconds}s`
+    : `${minutes}m${seconds}s`
+}
+
+function ifPositive(
+  count: number,
+  format: (count: number) => string,
+): Option.Option<string> {
+  return count > 0 ? Option.some(format(count)) : Option.none()
+}
+
+function formatStats(result: Subagent.Result): string {
+  const { usage, toolCalls } = result
+  return pipe(
+    [
+      ifPositive(usage.turns, (n) => `${n} turn${n > 1 ? 's' : ''}`),
+      ifPositive(toolCalls, (n) => `${n} tool${n > 1 ? 's' : ''}`),
+      ifPositive(usage.input, (n) => `↑${formatTokens(n)}`),
+      ifPositive(usage.output, (n) => `↓${formatTokens(n)}`),
+      ifPositive(usage.cacheRead, (n) => `R${formatTokens(n)}`),
+      ifPositive(usage.cacheWrite, (n) => `W${formatTokens(n)}`),
+      ifPositive(usage.cost.total, (n) => `$${n.toFixed(4)}`),
+      Option.map(Option.fromUndefinedOr(result.durationMs), (ms) =>
+        formatDuration(Duration.millis(ms)),
+      ),
+    ],
+    Array.getSomes,
+    Array.join(' '),
+  )
 }
 
 export default function subagent(pi: ExtensionAPI) {
-  pi.registerTool<typeof subagentSchema, SubagentDetails>({
+  pi.registerTool<typeof subagentSchema, typeof Details.Type>({
     name: 'subagent',
     label: 'Subagent',
     description:
@@ -91,101 +151,99 @@ export default function subagent(pi: ExtensionAPI) {
           ? undefined
           : `${ctx.model.provider}/${ctx.model.id}:${pi.getThinkingLevel()}`)
 
-      // Relative to the parent session's cwd, not the process cwd: they differ
-      // for resumed and cross-project sessions.
-      const cwd =
-        params.cwd !== undefined ? path.resolve(ctx.cwd, params.cwd) : ctx.cwd
-
       // Inheriting the parent's tool set keeps a restricted parent (e.g.
       // `pi --tools read`) from being escaped through a child with default tools.
-      const tools = pi.getActiveTools().filter((name) => name !== 'subagent')
+      const tools = Array.filter(pi.getActiveTools(), (name) => name !== 'subagent')
 
-      // Beside pi's per-project `--<cwd>--` directories, so child sessions stay
-      // out of `pi -c` / `pi -r` but resolve by id from anywhere.
-      const configured = process.env['PI_SUBAGENT_SESSION_DIR']
-      const sessionDir = configured
-        ? path.resolve(configured)
-        : path.join(getAgentDir(), 'sessions', 'subagents')
+      const program = Effect.gen(function* () {
+        const path = yield* Path.Path
+        const runner = yield* Subagent.Subagent
 
-      const program = runSubagent({
-        prompt: params.prompt,
-        sessionDir,
-        name: params.description,
-        model,
-        cwd,
-        tools,
-        // The only live update: each one repaints pi's scrollback once the row
-        // has scrolled out of view.
-        onSession: (sessionId) => {
-          onUpdate?.({
-            content: [{ type: 'text', text: '' }],
-            details: { ...emptyResult, sessionId, model, cwd },
-          })
-        },
-      }).pipe(
-        Effect.map((result) => {
-          const structuredContent: SubagentOutput = {
-            output: result.output,
-            ...(result.sessionId === undefined
-              ? {}
-              : { sessionId: result.sessionId }),
-            ...(model === undefined ? {} : { model }),
-            toolCalls: result.toolCalls,
-            durationMs: result.durationMs ?? 0,
-            usage: { ...result.usage, cost: result.usage.cost.total },
-          }
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: result.output ? capToolOutput(result.output) : '(no output)',
-              },
-            ],
-            details: { ...result, model, cwd },
-            structuredContent,
-          }
-        }),
-        Effect.catch((error) => {
-          const result = 'result' in error ? error.result : emptyResult
-          const label = error._tag === 'SubagentStopError' ? error.reason : 'failed'
-          const reason =
-            error._tag === 'PlatformError'
-              ? `Failed to run subagent: ${error.message}`
-              : error.message
-          return Effect.succeed({
-            content: [
-              {
-                type: 'text' as const,
-                text: `Subagent ${label}: ${capToolOutput(reason)}`,
-              },
-            ],
-            details: {
-              ...result,
-              model,
-              cwd,
-              failed: true,
-              errorMessage: reason,
-              stderr: 'stderr' in error ? error.stderr : undefined,
+        // Relative to the parent session's cwd, not the process cwd: they differ
+        // for resumed and cross-project sessions.
+        const cwd =
+          params.cwd === undefined ? ctx.cwd : path.resolve(ctx.cwd, params.cwd)
+
+        const toolResult = yield* runner
+          .run({
+            prompt: params.prompt,
+            name: params.description,
+            model,
+            cwd,
+            tools,
+            // The only live update: each one repaints pi's scrollback once the row
+            // has scrolled out of view.
+            onSession: (sessionId) => {
+              onUpdate?.({
+                content: [{ type: 'text', text: '' }],
+                details: { ...Subagent.emptyResult, sessionId, model, cwd },
+              })
             },
-            isError: true,
           })
-        }),
-        Effect.map((result) => {
-          const { input, output, cacheRead, cacheWrite, cost } = result.details.usage
-          return {
-            ...result,
-            usage: {
-              input,
-              output,
-              cacheRead,
-              cacheWrite,
-              totalTokens: input + output + cacheRead + cacheWrite,
-              cost,
-            },
-          }
-        }),
-        Effect.provide(NodeServices.layer),
-      )
+          .pipe(
+            Effect.map((result) => {
+              const structuredContent: SubagentOutput = {
+                output: result.output,
+                ...(result.sessionId === undefined
+                  ? {}
+                  : { sessionId: result.sessionId }),
+                ...(model === undefined ? {} : { model }),
+                toolCalls: result.toolCalls,
+                durationMs: result.durationMs ?? 0,
+                usage: { ...result.usage, cost: result.usage.cost.total },
+              }
+              return {
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: result.output
+                      ? Ui.truncatedText(truncateHead(result.output))
+                      : '(no output)',
+                  },
+                ],
+                details: { ...result, model, cwd },
+                structuredContent,
+              }
+            }),
+            Effect.catchTag('SubagentError', (error) =>
+              Effect.succeed({
+                content: [
+                  {
+                    type: 'text' as const,
+                    text: `Subagent ${
+                      error.reason._tag === 'StopError'
+                        ? error.reason.stopReason
+                        : 'failed'
+                    }: ${Ui.truncatedText(truncateHead(error.message))}`,
+                  },
+                ],
+                details: {
+                  ...error.result,
+                  model,
+                  cwd,
+                  failed: true,
+                  errorMessage: error.message,
+                  stderr: error.stderr,
+                },
+                isError: true,
+              }),
+            ),
+          )
+
+        const { input, output, cacheRead, cacheWrite, cost } =
+          toolResult.details.usage
+        return {
+          ...toolResult,
+          usage: {
+            input,
+            output,
+            cacheRead,
+            cacheWrite,
+            totalTokens: Number.sumAll([input, output, cacheRead, cacheWrite]),
+            cost,
+          },
+        }
+      }).pipe(Effect.provide([Subagent.layer, NodePath.layer]))
 
       return await Run.tool(program, { signal })
     },
@@ -227,13 +285,15 @@ export default function subagent(pi: ExtensionAPI) {
         metadata.push(['session', details.sessionId])
       }
 
-      const metadataBlock = metadata
-        .map(
+      const metadataBlock = pipe(
+        metadata,
+        Array.map(
           ([label, value]) =>
-            theme.fg('dim', label.padEnd(METADATA_LABEL_WIDTH)) +
+            theme.fg('dim', String.padEnd(METADATA_LABEL_WIDTH)(label)) +
             theme.fg('muted', value),
-        )
-        .join('\n')
+        ),
+        Array.join('\n'),
+      )
 
       if (isPartial) {
         return new Text(metadataBlock ? `\n${metadataBlock}` : '', 0, 0)
@@ -248,7 +308,7 @@ export default function subagent(pi: ExtensionAPI) {
 
       const content =
         details.output ||
-        (failed ? (details.stderr?.trim() ?? '') : '') ||
+        (failed ? String.trim(details.stderr ?? '') : '') ||
         '(no output)'
 
       let header = metadataBlock ? `\n${metadataBlock}\n\n${status}` : `\n${status}`
@@ -258,7 +318,7 @@ export default function subagent(pi: ExtensionAPI) {
 
       return new Ui.ExpandableText({
         header,
-        content: expanded ? content : capToolOutput(content),
+        content: expanded ? content : Ui.truncatedText(truncateHead(content)),
         maxLines: OUTPUT_PREVIEW_LINES,
         expanded,
         theme,
