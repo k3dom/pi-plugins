@@ -6,17 +6,13 @@ import {
   Data,
   Effect,
   Match,
+  Option,
   pipe,
   Predicate,
   Record,
   Schema,
   String,
 } from 'effect'
-
-const EXTENSION_ID = 'fast-mode'
-const COMMAND_ARGS = ['on', 'off', 'status'] as const
-const SEGMENT_KEY = EXTENSION_ID
-const SEGMENT_LABEL = '[fast mode]'
 
 const FastModeConfig = Schema.Struct({
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -46,14 +42,10 @@ const FastModeConfig = Schema.Struct({
   ),
   showStatus: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 })
-type FastModeConfig = typeof FastModeConfig.Type
-
-type ActiveModel = NonNullable<ExtensionContext['model']>
-type FastModeApi = 'openai-responses' | 'openai-codex-responses'
 
 type Applicator = (
   payload: Record<string, unknown>,
-  model: ActiveModel,
+  model: NonNullable<ExtensionContext['model']>,
 ) => Record<string, unknown> | undefined
 
 type Eligibility = Data.TaggedEnum<{
@@ -65,7 +57,7 @@ const Eligibility = Data.taggedEnum<Eligibility>()
 const FAST_APPLICATORS: Record<string, Applicator> = {
   'openai-responses': applyOpenAIPriorityTier,
   'openai-codex-responses': applyOpenAIPriorityTier,
-} satisfies Record<FastModeApi, Applicator>
+} satisfies Record<'openai-responses' | 'openai-codex-responses', Applicator>
 
 function applyOpenAIPriorityTier(
   payload: Record<string, unknown>,
@@ -85,20 +77,19 @@ export default function fastMode(pi: ExtensionAPI) {
     }
 
     const key = `${model.provider}/${model.id}`
-    if (!config.models.includes(key)) {
+    if (!Array.contains(config.models, key)) {
       return Eligibility.Ineligible({
         message: `${key} is not in the configured models`,
       })
     }
 
-    const apply = FAST_APPLICATORS[model.api]
-    if (!apply) {
-      return Eligibility.Ineligible({
-        message: `the ${model.api} API has no fast-mode support`,
-      })
-    }
-
-    return Eligibility.Eligible({ apply })
+    return Option.match(Record.get(FAST_APPLICATORS, model.api), {
+      onNone: () =>
+        Eligibility.Ineligible({
+          message: `the ${model.api} API has no fast-mode support`,
+        }),
+      onSome: (apply) => Eligibility.Eligible({ apply }),
+    })
   }
 
   function updateStatus(ctx: ExtensionContext): void {
@@ -113,8 +104,8 @@ export default function fastMode(pi: ExtensionAPI) {
 
     Statusline.setSegment(
       ctx,
-      SEGMENT_KEY,
-      active ? { text: SEGMENT_LABEL, align: 'right' } : undefined,
+      'fast-mode',
+      active ? { text: '[fast mode]', align: 'right' } : undefined,
     )
   }
 
@@ -126,7 +117,10 @@ export default function fastMode(pi: ExtensionAPI) {
       : Eligibility.$match(checkEligibility(model), {
           Eligible: () => `Fast mode is on for ${name}.`,
           Ineligible: ({ message: reason }) => {
-            const models = config.models.join(', ') || 'none'
+            const models = Array.match(config.models, {
+              onEmpty: () => 'none',
+              onNonEmpty: Array.join(', '),
+            })
             return `Fast mode is on, but inactive: ${reason}. Configured models: ${models}.`
           },
         })
@@ -135,7 +129,7 @@ export default function fastMode(pi: ExtensionAPI) {
   }
 
   pi.on('session_start', async (_event, ctx) => {
-    config = await ExtensionConfig.load(ctx, FastModeConfig, EXTENSION_ID, config)
+    config = await ExtensionConfig.load(ctx, FastModeConfig, 'fast-mode', config)
     enabled = pi.getFlag('fast') === true || config.enabled
     updateStatus(ctx)
   })
@@ -173,7 +167,7 @@ export default function fastMode(pi: ExtensionAPI) {
       'Toggle fast mode (faster, costlier inference) for configured models',
     getArgumentCompletions: (prefix) => {
       const items = pipe(
-        COMMAND_ARGS,
+        ['on', 'off', 'status'],
         Array.filter(String.startsWith(prefix)),
         Array.map((arg) => ({ value: arg, label: arg })),
       )
@@ -184,7 +178,7 @@ export default function fastMode(pi: ExtensionAPI) {
       })
     },
     handler: async (args, ctx) => {
-      Match.value(args.trim().toLowerCase()).pipe(
+      Match.value(pipe(args, String.trim, String.toLowerCase)).pipe(
         Match.whenOr('', 'on', 'off', (cmd) => {
           enabled = cmd === '' ? !enabled : cmd === 'on'
           updateStatus(ctx)
