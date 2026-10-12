@@ -4,11 +4,10 @@ import * as Run from '@pi-plugins/shared/run'
 import * as Ui from '@pi-plugins/shared/ui'
 import { Duration, Effect, Number } from 'effect'
 import { Type, type Static } from 'typebox'
-import { WebFetch, type WebFetchFormat } from './fetch'
+import * as WebFetch from './web-fetch'
 
 const DEFAULT_TIMEOUT_SECONDS = 30
 const MAX_TIMEOUT_SECONDS = 120
-const PREVIEW_LINES = 5
 
 const webFetchSchema = Type.Object({
   url: Type.String({
@@ -43,12 +42,8 @@ const webFetchOutputSchema = Type.Object({
 
 export type WebFetchOutput = Static<typeof webFetchOutputSchema>
 
-interface WebFetchDetails {
-  truncation: TruncationResult
-}
-
 export default function webFetch(pi: ExtensionAPI) {
-  pi.registerTool<typeof webFetchSchema, WebFetchDetails>({
+  pi.registerTool<typeof webFetchSchema, { truncation: TruncationResult }>({
     name: 'web_fetch',
     label: 'WebFetch',
     description:
@@ -57,17 +52,16 @@ export default function webFetch(pi: ExtensionAPI) {
     parameters: webFetchSchema,
     outputSchema: webFetchOutputSchema,
     async execute(_toolCallId, params, signal) {
-      const format: WebFetchFormat = params.format ?? 'markdown'
       const timeoutSeconds = Number.clamp(
         params.timeout ?? DEFAULT_TIMEOUT_SECONDS,
         { minimum: 1, maximum: MAX_TIMEOUT_SECONDS },
       )
 
       const program = Effect.gen(function* () {
-        const webfetch = yield* WebFetch
+        const webfetch = yield* WebFetch.WebFetch
         return yield* webfetch.fetch({
           url: params.url,
-          format,
+          format: params.format ?? 'markdown',
           timeout: Duration.seconds(timeoutSeconds),
         })
       }).pipe(Effect.provide(WebFetch.layer))
@@ -77,12 +71,7 @@ export default function webFetch(pi: ExtensionAPI) {
       const structuredContent: WebFetchOutput = { content }
 
       return {
-        content: [
-          {
-            type: 'text' as const,
-            text: Ui.truncatedText(truncation),
-          },
-        ],
+        content: [{ type: 'text' as const, text: Ui.truncatedText(truncation) }],
         details: {
           truncation,
         },
@@ -99,7 +88,7 @@ export default function webFetch(pi: ExtensionAPI) {
       return new Ui.ExpandableText({
         header,
         content: details.truncation.content,
-        maxLines: PREVIEW_LINES,
+        maxLines: 5,
         expanded,
         theme,
         truncation: details.truncation,
