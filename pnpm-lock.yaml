@@ -68,6 +68,9 @@ importers:
       '@earendil-works/pi-coding-agent':
         specifier: 0.99.1
         version: 0.99.1(@aws-sdk/credential-provider-node@3.972.83)(@smithy/signature-v4@5.7.3)(ws@8.21.3)(zod@4.4.3)
+      '@effect/vitest':
+        specifier: 4.0.0-rc.115
+        version: 4.0.0-rc.115(effect@4.0.0-rc.115)(vitest@5.0.0(@opentelemetry/api@1.9.0)(@types/node@26.1.2)(vite@8.2.2(@types/node@26.1.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.0)))
       '@pi-plugins/fmt':
         specifier: workspace:*
         version: link:../../tooling/fmt
@@ -116,6 +119,9 @@ importers:
       '@types/node':
         specifier: 26.1.2
         version: 26.1.2
+      effect:
+        specifier: 4.0.0-rc.115
+        version: 4.0.0-rc.115
       oxfmt:
         specifier: 0.62.0
         version: 0.62.0
@@ -146,6 +152,9 @@ importers:
       '@types/node':
         specifier: 26.1.2
         version: 26.1.2
+      effect:
+        specifier: 4.0.0-rc.115
+        version: 4.0.0-rc.115
       oxfmt:
         specifier: 0.62.0
         version: 0.62.0
@@ -211,6 +220,9 @@ importers:
       '@earendil-works/pi-tui':
         specifier: 0.99.1
         version: 0.99.1
+      '@effect/vitest':
+        specifier: 4.0.0-rc.115
+        version: 4.0.0-rc.115(effect@4.0.0-rc.115)(vitest@5.0.0(@opentelemetry/api@1.9.0)(@types/node@26.1.2)(vite@8.2.2(@types/node@26.1.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.0)))
       '@pi-plugins/fmt':
         specifier: workspace:*
         version: link:../../tooling/fmt
@@ -241,6 +253,9 @@ importers:
       typescript:
         specifier: 7.0.2
         version: 7.0.2
+      vitest:
+        specifier: 5.0.0
+        version: 5.0.0(@opentelemetry/api@1.9.0)(@types/node@26.1.2)(vite@8.2.2(@types/node@26.1.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.0))
 
   plugins/subagent:
     devDependencies:
@@ -690,6 +705,12 @@ packages:
     peerDependencies:
       effect: ^4.0.0-rc.115
       redis: '>=5.0.0 <7.0.0'
+
+  '@effect/vitest@4.0.0-rc.115':
+    resolution: {integrity: sha512-DJR0hfdr3HNXAkzW8AzfvUz6VmrNFLrKk9tZGDURi33faMyxkc7ZewxELMMZwGpOTGN4mfqYVbX2CXgI+ZJBeQ==}
+    peerDependencies:
+      effect: ^4.0.0-rc.115
+      vitest: '>=5.0.0 <6.0.0'
 
   '@emnapi/core@1.11.2':
     resolution: {integrity: sha512-TC8MkTuZUtcTSiFeuC0ksCh9QIJ5+F21MvZ4Wn4ORfYaFJ/0dsiudv5tVkejgwZlwQ39jL9WWDe2lz8x0WglOA==}
@@ -3317,6 +3338,11 @@ snapshots:
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
+
+  '@effect/vitest@4.0.0-rc.115(effect@4.0.0-rc.115)(vitest@5.0.0(@opentelemetry/api@1.9.0)(@types/node@26.1.2)(vite@8.2.2(@types/node@26.1.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.0)))':
+    dependencies:
+      effect: 4.0.0-rc.115
+      vitest: 5.0.0(@opentelemetry/api@1.9.0)(@types/node@26.1.2)(vite@8.2.2(@types/node@26.1.2)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.0))
 
   '@emnapi/core@1.11.2':
     dependencies:
