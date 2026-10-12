@@ -1,5 +1,12 @@
 # @pi-plugins/websearch
 
+## 0.2.1
+
+### Patch Changes
+
+- a72464e: Restructure the internals around Effect services, schema-decoded data and Effect's
+  data modules. Behaviour is unchanged.
+
 ## 0.2.0
 
 ### Minor Changes

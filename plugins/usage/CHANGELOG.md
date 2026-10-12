@@ -1,5 +1,15 @@
 # @pi-plugins/usage
 
+## 0.7.2
+
+### Patch Changes
+
+- a72464e: Restructure the internals around Effect services, schema-decoded data and Effect's
+  data modules. Behaviour is unchanged.
+- a72464e: Accept epoch-second reset times in every Claude usage window, not only in the
+  unified limits, instead of failing the Claude section. A malformed `usage-report`
+  entry in a session now renders nothing instead of breaking the renderer.
+
 ## 0.7.1
 
 ### Patch Changes

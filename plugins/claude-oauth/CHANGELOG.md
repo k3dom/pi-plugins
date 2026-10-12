@@ -1,5 +1,12 @@
 # @pi-plugins/claude-oauth
 
+## 0.3.9
+
+### Patch Changes
+
+- a72464e: Restructure the internals around Effect services, schema-decoded data and Effect's
+  data modules. Behaviour is unchanged.
+
 ## 0.3.8
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@pi-plugins/websearch",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "WebSearch tool extension for pi-agent.",
   "keywords": [
     "pi",
