@@ -1,5 +1,13 @@
 # @pi-plugins/usage
 
+## 0.7.3
+
+### Patch Changes
+
+- d51dc22: Show the Claude usage widget for models of the `claude-cli` provider too. The limits
+  still come from pi's Anthropic login, so it should use the same account as the
+  `claude` CLI.
+
 ## 0.7.2
 
 ### Patch Changes
