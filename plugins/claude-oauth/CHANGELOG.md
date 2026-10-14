@@ -1,5 +1,12 @@
 # @pi-plugins/claude-oauth
 
+## 0.3.10
+
+### Patch Changes
+
+- eb56b04: Deprecate the package in favour of `@pi-plugins/claude-cli`, which sends requests
+  through the official Claude Code CLI. The README explains how to switch.
+
 ## 0.3.9
 
 ### Patch Changes
