@@ -281,6 +281,14 @@ describe('stream', () => {
     }
   })
 
+  it('keeps Claude Code out of auto mode and its tool use classifier', async () => {
+    const { received } = await run([reply('msg_1', 'Hi')], {
+      messages: [Helpers.user('Hi')],
+    })
+
+    assert.include(received.args.join(' '), '--permission-mode default')
+  })
+
   it('runs at the requested effort and turns thinking off without a level', async () => {
     const minimal = await run(
       [reply('msg_1', 'Hi')],

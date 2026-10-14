@@ -272,6 +272,11 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
                   '--no-session-persistence',
                   '--max-turns',
                   '1',
+                  // Otherwise newer models run in auto mode, which attaches a
+                  // server-side tool use classifier and the user's working
+                  // directory, home directory and git state to each request.
+                  '--permission-mode',
+                  'default',
                   ...(payload.effort ? ['--effort', payload.effort] : []),
                 ],
                 {
