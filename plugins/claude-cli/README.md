@@ -13,7 +13,9 @@ The `claude` CLI must be on your `PATH` and signed in to a Pro or Max plan:
 claude auth login
 ```
 
-Tested with pi 1.1.0 and Claude Code 2.1.293.
+Requests are billed to the account `claude` is signed in to, not to pi's `/login`.
+
+Tested with pi 1.2.0 and Claude Code 2.1.299.
 
 ## Install
 
