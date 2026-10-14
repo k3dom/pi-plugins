@@ -63,8 +63,8 @@ export class ProcessError extends Schema.TaggedError<ProcessError>()(
   }
 }
 
-export class ClaudeCodeError extends Schema.TaggedError<ClaudeCodeError>()(
-  'ClaudeCodeError',
+export class ClaudeCliError extends Schema.TaggedError<ClaudeCliError>()(
+  'ClaudeCliError',
   {
     reason: Schema.Union([
       NotInstalledError,
@@ -178,8 +178,8 @@ const Line = Schema.fromJsonString(
   ]),
 )
 
-export class ClaudeCode extends Context.Service<ClaudeCode>()(
-  '@pi-plugins/claude-code/ClaudeCode',
+export class ClaudeCli extends Context.Service<ClaudeCli>()(
+  '@pi-plugins/claude-cli/ClaudeCli',
   {
     make: Effect.fnUntraced(function* (cacheRetention: 'short' | 'long') {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
@@ -190,7 +190,7 @@ export class ClaudeCode extends Context.Service<ClaudeCode>()(
       // hands its response events to `onEvent` up to the first `message_stop`.
       // The process is stopped there, before Claude Code can act on the
       // response.
-      const request = Effect.fn('ClaudeCode.request')(
+      const request = Effect.fn('ClaudeCli.request')(
         function* (options: {
           readonly model: Model<Api>
           readonly context: TranscriptContext
@@ -208,7 +208,7 @@ export class ClaudeCode extends Context.Service<ClaudeCode>()(
           // Linux. The extra body replaces the matching fields of Claude
           // Code's own request.
           const dir = yield* fs.makeTempDirectoryScoped({
-            prefix: 'pi-claude-code-',
+            prefix: 'pi-claude-cli-',
           })
           const systemPromptFile = path.join(dir, 'system-prompt.md')
           const settingsFile = path.join(dir, 'settings.json')
@@ -314,9 +314,7 @@ export class ClaudeCode extends Context.Service<ClaudeCode>()(
             )
             .pipe(
               Effect.catchReason('PlatformError', 'NotFound', () =>
-                Effect.fail(
-                  new ClaudeCodeError({ reason: new NotInstalledError() }),
-                ),
+                Effect.fail(new ClaudeCliError({ reason: new NotInstalledError() })),
               ),
             )
 
@@ -357,7 +355,7 @@ export class ClaudeCode extends Context.Service<ClaudeCode>()(
 
           const exitCode = yield* handle.exitCode
           const stderr = yield* Fiber.join(stderrFiber)
-          return yield* new ClaudeCodeError({
+          return yield* new ClaudeCliError({
             reason: pipe(
               state.result,
               Option.filter(
@@ -377,7 +375,7 @@ export class ClaudeCode extends Context.Service<ClaudeCode>()(
         },
         Effect.scoped,
         Effect.catchTag('PlatformError', (cause) =>
-          Effect.fail(new ClaudeCodeError({ reason: new ProcessError({ cause }) })),
+          Effect.fail(new ClaudeCliError({ reason: new ProcessError({ cause }) })),
         ),
         // Claude Code fails instead of waiting when another process holds its
         // login refresh lock, and suggests trying again within a minute.
@@ -394,16 +392,16 @@ export class ClaudeCode extends Context.Service<ClaudeCode>()(
 ) {}
 
 export const layer = Layer.effect(
-  ClaudeCode,
+  ClaudeCli,
   Effect.gen(function* () {
     const retention = yield* Config.String('PI_CACHE_RETENTION').pipe(
       Config.withDefault('short'),
     )
-    return yield* ClaudeCode.make(retention === 'long' ? 'long' : 'short')
+    return yield* ClaudeCli.make(retention === 'long' ? 'long' : 'short')
   }),
 ).pipe(Layer.provide(NodeServices.layer))
 
-/** Pi's `streamSimple` for models of the `claude-code` provider. */
+/** Pi's `streamSimple` for models of the `claude-cli` provider. */
 export function stream(
   model: Model<Api>,
   context: TranscriptContext,
@@ -639,8 +637,8 @@ export function stream(
 
   void Run.tool(
     Effect.gen(function* () {
-      const claudeCode = yield* ClaudeCode
-      yield* claudeCode.request({ model, context, stream: options, onEvent: apply })
+      const claudeCli = yield* ClaudeCli
+      yield* claudeCli.request({ model, context, stream: options, onEvent: apply })
     }).pipe(Effect.provide(layer)),
     { signal: options?.signal },
   ).catch((error: Error) => fail(error.message))

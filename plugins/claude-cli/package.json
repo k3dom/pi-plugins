@@ -1,5 +1,5 @@
 {
-  "name": "@pi-plugins/claude-code",
+  "name": "@pi-plugins/claude-cli",
   "version": "0.0.0",
   "description": "Use a Claude subscription in pi by running each model request through the Claude Code CLI.",
   "keywords": [
@@ -12,7 +12,7 @@
     "pi-package",
     "provider"
   ],
-  "homepage": "https://github.com/k3dom/pi-plugins/tree/main/plugins/claude-code#readme",
+  "homepage": "https://github.com/k3dom/pi-plugins/tree/main/plugins/claude-cli#readme",
   "bugs": {
     "url": "https://github.com/k3dom/pi-plugins/issues"
   },
@@ -20,7 +20,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/k3dom/pi-plugins.git",
-    "directory": "plugins/claude-code"
+    "directory": "plugins/claude-cli"
   },
   "files": [
     "dist",

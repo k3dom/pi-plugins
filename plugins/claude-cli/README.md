@@ -1,4 +1,4 @@
-# `@pi-plugins/claude-code`
+# `@pi-plugins/claude-cli`
 
 Use a Claude subscription in [pi](https://github.com/earendil-works/pi) through the
 official Claude Code CLI. Each model request runs as one `claude --print` process, so
@@ -18,21 +18,21 @@ Tested with pi 1.1.0 and Claude Code 2.1.293.
 ## Install
 
 ```bash
-pi install npm:@pi-plugins/claude-code
+pi install npm:@pi-plugins/claude-cli
 ```
 
 To try it for one session without changing your settings:
 
 ```bash
-pi -e npm:@pi-plugins/claude-code
+pi -e npm:@pi-plugins/claude-cli
 ```
 
 ## Usage
 
-Pick a model from the `claude-code` provider with `/model`, or start pi with one:
+Pick a model from the `claude-cli` provider with `/model`, or start pi with one:
 
 ```bash
-pi --model claude-code/claude-sonnet-5-5
+pi --model claude-cli/claude-sonnet-5-5
 ```
 
 The provider offers the same Claude models as pi's built-in `anthropic` provider.

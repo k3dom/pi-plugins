@@ -1,16 +1,16 @@
 import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import { Array } from 'effect'
-import * as ClaudeCode from './claude-code'
+import * as ClaudeCli from './claude-cli'
 
-export default function claudeCode(pi: ExtensionAPI): void {
-  pi.registerProvider('claude-code', {
-    name: 'Claude Code',
+export default function claudeCli(pi: ExtensionAPI): void {
+  pi.registerProvider('claude-cli', {
+    name: 'Claude CLI',
     baseUrl: 'https://api.anthropic.com',
     // Pi requires a credential, but Claude Code signs in with its own login.
-    apiKey: 'claude-code',
-    api: 'claude-code',
-    streamSimple: ClaudeCode.stream,
+    apiKey: 'claude-cli',
+    api: 'claude-cli',
+    streamSimple: ClaudeCli.stream,
     // Without `promptCache`, pi does not warm the cache with replayed requests.
     models: Array.map(getBuiltinModels('anthropic'), (model) => ({
       id: model.id,

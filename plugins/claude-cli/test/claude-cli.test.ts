@@ -17,7 +17,7 @@ import {
   it,
 } from '@effect/vitest'
 import { deepStrictEqual } from '@effect/vitest/utils'
-import * as ClaudeCode from '../src/claude-code'
+import * as ClaudeCli from '../src/claude-cli'
 import * as Helpers from './helpers'
 
 type Reply = { lines: Array<unknown>; exitCode?: number }
@@ -26,7 +26,7 @@ let dir: string
 let log: string
 
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'claude-code-test-'))
+  dir = await mkdtemp(join(tmpdir(), 'claude-cli-test-'))
   log = join(dir, 'received.json')
   const script = fileURLToPath(new URL('fake-claude.mjs', import.meta.url))
   await writeFile(join(dir, 'claude'), `#!/bin/sh\nexec node '${script}' "$@"\n`, {
@@ -96,7 +96,7 @@ const run = async (
   options?: SimpleStreamOptions,
 ) => {
   process.env['FAKE_CLAUDE_REPLIES'] = JSON.stringify(replies)
-  const stream = ClaudeCode.stream(Helpers.model, normalizeContext(context), options)
+  const stream = ClaudeCli.stream(Helpers.model, normalizeContext(context), options)
   const events: Array<string> = []
   for await (const next of stream) {
     events.push(next.type)
@@ -340,7 +340,7 @@ describe('stream', () => {
       { lines: reply('msg_1', 'Hel').lines.slice(0, 3) },
     ])
     const controller = new AbortController()
-    const stream = ClaudeCode.stream(
+    const stream = ClaudeCli.stream(
       Helpers.model,
       normalizeContext({ messages: [Helpers.user('Hi')] }),
       { signal: controller.signal },

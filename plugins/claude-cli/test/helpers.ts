@@ -3,8 +3,8 @@ import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all'
 
 export const model: Model<Api> = {
   ...getBuiltinModel('anthropic', 'claude-haiku-4-5'),
-  provider: 'claude-code',
-  api: 'claude-code',
+  provider: 'claude-cli',
+  api: 'claude-cli',
 }
 
 export const user = (text: string): Message => ({

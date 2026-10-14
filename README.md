@@ -11,7 +11,7 @@ Install only the pieces you need.
 | Package                                | What it does                                                       | Entry point                             |
 | -------------------------------------- | ------------------------------------------------------------------ | --------------------------------------- |
 | [`checkpoint`](plugins/checkpoint)     | Restore files when navigating session history.                     | `/tree`, `/checkpoint-cleanup`          |
-| [`claude-code`](plugins/claude-code)   | Use a Claude subscription through the Claude Code CLI.             | `claude-code` models                    |
+| [`claude-cli`](plugins/claude-cli)     | Use a Claude subscription through the Claude Code CLI.             | `claude-cli` models                     |
 | [`claude-oauth`](plugins/claude-oauth) | Adapt Anthropic OAuth requests for use with a Claude subscription. | Automatic                               |
 | [`elapsed`](plugins/elapsed)           | Show a live timer in the working indicator.                        | Automatic                               |
 | [`exit`](plugins/exit)                 | Quit pi with a plain-text prompt.                                  | `exit`, `quit`                          |

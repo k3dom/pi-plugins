@@ -60,7 +60,7 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
 
-  plugins/claude-code:
+  plugins/claude-cli:
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 0.99.1

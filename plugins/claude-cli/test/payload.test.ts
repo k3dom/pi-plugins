@@ -7,8 +7,8 @@ import * as Helpers from './helpers'
 
 const providerModel = (id: 'claude-opus-4-6' | 'claude-opus-5'): Model<Api> => ({
   ...getBuiltinModel('anthropic', id),
-  provider: 'claude-code',
-  api: 'claude-code',
+  provider: 'claude-cli',
+  api: 'claude-cli',
 })
 
 describe('messages', () => {
