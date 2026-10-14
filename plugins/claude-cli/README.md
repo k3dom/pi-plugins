@@ -2,8 +2,7 @@
 
 Use a Claude subscription in [pi](https://github.com/earendil-works/pi) through the
 official Claude Code CLI. Every request is made by Claude Code itself, so using your
-subscription this way stays within Anthropic's
-[terms of service](https://www.anthropic.com/legal/consumer-terms).
+subscription this way stays within Anthropic's terms of service.
 
 ## How it works
 
