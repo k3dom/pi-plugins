@@ -54,3 +54,6 @@ default and one hour with `long`.
 
 When another Claude Code process is refreshing the login, the request waits and tries
 again for up to a minute.
+
+The [`usage`](../usage) plugin reads Claude limits through pi's own Anthropic login.
+To see them for this provider, sign in to the same account with `/login`.

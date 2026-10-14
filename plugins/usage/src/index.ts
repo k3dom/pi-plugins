@@ -22,7 +22,7 @@ function widgetProvider(
   model: ExtensionContext['model'],
 ): Option.Option<WidgetProvider> {
   return Match.value(model?.provider).pipe(
-    Match.when('anthropic', (): WidgetProvider => 'claude'),
+    Match.whenOr('anthropic', 'claude-cli', (): WidgetProvider => 'claude'),
     Match.when('openai-codex', (): WidgetProvider => 'codex'),
     Match.whenOr('zai', 'zai-coding-cn', (provider) => provider),
     Match.option,
