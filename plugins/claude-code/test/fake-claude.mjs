@@ -1,4 +1,4 @@
-// Stands in for the `claude` CLI: answers its input with the lines of the
+// Stands in for the `claude` CLI. It answers its input with the lines of the
 // next reply in FAKE_CLAUDE_REPLIES and records what it was given to
 // FAKE_CLAUDE_LOG. Like the real CLI, it keeps running until it is stopped.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'

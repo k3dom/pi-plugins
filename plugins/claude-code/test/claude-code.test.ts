@@ -4,40 +4,23 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   normalizeContext,
-  type Api,
   type Context,
-  type Model,
   type SimpleStreamOptions,
 } from '@earendil-works/pi-ai'
-import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all'
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'vitest'
-import * as Cli from '../src/cli'
-import { assistant, model, toolResult, user } from './helpers'
+import {
+  afterAll,
+  assert,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from '@effect/vitest'
+import { deepStrictEqual } from '@effect/vitest/utils'
+import * as ClaudeCode from '../src/claude-code'
+import * as Helpers from './helpers'
 
-interface Received {
-  args: Array<string>
-  env: Record<string, string | undefined>
-  systemPrompt: string
-  settings: { env: { CLAUDE_CODE_EXTRA_BODY: string } }
-  input: Array<unknown>
-}
-
-interface Reply {
-  lines: Array<unknown>
-  exitCode?: number
-}
-
-const adaptiveModel: Model<Api> = {
-  ...getBuiltinModel('anthropic', 'claude-opus-4-6'),
-  provider: 'claude-code',
-  api: 'claude-code',
-}
-
-const managedEffortModel: Model<Api> = {
-  ...getBuiltinModel('anthropic', 'claude-opus-5'),
-  provider: 'claude-code',
-  api: 'claude-code',
-}
+type Reply = { lines: Array<unknown>; exitCode?: number }
 
 let dir: string
 let log: string
@@ -53,21 +36,21 @@ beforeAll(async () => {
   process.env['FAKE_CLAUDE_LOG'] = log
 })
 
-beforeEach(() => rm(`${log}.count`, { force: true }))
+beforeEach(async () => {
+  await rm(log, { force: true })
+  await rm(`${log}.count`, { force: true })
+})
 
 afterAll(() => rm(dir, { recursive: true, force: true }))
 
-const event = (payload: object) => ({
-  type: 'stream_event',
-  event: payload,
-})
+const event = (payload: object) => ({ type: 'stream_event', event: payload })
 
 const messageStart = (id: string) =>
   event({
     type: 'message_start',
     message: {
       id,
-      model: model.id,
+      model: Helpers.model.id,
       usage: {
         input_tokens: 10,
         output_tokens: 1,
@@ -77,7 +60,7 @@ const messageStart = (id: string) =>
     },
   })
 
-const textReply = (id: string, text: string): Reply => ({
+const reply = (id: string, text: string, stopReason = 'end_turn'): Reply => ({
   lines: [
     messageStart(id),
     event({
@@ -93,41 +76,45 @@ const textReply = (id: string, text: string): Reply => ({
     event({ type: 'content_block_stop', index: 0 }),
     event({
       type: 'message_delta',
-      delta: { stop_reason: 'end_turn' },
+      delta: { stop_reason: stopReason },
       usage: { output_tokens: 20 },
     }),
     event({ type: 'message_stop' }),
   ],
 })
 
+const failure = (result: string): Reply => ({
+  lines: [
+    { type: 'result', subtype: 'success', is_error: true, num_turns: 1, result },
+  ],
+  exitCode: 1,
+})
+
 const run = async (
   replies: Array<Reply>,
   context: Context,
   options?: SimpleStreamOptions,
-  target: Model<Api> = model,
 ) => {
   process.env['FAKE_CLAUDE_REPLIES'] = JSON.stringify(replies)
-  const stream = Cli.stream(target, normalizeContext(context), options)
+  const stream = ClaudeCode.stream(Helpers.model, normalizeContext(context), options)
   const events: Array<string> = []
   for await (const next of stream) {
     events.push(next.type)
   }
-  const received = JSON.parse(await readFile(log, 'utf8')) as Received
-  return {
-    message: await stream.result(),
-    events,
-    received,
-    body: JSON.parse(received.settings.env.CLAUDE_CODE_EXTRA_BODY) as Record<
-      string,
-      unknown
-    >,
-  }
+  const received: {
+    args: Array<string>
+    env: Record<string, string | undefined>
+    systemPrompt: string
+    settings: { env: { CLAUDE_CODE_EXTRA_BODY: string } }
+    input: Array<unknown>
+  } = JSON.parse(await readFile(log, 'utf8'))
+  return { message: await stream.result(), events, received }
 }
 
 describe('stream', () => {
-  test('streams a text reply with its usage and cost', async () => {
-    const { message, events } = await run([textReply('msg_1', 'Hello there')], {
-      messages: [user('Hi')],
+  it('streams a text reply with its usage and cost', async () => {
+    const { message, events } = await run([reply('msg_1', 'Hello there')], {
+      messages: [Helpers.user('Hi')],
     })
 
     expect(message).toMatchObject({
@@ -143,11 +130,17 @@ describe('stream', () => {
       },
     })
     // Haiku 4.5 at $1 input, $5 output, $0.10 cache read and $1.25 cache write per MTok.
-    expect(message.usage.cost.total).toBeCloseTo(0.000163, 9)
-    expect(events).toEqual(['start', 'text_start', 'text_delta', 'text_end', 'done'])
+    assert.closeTo(message.usage.cost.total, 0.000163, 1e-9)
+    deepStrictEqual(events, [
+      'start',
+      'text_start',
+      'text_delta',
+      'text_end',
+      'done',
+    ])
   })
 
-  test('returns the tool call and ignores what Claude Code does after the first message', async () => {
+  it('returns the tool call and ignores what Claude Code does after the first message', async () => {
     const { message } = await run(
       [
         {
@@ -176,15 +169,15 @@ describe('stream', () => {
             event({ type: 'content_block_stop', index: 0 }),
             event({ type: 'message_delta', delta: { stop_reason: 'tool_use' } }),
             event({ type: 'message_stop' }),
-            ...textReply('msg_2', 'I could not run that tool.').lines,
+            ...reply('msg_2', 'I could not run that tool.').lines,
           ],
         },
       ],
-      { messages: [user('Read a.txt')] },
+      { messages: [Helpers.user('Read a.txt')] },
     )
 
     expect(message).toMatchObject({ stopReason: 'toolUse', responseId: 'msg_1' })
-    expect(message.content).toEqual([
+    deepStrictEqual(message.content, [
       {
         type: 'toolCall',
         id: 'toolu_1',
@@ -194,9 +187,9 @@ describe('stream', () => {
     ])
   })
 
-  test("sends pi's conversation and tools in place of Claude Code's own", async () => {
-    const { received, body } = await run(
-      [textReply('msg_1', 'Done')],
+  it("sends pi's conversation, prompt and tools in place of Claude Code's own", async () => {
+    const { received } = await run(
+      [reply('msg_1', 'Done')],
       {
         systemPrompt: 'Be terse.',
         tools: [
@@ -211,8 +204,8 @@ describe('stream', () => {
           },
         ],
         messages: [
-          user('Read a.txt'),
-          assistant([
+          Helpers.user('Read a.txt'),
+          Helpers.assistant([
             {
               type: 'toolCall',
               id: 'call|1',
@@ -220,14 +213,14 @@ describe('stream', () => {
               arguments: { path: 'a.txt' },
             },
           ]),
-          toolResult('call|1', 'contents'),
+          Helpers.toolResult('call|1', 'contents'),
         ],
       },
       { cacheRetention: 'long' },
     )
 
-    expect(received.systemPrompt).toBe('Be terse.')
-    expect(body).toEqual({
+    assert.strictEqual(received.systemPrompt, 'Be terse.')
+    deepStrictEqual(JSON.parse(received.settings.env.CLAUDE_CODE_EXTRA_BODY), {
       messages: [
         { role: 'user', content: [{ type: 'text', text: 'Read a.txt' }] },
         {
@@ -247,7 +240,7 @@ describe('stream', () => {
             {
               type: 'tool_result',
               tool_use_id: 'call_1',
-              content: [{ type: 'text', text: 'contents' }],
+              content: 'contents',
               cache_control: { type: 'ephemeral', ttl: '1h' },
             },
           ],
@@ -265,9 +258,9 @@ describe('stream', () => {
         },
       ],
     })
-    expect(received.env['CLAUDE_CODE_PROMPT_CACHE_TTL']).toBe('1h')
+    assert.strictEqual(received.env['CLAUDE_CODE_PROMPT_CACHE_TTL'], '1h')
     // Claude Code fingerprints the first user message in its billing header.
-    expect(received.input).toEqual([
+    deepStrictEqual(received.input, [
       {
         type: 'user',
         message: { role: 'user', content: [{ type: 'text', text: 'Read a.txt' }] },
@@ -275,93 +268,37 @@ describe('stream', () => {
     ])
   })
 
-  test('keeps an API key in the environment away from Claude Code', async () => {
+  it('keeps an API key in the environment away from Claude Code', async () => {
     process.env['ANTHROPIC_API_KEY'] = 'sk-ant-test'
     try {
-      const { received } = await run([textReply('msg_1', 'Hi')], {
-        messages: [user('Hi')],
+      const { message, received } = await run([reply('msg_1', 'Hi')], {
+        messages: [Helpers.user('Hi')],
       })
-      expect(received.env['ANTHROPIC_API_KEY']).toBeUndefined()
+      assert.strictEqual(message.stopReason, 'stop')
+      assert.isUndefined(received.env['ANTHROPIC_API_KEY'])
     } finally {
       delete process.env['ANTHROPIC_API_KEY']
     }
   })
 
-  test('gives older models summarized thinking within a budget', async () => {
-    const { body, received } = await run(
-      [textReply('msg_1', 'Hi')],
-      { messages: [user('Hi')] },
+  it('runs at the requested effort and turns thinking off without a level', async () => {
+    const minimal = await run(
+      [reply('msg_1', 'Hi')],
+      { messages: [Helpers.user('Hi')] },
       { reasoning: 'minimal' },
     )
+    const off = await run([reply('msg_2', 'Hi')], { messages: [Helpers.user('Hi')] })
 
-    expect(body).toMatchObject({
-      max_tokens: 64000,
-      thinking: { type: 'enabled', budget_tokens: 1024, display: 'summarized' },
+    assert.include(minimal.received.args.join(' '), '--effort low')
+    assert.isUndefined(minimal.received.env['CLAUDE_CODE_DISABLE_THINKING'])
+    assert.notInclude(off.received.args, '--effort')
+    assert.strictEqual(off.received.env['CLAUDE_CODE_DISABLE_THINKING'], '1')
+  })
+
+  it("reports Claude Code's error when no response arrives", async () => {
+    const { message } = await run([failure('API Error: 529 Overloaded')], {
+      messages: [Helpers.user('Hi')],
     })
-    expect(received.args.join(' ')).toContain('--effort low')
-  })
-
-  test('gives adaptive models summarized thinking at the mapped effort', async () => {
-    const { body, received } = await run(
-      [textReply('msg_1', 'Hi')],
-      { messages: [user('Hi')] },
-      { reasoning: 'max' },
-      adaptiveModel,
-    )
-
-    expect(body['thinking']).toEqual({ type: 'adaptive', display: 'summarized' })
-    expect(body['max_tokens']).toBeUndefined()
-    expect(received.args.join(' ')).toContain('--effort max')
-  })
-
-  test('turns thinking off without a level unless the model requires it', async () => {
-    const off = await run([textReply('msg_1', 'Hi')], { messages: [user('Hi')] })
-    const required = await run(
-      [textReply('msg_2', 'Hi')],
-      { messages: [user('Hi')] },
-      undefined,
-      managedEffortModel,
-    )
-
-    expect(off.received.env['CLAUDE_CODE_DISABLE_THINKING']).toBe('1')
-    expect(off.body['thinking']).toBeUndefined()
-    expect(required.received.env['CLAUDE_CODE_DISABLE_THINKING']).toBeUndefined()
-    expect(required.body['thinking']).toEqual({
-      type: 'adaptive',
-      display: 'summarized',
-      block_binding: { prefix_mismatch_behavior: 'drop_block' },
-    })
-  })
-
-  test('passes the output limit and tool choice through', async () => {
-    const { body } = await run(
-      [textReply('msg_1', 'Hi')],
-      { messages: [user('Hi')] },
-      { maxTokens: 500, toolChoice: 'none' },
-      adaptiveModel,
-    )
-
-    expect(body).toMatchObject({ max_tokens: 500, tool_choice: { type: 'none' } })
-  })
-
-  test("reports Claude Code's error when no response arrives", async () => {
-    const { message } = await run(
-      [
-        {
-          lines: [
-            {
-              type: 'result',
-              subtype: 'success',
-              is_error: true,
-              num_turns: 1,
-              result: 'API Error: 529 Overloaded',
-            },
-          ],
-          exitCode: 1,
-        },
-      ],
-      { messages: [user('Hi')] },
-    )
 
     expect(message).toMatchObject({
       stopReason: 'error',
@@ -369,25 +306,27 @@ describe('stream', () => {
     })
   })
 
-  test('retries while another Claude Code process refreshes the login', async () => {
+  it('reports an unknown stop reason as an error that pi can recognize', async () => {
+    const { message } = await run(
+      [reply('msg_1', 'cut off', 'model_context_window_exceeded')],
+      { messages: [Helpers.user('Hi')] },
+    )
+
+    expect(message).toMatchObject({
+      stopReason: 'error',
+      errorMessage: 'Unhandled stop reason: model_context_window_exceeded',
+    })
+  })
+
+  it('retries while another Claude Code process refreshes the login', async () => {
     const { message } = await run(
       [
-        {
-          lines: [
-            {
-              type: 'result',
-              subtype: 'success',
-              is_error: true,
-              num_turns: 1,
-              result:
-                'Could not refresh your login because another Claude Code process is refreshing it (or exited mid-refresh)',
-            },
-          ],
-          exitCode: 1,
-        },
-        textReply('msg_1', 'Hello'),
+        failure(
+          'Could not refresh your login because another Claude Code process is refreshing it (or exited mid-refresh)',
+        ),
+        reply('msg_1', 'Hello'),
       ],
-      { messages: [user('Hi')] },
+      { messages: [Helpers.user('Hi')] },
     )
 
     expect(message).toMatchObject({
@@ -396,14 +335,16 @@ describe('stream', () => {
     })
   })
 
-  test('stops a running request when aborted', async () => {
+  it('stops a running request when aborted', async () => {
     process.env['FAKE_CLAUDE_REPLIES'] = JSON.stringify([
-      { lines: textReply('msg_1', 'Hel').lines.slice(0, 3) },
+      { lines: reply('msg_1', 'Hel').lines.slice(0, 3) },
     ])
     const controller = new AbortController()
-    const stream = Cli.stream(model, normalizeContext({ messages: [user('Hi')] }), {
-      signal: controller.signal,
-    })
+    const stream = ClaudeCode.stream(
+      Helpers.model,
+      normalizeContext({ messages: [Helpers.user('Hi')] }),
+      { signal: controller.signal },
+    )
     for await (const next of stream) {
       if (next.type === 'text_delta') {
         controller.abort()

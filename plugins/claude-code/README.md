@@ -49,8 +49,8 @@ requests of its own.
 API keys in the environment, such as `ANTHROPIC_API_KEY`, are not passed on, so
 requests always use the subscription.
 
-Cache retention follows pi's `PI_CACHE_RETENTION` setting: five minutes by default
-and one hour with `long`.
+Cache retention follows pi's `PI_CACHE_RETENTION` setting. It is five minutes by
+default and one hour with `long`.
 
 When another Claude Code process is refreshing the login, the request waits and tries
 again for up to a minute.
