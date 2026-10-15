@@ -75,6 +75,7 @@ The provider offers the same Claude models as pi's built-in `anthropic` provider
   default and one hour with `long`.
 - When another Claude Code process is refreshing the login, a request waits and tries
   again for up to a minute.
-- Starting Claude Code takes about a quarter of a second, so each session keeps one
-  process started ahead for its next request. An idle process takes about 200 MiB. It
-  is stopped after five idle minutes and when the session ends.
+- Starting Claude Code takes about a quarter of a second, so from its second request
+  on, each session keeps one process started ahead for its next request. An idle
+  process takes about 200 MiB. It is stopped after five idle minutes and when the
+  session ends.
