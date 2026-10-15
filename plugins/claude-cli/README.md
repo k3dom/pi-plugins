@@ -8,7 +8,7 @@ subscription this way stays within Anthropic's terms of service.
 
 pi's built-in Anthropic provider builds each request and reads the response, just as
 it does for the `anthropic` provider. Only sending the request is left to Claude
-Code. Every request starts a fresh `claude --print` process, which signs the request
+Code. Every request runs in its own `claude --print` process, which signs the request
 and sends it with your subscription, so it counts against your plan's limits like
 Claude Code's own requests. The process is stopped as soon as the response is
 complete, so Claude Code never runs a tool or sends a request of its own.
@@ -75,3 +75,6 @@ The provider offers the same Claude models as pi's built-in `anthropic` provider
   default and one hour with `long`.
 - When another Claude Code process is refreshing the login, a request waits and tries
   again for up to a minute.
+- Starting Claude Code takes about a quarter of a second, so each session keeps one
+  process started ahead for its next request. An idle process takes about 200 MiB.
+  It is stopped after five idle minutes and when the session ends.

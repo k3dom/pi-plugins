@@ -1,10 +1,16 @@
 // Stands in for the `claude` CLI. It answers its input with the lines of the
-// next reply in FAKE_CLAUDE_REPLIES, `delayMs` apart, and records what it was
-// given and whether it was stopped to FAKE_CLAUDE_LOG. Like the real CLI, it
-// applies settings from control requests, refuses them with the reply's
-// `settingsError`, and keeps running until it is stopped.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+// next reply in FAKE_CLAUDE_REPLIES, `delayMs` apart, records what it was
+// given to FAKE_CLAUDE_LOG, and adds its pid to FAKE_CLAUDE_LOG.stopped when it
+// is stopped. Like the real CLI, it applies settings from control requests,
+// refuses them with the reply's `settingsError`, and keeps running until it is
+// stopped.
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
+
+process.on('SIGTERM', () => {
+  appendFileSync(`${process.env.FAKE_CLAUDE_LOG}.stopped`, `${process.pid}\n`)
+  process.exit(0)
+})
 
 const args = process.argv.slice(2)
 const option = (name) => args[args.indexOf(name) + 1]
@@ -14,6 +20,8 @@ writeFileSync(counter, String(run + 1))
 const replies = JSON.parse(process.env.FAKE_CLAUDE_REPLIES)
 const reply = replies[Math.min(run, replies.length - 1)]
 const log = {
+  pid: process.pid,
+  startedAt: Date.now(),
   args,
   env: process.env,
   systemPrompt: readFileSync(option('--system-prompt-file'), 'utf8'),
@@ -48,10 +56,5 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   if (reply.exitCode !== undefined) {
     setTimeout(() => process.exit(reply.exitCode), reply.lines.length * delayMs)
   }
-})
-process.on('SIGTERM', () => {
-  log.stopped = true
-  writeFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify(log))
-  process.exit(0)
 })
 setInterval(() => {}, 1000)

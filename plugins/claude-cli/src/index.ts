@@ -24,4 +24,6 @@ export default function claudeCli(pi: ExtensionAPI): void {
       compat: model.compat,
     })),
   })
+
+  pi.on('session_shutdown', () => ClaudeCli.release())
 }

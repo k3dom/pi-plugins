@@ -14,6 +14,7 @@ import {
 import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all'
 import {
   afterAll,
+  afterEach,
   assert,
   beforeAll,
   beforeEach,
@@ -23,6 +24,7 @@ import {
   vi,
 } from '@effect/vitest'
 import { deepStrictEqual } from '@effect/vitest/utils'
+import { Array, pipe, String } from 'effect'
 import * as ClaudeCli from '../src/claude-cli'
 
 type Reply = {
@@ -88,7 +90,11 @@ beforeAll(async () => {
 beforeEach(async () => {
   await rm(log, { force: true })
   await rm(`${log}.count`, { force: true })
+  await rm(`${log}.stopped`, { force: true })
 })
+
+// So that no test gets a process started ahead in another.
+afterEach(() => ClaudeCli.release())
 
 afterAll(() => rm(dir, { recursive: true, force: true }))
 
@@ -139,6 +145,15 @@ const failure = (result: string): Reply => ({
   exitCode: 1,
 })
 
+// The pids of the fake Claude Code processes that were stopped.
+const stopped = async () =>
+  pipe(
+    await readFile(`${log}.stopped`, 'utf8').catch(() => ''),
+    String.split('\n'),
+    Array.filter(String.isNonEmpty),
+    Array.map(globalThis.Number),
+  )
+
 const run = async (
   replies: Array<Reply>,
   context: Context,
@@ -152,6 +167,8 @@ const run = async (
     events.push(next.type)
   }
   const received: {
+    pid: number
+    startedAt: number
     args: Array<string>
     env: Record<string, string | undefined>
     systemPrompt: string
@@ -485,8 +502,43 @@ describe('stream', () => {
     )
 
     assert.strictEqual((await stream.result()).errorMessage, 'Hook failed')
-    await vi.waitFor(async () => {
-      assert.isTrue(JSON.parse(await readFile(log, 'utf8')).stopped)
+    const { pid } = JSON.parse(await readFile(log, 'utf8'))
+    await vi.waitFor(async () => assert.include(await stopped(), pid))
+  })
+
+  it('answers the next request with a Claude Code process started ahead', async () => {
+    await run([reply('msg_1', 'Hi')], { messages: [user('Hi')] })
+    const requested = Date.now()
+    const { message, received } = await run([reply('msg_2', 'Hi')], {
+      messages: [user('Hi'), assistant([{ type: 'text', text: 'Hi' }]), user('Bye')],
     })
+
+    assert.strictEqual(message.stopReason, 'stop')
+    assert.isBelow(received.startedAt, requested)
+  })
+
+  it('starts Claude Code afresh when the next request needs another setup', async () => {
+    await run([reply('msg_1', 'Hi')], {
+      systemPrompt: 'Be terse.',
+      messages: [user('Hi')],
+    })
+    const requested = Date.now()
+    const { received } = await run([reply('msg_2', 'Hi')], {
+      systemPrompt: 'Be verbose.',
+      messages: [user('Hi')],
+    })
+
+    assert.strictEqual(received.systemPrompt, 'Be verbose.')
+    assert.isAtLeast(received.startedAt, requested)
+  })
+
+  it('stops the processes started ahead when released', async () => {
+    await run([reply('msg_1', 'Hi')], { messages: [user('Hi')] })
+    await vi.waitFor(async () =>
+      assert.strictEqual(await readFile(`${log}.count`, 'utf8'), '2'),
+    )
+    await ClaudeCli.release()
+
+    assert.lengthOf(await stopped(), 2)
   })
 })
