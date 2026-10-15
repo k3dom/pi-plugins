@@ -1,6 +1,6 @@
 {
   "name": "@pi-plugins/claude-cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Use a Claude subscription in pi by running each model request through the Claude Code CLI.",
   "keywords": [
     "anthropic",

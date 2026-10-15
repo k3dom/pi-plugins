@@ -1,5 +1,36 @@
 # @pi-plugins/claude-cli
 
+## 0.2.0
+
+### Minor Changes
+
+- 4de58a5: Build every request with pi's own Anthropic provider and leave only sending it to
+  Claude Code. Requests now match those of pi's `anthropic` provider, which brings:
+
+  - On Claude Opus 4.8 and later, Sonnet 5.5 and Fable 5, a system prompt or tool change
+    during a session is sent as a message, so the cached conversation stays valid
+    instead of being written to the cache again.
+  - These models also keep the effort of each earlier turn on record.
+  - Responses can use the model's full output limit instead of Claude Code's lower
+    default.
+  - Tool arguments stream as they are generated, and pi's request and response hooks
+    see `claude-cli` requests.
+
+  Sessions started with an earlier version write their cache once more after the
+  update, because pi now replays their earlier thinking as text.
+
+### Patch Changes
+
+- 571da68: Start Claude Code for the next request of a session ahead of time, which saves about
+  a fifth of a second on every request from the third on. The idle process is stopped
+  after five minutes and when the session ends.
+- b6b8bde: Run all requests of a pi session as one Claude Code session, as Claude Code itself
+  does, instead of starting a new one for every request.
+- 42f4495: Lift the 2 MiB limit on the session history. The conversation now reaches Claude Code
+  over stdin instead of through a settings file, so long sessions and sessions with
+  screenshots no longer fail with `Settings file exceeds the 2MiB limit`. Prompt caching
+  works as before.
+
 ## 0.1.0
 
 ### Minor Changes
