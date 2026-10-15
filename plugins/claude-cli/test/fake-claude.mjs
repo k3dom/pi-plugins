@@ -28,17 +28,15 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     const { request_id } = message
     if (reply.settingsError === undefined) {
       Object.assign(log.settings, message.request.settings)
-      print({
-        type: 'control_response',
-        response: { subtype: 'success', request_id },
-      })
-    } else {
-      print({
-        type: 'control_response',
-        response: { subtype: 'error', request_id, error: reply.settingsError },
-      })
     }
     writeFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify(log))
+    print({
+      type: 'control_response',
+      response:
+        reply.settingsError === undefined
+          ? { subtype: 'success', request_id }
+          : { subtype: 'error', request_id, error: reply.settingsError },
+    })
     return
   }
   log.input.push(message)

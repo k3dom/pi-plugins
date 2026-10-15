@@ -19,11 +19,11 @@ import {
   Array,
   Config,
   Context,
-  Deferred,
   Effect,
   Fiber,
   FileSystem,
   Filter,
+  Latch,
   Layer,
   Match,
   Option,
@@ -253,42 +253,9 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
             Option.getOrElse(() => '.'),
           )
 
-          // The extra body replaces the matching fields of Claude Code's own
-          // request. It reaches Claude Code as settings over stdin, because a
-          // settings file is limited to 2 MiB and an environment variable to
-          // 128 KiB on Linux. The prompt follows once Claude Code has applied
-          // them.
-          const applied = yield* Deferred.make<void>()
-          const input = Stream.make(
-            JSON.stringify({
-              type: 'control_request',
-              request_id: 'extra-body',
-              request: {
-                subtype: 'apply_flag_settings',
-                settings: {
-                  env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(payload.body) },
-                },
-              },
-            }),
-          ).pipe(
-            Stream.concat(
-              Stream.fromEffect(
-                Deferred.await(applied).pipe(
-                  Effect.as(
-                    JSON.stringify({
-                      type: 'user',
-                      message: {
-                        role: 'user',
-                        content: [{ type: 'text', text: prompt }],
-                      },
-                    }),
-                  ),
-                ),
-              ),
-            ),
-            Stream.map((line) => `${line}\n`),
-            Stream.encodeText,
-          )
+          // Held back until Claude Code has applied pi's request body, so it
+          // never answers the prompt without pi's conversation.
+          const applied = yield* Latch.make()
 
           const handle = yield* spawner
             .spawn(
@@ -347,7 +314,42 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
                     CLAUDE_CODE_PROMPT_CACHE_TTL: cacheTtl,
                     DISABLE_PROMPT_CACHING: cacheTtl === undefined ? '1' : undefined,
                   },
-                  stdin: input,
+                  // The extra body replaces the matching fields of Claude
+                  // Code's own request. It reaches Claude Code as settings
+                  // over stdin, because a settings file is limited to 2 MiB
+                  // and an environment variable to 128 KiB on Linux.
+                  stdin: Stream.make(
+                    JSON.stringify({
+                      type: 'control_request',
+                      request_id: 'extra-body',
+                      request: {
+                        subtype: 'apply_flag_settings',
+                        settings: {
+                          env: {
+                            CLAUDE_CODE_EXTRA_BODY: JSON.stringify(payload.body),
+                          },
+                        },
+                      },
+                    }),
+                  ).pipe(
+                    Stream.concat(
+                      Stream.fromEffect(
+                        applied.await.pipe(
+                          Effect.as(
+                            JSON.stringify({
+                              type: 'user',
+                              message: {
+                                role: 'user',
+                                content: [{ type: 'text', text: prompt }],
+                              },
+                            }),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Stream.map((line) => `${line}\n`),
+                    Stream.encodeText,
+                  ),
                   forceKillAfter: '3 seconds',
                 },
               ),
@@ -384,9 +386,7 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
                   Match.discriminatorsExhaustive('type')({
                     control_response: ({ response }) =>
                       response.subtype === 'success'
-                        ? Deferred.succeed(applied, undefined).pipe(
-                            Effect.as(previous),
-                          )
+                        ? applied.open.pipe(Effect.as(previous))
                         : Effect.fail(
                             new ClaudeCliError({
                               reason: new RejectedError({ error: response.error }),
