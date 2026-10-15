@@ -47,6 +47,11 @@ export class RejectedError extends Schema.TaggedError<RejectedError>()(
   { error: Schema.String },
 ) {}
 
+export class AbortedError extends Schema.TaggedError<AbortedError>()(
+  'AbortedError',
+  {},
+) {}
+
 export class NoResponseError extends Schema.TaggedError<NoResponseError>()(
   'NoResponseError',
   {
@@ -73,6 +78,7 @@ export class ClaudeCliError extends Schema.TaggedError<ClaudeCliError>()(
       NotInstalledError,
       LoginBusyError,
       RejectedError,
+      AbortedError,
       NoResponseError,
       ProcessError,
     ]),
@@ -86,6 +92,9 @@ export class ClaudeCliError extends Schema.TaggedError<ClaudeCliError>()(
       LoginBusyError: ({ result }) => result,
       RejectedError: ({ error }) =>
         `Claude Code did not accept the request: ${error}`,
+      // What pi's Anthropic provider reports for an aborted request, which pi
+      // shows as an abort rather than an error.
+      AbortedError: () => 'Request was aborted',
       NoResponseError: ({ exitCode, result }) =>
         result ||
         String.trim(this.stderr ?? '') ||
@@ -112,8 +121,8 @@ const Content = Schema.Union([Schema.String, Schema.Array(Block)])
 const blocks = (content: typeof Content.Type) =>
   Predicate.isString(content) ? [{ type: 'text', text: content }] : content
 
-// The parts of the request that decide how Claude Code runs.
-const Request = Schema.Struct({
+// The parts of the request parameters that decide how Claude Code runs.
+const Params = Schema.Struct({
   system: Schema.optional(Content),
   messages: Schema.Array(Schema.Struct({ role: Schema.String, content: Content })),
   tools: Schema.optional(
@@ -163,8 +172,13 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
         const body = yield* Schema.decodeUnknownEffect(Body)(options.body).pipe(
           Effect.orDie,
         )
-        const request = yield* Schema.decodeUnknownEffect(Request)(body).pipe(
+        const params = yield* Schema.decodeUnknownEffect(Params)(body).pipe(
           Effect.orDie,
+        )
+        const system: ReadonlyArray<typeof Block.Type> = pipe(
+          Option.fromNullishOr(params.system),
+          Option.map(blocks),
+          Option.getOrElse(() => []),
         )
         // A file rather than an argument, which is limited to 128 KiB on
         // Linux. Claude Code puts its billing header and identity before it.
@@ -175,10 +189,8 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
         yield* fs.writeFileString(
           systemPromptFile,
           pipe(
-            Option.fromNullishOr(request.system),
-            Option.map(blocks),
-            Option.getOrElse(() => []),
-            Array.flatMap(({ text }) => (text === undefined ? [] : [text])),
+            system,
+            Array.flatMapNullishOr(({ text }) => text),
             Array.join('\n\n'),
           ),
         )
@@ -188,13 +200,9 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
         // both use pi's TTL.
         const cacheTtl = pipe(
           [
-            ...pipe(
-              Option.fromNullishOr(request.system),
-              Option.map(blocks),
-              Option.getOrElse(() => []),
-            ),
-            ...(request.tools ?? []),
-            ...Array.flatMap(request.messages, (message) => blocks(message.content)),
+            ...system,
+            ...(params.tools ?? []),
+            ...Array.flatMap(params.messages, (message) => blocks(message.content)),
           ],
           Array.findFirst((block) => Option.fromNullishOr(block.cache_control)),
           Option.map((cacheControl) => cacheControl.ttl ?? '5m'),
@@ -203,18 +211,16 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
         // Claude Code's billing header carries a fingerprint of the first
         // user message, so it gets pi's.
         const prompt = pipe(
-          request.messages,
+          params.messages,
           Array.findFirst((message) =>
             message.role === 'user' ? Option.some(message.content) : Option.none(),
           ),
           Option.flatMap((content) =>
-            Predicate.isString(content)
-              ? Option.some(content)
-              : Array.findFirst(content, (block) =>
-                  block.type === 'text'
-                    ? Option.fromNullishOr(block.text)
-                    : Option.none(),
-                ),
+            Array.findFirst(blocks(content), (block) =>
+              block.type === 'text'
+                ? Option.fromNullishOr(block.text)
+                : Option.none(),
+            ),
           ),
           Option.filter(String.isNonEmpty),
           Option.getOrElse(() => '.'),
@@ -281,7 +287,7 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
                   CLAUDE_CODE_TOTAL_TOKENS_REMINDER: 'off',
                   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
                   CLAUDE_CODE_DISABLE_THINKING:
-                    request.thinking?.type === 'disabled' ? '1' : undefined,
+                    params.thinking?.type === 'disabled' ? '1' : undefined,
                   CLAUDE_CODE_PROMPT_CACHE_TTL: Option.getOrUndefined(cacheTtl),
                   DISABLE_PROMPT_CACHING: Option.isNone(cacheTtl) ? '1' : undefined,
                 },
@@ -480,8 +486,11 @@ export function stream(
         ).pipe(
           // Pi stops reading the response when aborted but does not cancel it.
           Stream.interruptWhen(
-            Effect.callback<void>((resume) => {
-              const abort = () => resume(Effect.void)
+            Effect.callback<never, ClaudeCliError>((resume) => {
+              const abort = () =>
+                resume(
+                  Effect.fail(new ClaudeCliError({ reason: new AbortedError() })),
+                )
               if (signal?.aborted) {
                 abort()
               }
@@ -491,7 +500,12 @@ export function stream(
           ),
         )
         return new Response(
-          Stream.toReadableStreamWith(events, await runtime.context()),
+          Stream.toReadableStreamWith(events, await runtime.context(), {
+            // Reads Claude Code's response to the end even when pi stops
+            // reading early without aborting, so the process is always
+            // stopped.
+            strategy: new CountQueuingStrategy({ highWaterMark: Infinity }),
+          }),
           { headers: { 'content-type': 'text/event-stream' } },
         )
       },

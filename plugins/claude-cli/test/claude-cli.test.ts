@@ -4,7 +4,11 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   normalizeContext,
+  type Api,
+  type AssistantMessage,
   type Context,
+  type Message,
+  type Model,
   type SimpleStreamOptions,
 } from '@earendil-works/pi-ai'
 import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all'
@@ -16,12 +20,56 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from '@effect/vitest'
 import { deepStrictEqual } from '@effect/vitest/utils'
 import * as ClaudeCli from '../src/claude-cli'
-import * as Helpers from './helpers'
 
-type Reply = { lines: Array<unknown>; exitCode?: number; settingsError?: string }
+type Reply = {
+  lines: Array<unknown>
+  delayMs?: number
+  exitCode?: number
+  settingsError?: string
+}
+
+const model: Model<Api> = {
+  ...getBuiltinModel('anthropic', 'claude-haiku-4-5'),
+  provider: 'claude-cli',
+  api: 'claude-cli',
+}
+
+const user = (text: string): Message => ({
+  role: 'user',
+  content: text,
+  timestamp: 0,
+})
+
+const assistant = (content: AssistantMessage['content']): Message => ({
+  role: 'assistant',
+  content,
+  api: model.api,
+  provider: model.provider,
+  model: model.id,
+  usage: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  },
+  stopReason: 'stop',
+  timestamp: 0,
+})
+
+const toolResult = (toolCallId: string, text: string): Message => ({
+  role: 'toolResult',
+  toolCallId,
+  toolName: 'read',
+  content: [{ type: 'text', text }],
+  isError: false,
+  timestamp: 0,
+})
 
 let dir: string
 let log: string
@@ -51,7 +99,7 @@ const messageStart = (id: string) =>
     type: 'message_start',
     message: {
       id,
-      model: Helpers.model.id,
+      model: model.id,
       usage: {
         input_tokens: 10,
         output_tokens: 1,
@@ -61,7 +109,7 @@ const messageStart = (id: string) =>
     },
   })
 
-const reply = (id: string, text: string, stopReason = 'end_turn'): Reply => ({
+const reply = (id: string, text: string): Reply => ({
   lines: [
     messageStart(id),
     event({
@@ -77,7 +125,7 @@ const reply = (id: string, text: string, stopReason = 'end_turn'): Reply => ({
     event({ type: 'content_block_stop', index: 0 }),
     event({
       type: 'message_delta',
-      delta: { stop_reason: stopReason },
+      delta: { stop_reason: 'end_turn' },
       usage: { output_tokens: 20 },
     }),
     event({ type: 'message_stop' }),
@@ -95,10 +143,10 @@ const run = async (
   replies: Array<Reply>,
   context: Context,
   options?: SimpleStreamOptions,
-  model = Helpers.model,
+  target = model,
 ) => {
   process.env['FAKE_CLAUDE_REPLIES'] = JSON.stringify(replies)
-  const stream = ClaudeCli.stream(model, normalizeContext(context), options)
+  const stream = ClaudeCli.stream(target, normalizeContext(context), options)
   const events: Array<string> = []
   for await (const next of stream) {
     events.push(next.type)
@@ -120,7 +168,7 @@ const run = async (
 describe('stream', () => {
   it('streams a text reply with its usage and cost', async () => {
     const { message, events } = await run([reply('msg_1', 'Hello there')], {
-      messages: [Helpers.user('Hi')],
+      messages: [user('Hi')],
     })
 
     expect(message).toMatchObject({
@@ -179,7 +227,7 @@ describe('stream', () => {
           ],
         },
       ],
-      { messages: [Helpers.user('Read a.txt')] },
+      { messages: [user('Read a.txt')] },
     )
 
     expect(message).toMatchObject({ stopReason: 'toolUse', responseId: 'msg_1' })
@@ -209,7 +257,7 @@ describe('stream', () => {
             },
           },
         ],
-        messages: [Helpers.user('Read a.txt')],
+        messages: [user('Read a.txt')],
       },
       { cacheRetention: 'long' },
     )
@@ -248,35 +296,35 @@ describe('stream', () => {
       {
         systemPrompt: 'Be terse.',
         messages: [
-          Helpers.user('Hi'),
-          Helpers.assistant([{ type: 'text', text: 'Hello' }]),
+          user('Hi'),
+          assistant([{ type: 'text', text: 'Hello' }]),
           { role: 'system', content: 'Answer in French.', timestamp: 0 },
-          Helpers.user('Hi again'),
+          user('Hi again'),
         ],
       },
       undefined,
       {
-        ...getBuiltinModel('anthropic', 'claude-sonnet-5-5'),
+        ...getBuiltinModel('anthropic', 'claude-opus-4-8'),
         provider: 'claude-cli',
         api: 'claude-cli',
       },
     )
 
     assert.strictEqual(received.systemPrompt, 'Be terse.')
-    expect(body['messages']).toContainEqual(
-      expect.objectContaining({
-        role: 'system',
-        content: [
-          expect.objectContaining({ type: 'text', text: 'Answer in French.' }),
-        ],
-      }),
-    )
+    expect(body).toMatchObject({
+      messages: [
+        { role: 'user' },
+        { role: 'assistant' },
+        { role: 'user' },
+        { role: 'system', content: [{ type: 'text', text: 'Answer in French.' }] },
+      ],
+    })
   })
 
   it('turns caching off in Claude Code when pi has it off', async () => {
     const { received } = await run(
       [reply('msg_1', 'Hi')],
-      { systemPrompt: 'Be terse.', messages: [Helpers.user('Hi')] },
+      { systemPrompt: 'Be terse.', messages: [user('Hi')] },
       { cacheRetention: 'none' },
     )
 
@@ -287,7 +335,7 @@ describe('stream', () => {
   it("passes pi's beta flags on to Claude Code", async () => {
     const { received } = await run(
       [reply('msg_1', 'Hi')],
-      { messages: [Helpers.user('Hi')] },
+      { messages: [user('Hi')] },
       { reasoning: 'low' },
     )
 
@@ -301,7 +349,7 @@ describe('stream', () => {
     const sessionId = '018f2a3b-1c2d-7e4f-8a9b-0c1d2e3f4a5b'
     const { received } = await run(
       [reply('msg_1', 'Hi')],
-      { messages: [Helpers.user('Hi')] },
+      { messages: [user('Hi')] },
       { sessionId },
     )
 
@@ -312,11 +360,9 @@ describe('stream', () => {
     const contents = 'x'.repeat(3 * 1024 * 1024)
     const { message, body } = await run([reply('msg_1', 'Done')], {
       messages: [
-        Helpers.user('Read a.txt'),
-        Helpers.assistant([
-          { type: 'toolCall', id: 'call_1', name: 'read', arguments: {} },
-        ]),
-        Helpers.toolResult('call_1', contents),
+        user('Read a.txt'),
+        assistant([{ type: 'toolCall', id: 'call_1', name: 'read', arguments: {} }]),
+        toolResult('call_1', contents),
       ],
     })
 
@@ -329,7 +375,7 @@ describe('stream', () => {
   it('sends no prompt when Claude Code refuses the request body', async () => {
     const { message, received } = await run(
       [{ lines: [], settingsError: 'Unsupported control request subtype' }],
-      { messages: [Helpers.user('Hi')] },
+      { messages: [user('Hi')] },
     )
 
     expect(message).toMatchObject({
@@ -344,7 +390,7 @@ describe('stream', () => {
     process.env['ANTHROPIC_API_KEY'] = 'sk-ant-test'
     try {
       const { message, received } = await run([reply('msg_1', 'Hi')], {
-        messages: [Helpers.user('Hi')],
+        messages: [user('Hi')],
       })
       assert.strictEqual(message.stopReason, 'stop')
       assert.isUndefined(received.env['ANTHROPIC_API_KEY'])
@@ -355,17 +401,17 @@ describe('stream', () => {
 
   it('keeps Claude Code out of auto mode and its tool use classifier', async () => {
     const { received } = await run([reply('msg_1', 'Hi')], {
-      messages: [Helpers.user('Hi')],
+      messages: [user('Hi')],
     })
 
     assert.include(received.args.join(' '), '--permission-mode default')
   })
 
   it('turns thinking off in Claude Code when pi has it off', async () => {
-    const off = await run([reply('msg_1', 'Hi')], { messages: [Helpers.user('Hi')] })
+    const off = await run([reply('msg_1', 'Hi')], { messages: [user('Hi')] })
     const low = await run(
       [reply('msg_2', 'Hi')],
-      { messages: [Helpers.user('Hi')] },
+      { messages: [user('Hi')] },
       { reasoning: 'low' },
     )
 
@@ -375,7 +421,7 @@ describe('stream', () => {
 
   it("reports Claude Code's error when no response arrives", async () => {
     const { message } = await run([failure('API Error: 529 Overloaded')], {
-      messages: [Helpers.user('Hi')],
+      messages: [user('Hi')],
     })
 
     expect(message).toMatchObject({
@@ -392,7 +438,7 @@ describe('stream', () => {
         ),
         reply('msg_1', 'Hello'),
       ],
-      { messages: [Helpers.user('Hi')] },
+      { messages: [user('Hi')] },
     )
 
     expect(message).toMatchObject({
@@ -407,8 +453,8 @@ describe('stream', () => {
     ])
     const controller = new AbortController()
     const stream = ClaudeCli.stream(
-      Helpers.model,
-      normalizeContext({ messages: [Helpers.user('Hi')] }),
+      model,
+      normalizeContext({ messages: [user('Hi')] }),
       { signal: controller.signal },
     )
     for await (const next of stream) {
@@ -419,7 +465,28 @@ describe('stream', () => {
 
     expect(await stream.result()).toMatchObject({
       stopReason: 'aborted',
+      errorMessage: 'Request was aborted',
       content: [{ type: 'text', text: 'Hel' }],
+    })
+  })
+
+  it('stops Claude Code when pi stops reading the response early', async () => {
+    process.env['FAKE_CLAUDE_REPLIES'] = JSON.stringify([
+      { ...reply('msg_1', 'Hello'), delayMs: 50 },
+    ])
+    const stream = ClaudeCli.stream(
+      model,
+      normalizeContext({ messages: [user('Hi')] }),
+      {
+        onProviderStreamEvent: () => {
+          throw new Error('Hook failed')
+        },
+      },
+    )
+
+    assert.strictEqual((await stream.result()).errorMessage, 'Hook failed')
+    await vi.waitFor(async () => {
+      assert.isTrue(JSON.parse(await readFile(log, 'utf8')).stopped)
     })
   })
 })
