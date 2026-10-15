@@ -4,7 +4,7 @@ export default defineConfig({
   platform: 'node',
   exports: { inlinedDependencies: false },
   deps: {
-    alwaysBundle: ['@pi-plugins/shared', /^effect(\/|$)/, /^@effect\//],
+    alwaysBundle: [/^effect(\/|$)/, /^@effect\//],
   },
   sourcemap: true,
   dts: {

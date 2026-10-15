@@ -7,6 +7,7 @@ import {
   type Context,
   type SimpleStreamOptions,
 } from '@earendil-works/pi-ai'
+import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all'
 import {
   afterAll,
   assert,
@@ -94,9 +95,10 @@ const run = async (
   replies: Array<Reply>,
   context: Context,
   options?: SimpleStreamOptions,
+  model = Helpers.model,
 ) => {
   process.env['FAKE_CLAUDE_REPLIES'] = JSON.stringify(replies)
-  const stream = ClaudeCli.stream(Helpers.model, normalizeContext(context), options)
+  const stream = ClaudeCli.stream(model, normalizeContext(context), options)
   const events: Array<string> = []
   for await (const next of stream) {
     events.push(next.type)
@@ -105,10 +107,14 @@ const run = async (
     args: Array<string>
     env: Record<string, string | undefined>
     systemPrompt: string
-    settings: { env: { CLAUDE_CODE_EXTRA_BODY: string } }
+    settings: { env?: { CLAUDE_CODE_EXTRA_BODY: string } }
     input: Array<unknown>
   } = JSON.parse(await readFile(log, 'utf8'))
-  return { message: await stream.result(), events, received }
+  // The request body Claude Code applied, if it accepted one.
+  const body: Record<string, unknown> = JSON.parse(
+    received.settings.env?.CLAUDE_CODE_EXTRA_BODY ?? '{}',
+  )
+  return { message: await stream.result(), events, received, body }
 }
 
 describe('stream', () => {
@@ -187,8 +193,8 @@ describe('stream', () => {
     ])
   })
 
-  it("sends pi's conversation, prompt and tools in place of Claude Code's own", async () => {
-    const { received } = await run(
+  it("sends pi's request in place of Claude Code's own", async () => {
+    const { received, body } = await run(
       [reply('msg_1', 'Done')],
       {
         systemPrompt: 'Be terse.',
@@ -203,61 +209,29 @@ describe('stream', () => {
             },
           },
         ],
-        messages: [
-          Helpers.user('Read a.txt'),
-          Helpers.assistant([
-            {
-              type: 'toolCall',
-              id: 'call|1',
-              name: 'read',
-              arguments: { path: 'a.txt' },
-            },
-          ]),
-          Helpers.toolResult('call|1', 'contents'),
-        ],
+        messages: [Helpers.user('Read a.txt')],
       },
       { cacheRetention: 'long' },
     )
 
     assert.strictEqual(received.systemPrompt, 'Be terse.')
-    deepStrictEqual(JSON.parse(received.settings.env.CLAUDE_CODE_EXTRA_BODY), {
+    expect(body).toMatchObject({
       messages: [
-        { role: 'user', content: [{ type: 'text', text: 'Read a.txt' }] },
-        {
-          role: 'assistant',
-          content: [
-            {
-              type: 'tool_use',
-              id: 'call_1',
-              name: 'read',
-              input: { path: 'a.txt' },
-            },
-          ],
-        },
         {
           role: 'user',
           content: [
             {
-              type: 'tool_result',
-              tool_use_id: 'call_1',
-              content: 'contents',
+              type: 'text',
+              text: 'Read a.txt',
               cache_control: { type: 'ephemeral', ttl: '1h' },
             },
           ],
         },
       ],
-      tools: [
-        {
-          name: 'read',
-          description: 'Read a file',
-          input_schema: {
-            type: 'object',
-            properties: { path: { type: 'string' } },
-            required: ['path'],
-          },
-        },
-      ],
+      tools: [{ name: 'read', description: 'Read a file' }],
     })
+    // Claude Code keeps its own model, billing header, identity and metadata.
+    assert.doesNotHaveAnyKeys(body, ['model', 'system', 'stream', 'metadata'])
     assert.strictEqual(received.env['CLAUDE_CODE_PROMPT_CACHE_TTL'], '1h')
     // Claude Code fingerprints the first user message in its billing header.
     deepStrictEqual(received.input, [
@@ -268,9 +242,64 @@ describe('stream', () => {
     ])
   })
 
+  it('keeps a later system prompt change in the conversation, where it leaves the cache intact', async () => {
+    const { received, body } = await run(
+      [reply('msg_1', 'Bonjour')],
+      {
+        systemPrompt: 'Be terse.',
+        messages: [
+          Helpers.user('Hi'),
+          Helpers.assistant([{ type: 'text', text: 'Hello' }]),
+          { role: 'system', content: 'Answer in French.', timestamp: 0 },
+          Helpers.user('Hi again'),
+        ],
+      },
+      undefined,
+      {
+        ...getBuiltinModel('anthropic', 'claude-sonnet-5-5'),
+        provider: 'claude-cli',
+        api: 'claude-cli',
+      },
+    )
+
+    assert.strictEqual(received.systemPrompt, 'Be terse.')
+    expect(body['messages']).toContainEqual(
+      expect.objectContaining({
+        role: 'system',
+        content: [
+          expect.objectContaining({ type: 'text', text: 'Answer in French.' }),
+        ],
+      }),
+    )
+  })
+
+  it('turns caching off in Claude Code when pi has it off', async () => {
+    const { received } = await run(
+      [reply('msg_1', 'Hi')],
+      { systemPrompt: 'Be terse.', messages: [Helpers.user('Hi')] },
+      { cacheRetention: 'none' },
+    )
+
+    assert.strictEqual(received.env['DISABLE_PROMPT_CACHING'], '1')
+    assert.isUndefined(received.env['CLAUDE_CODE_PROMPT_CACHE_TTL'])
+  })
+
+  it("passes pi's beta flags on to Claude Code", async () => {
+    const { received } = await run(
+      [reply('msg_1', 'Hi')],
+      { messages: [Helpers.user('Hi')] },
+      { reasoning: 'low' },
+    )
+
+    assert.include(
+      received.env['ANTHROPIC_BETAS'],
+      'interleaved-thinking-2025-05-14',
+    )
+  })
+
   it('passes Claude Code a conversation beyond the limits of settings files and the environment', async () => {
     const contents = 'x'.repeat(3 * 1024 * 1024)
-    const { message, received } = await run([reply('msg_1', 'Done')], {
+    const { message, body } = await run([reply('msg_1', 'Done')], {
       messages: [
         Helpers.user('Read a.txt'),
         Helpers.assistant([
@@ -281,7 +310,7 @@ describe('stream', () => {
     })
 
     assert.strictEqual(message.stopReason, 'stop')
-    expect(JSON.parse(received.settings.env.CLAUDE_CODE_EXTRA_BODY)).toMatchObject({
+    expect(body).toMatchObject({
       messages: [{}, {}, { content: [{ type: 'tool_result', content: contents }] }],
     })
   })
@@ -321,18 +350,16 @@ describe('stream', () => {
     assert.include(received.args.join(' '), '--permission-mode default')
   })
 
-  it('runs at the requested effort and turns thinking off without a level', async () => {
-    const minimal = await run(
-      [reply('msg_1', 'Hi')],
+  it('turns thinking off in Claude Code when pi has it off', async () => {
+    const off = await run([reply('msg_1', 'Hi')], { messages: [Helpers.user('Hi')] })
+    const low = await run(
+      [reply('msg_2', 'Hi')],
       { messages: [Helpers.user('Hi')] },
-      { reasoning: 'minimal' },
+      { reasoning: 'low' },
     )
-    const off = await run([reply('msg_2', 'Hi')], { messages: [Helpers.user('Hi')] })
 
-    assert.include(minimal.received.args.join(' '), '--effort low')
-    assert.isUndefined(minimal.received.env['CLAUDE_CODE_DISABLE_THINKING'])
-    assert.notInclude(off.received.args, '--effort')
     assert.strictEqual(off.received.env['CLAUDE_CODE_DISABLE_THINKING'], '1')
+    assert.isUndefined(low.received.env['CLAUDE_CODE_DISABLE_THINKING'])
   })
 
   it("reports Claude Code's error when no response arrives", async () => {
@@ -343,18 +370,6 @@ describe('stream', () => {
     expect(message).toMatchObject({
       stopReason: 'error',
       errorMessage: 'API Error: 529 Overloaded',
-    })
-  })
-
-  it('reports an unknown stop reason as an error that pi can recognize', async () => {
-    const { message } = await run(
-      [reply('msg_1', 'cut off', 'model_context_window_exceeded')],
-      { messages: [Helpers.user('Hi')] },
-    )
-
-    expect(message).toMatchObject({
-      stopReason: 'error',
-      errorMessage: 'Unhandled stop reason: model_context_window_exceeded',
     })
   })
 

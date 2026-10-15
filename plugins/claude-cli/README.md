@@ -6,10 +6,11 @@ subscription this way stays within Anthropic's terms of service.
 
 ## How it works
 
-Every model request starts a fresh `claude --print` process. pi hands it the
-conversation, system prompt, tools and thinking settings. Claude Code signs the
-request and sends it with your subscription, so it counts against your plan's limits
-like Claude Code's own requests. The process is stopped as soon as the response is
+pi's built-in Anthropic provider builds each request and reads the response, just as
+it does for the `anthropic` provider. Only sending the request is left to Claude
+Code: every request starts a fresh `claude --print` process, which signs the request
+and sends it with your subscription, so it counts against your plan's limits like
+Claude Code's own requests. The process is stopped as soon as the response is
 complete, so Claude Code never runs a tool or sends a request of its own.
 
 Claude Code only signs you in, signs the request and sends it. Everything else stays
@@ -22,8 +23,11 @@ with pi:
   Claude Code's built-in tools and MCP servers stay off.
 - **pi's session.** pi keeps the conversation, compaction, retries and thinking
   level. Claude Code keeps no session of its own.
-- **pi's prompt caching.** The cache anchor sits on the newest message, as in pi's
-  Anthropic provider, so each request reads the earlier conversation from cache.
+- **pi's prompt caching.** The conversation, tools, thinking settings and cache
+  breakpoints are those of pi's Anthropic provider, so each request reads the earlier
+  conversation from cache. On models that support it, a change to the system prompt
+  or the tools during a session is sent as a message, which keeps the cached
+  conversation valid.
 - **No copied request details.** The plugin pins no headers, version numbers or
   signing values from Claude Code. Claude Code builds and signs every request itself.
 

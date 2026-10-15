@@ -80,9 +80,6 @@ importers:
       '@pi-plugins/lint':
         specifier: workspace:*
         version: link:../../tooling/lint
-      '@pi-plugins/shared':
-        specifier: workspace:*
-        version: link:../../tooling/shared
       '@pi-plugins/tsconfig':
         specifier: workspace:*
         version: link:../../tooling/tsconfig
