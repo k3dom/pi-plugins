@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,7 +25,7 @@ import {
   vi,
 } from '@effect/vitest'
 import { deepStrictEqual } from '@effect/vitest/utils'
-import { Array, pipe, String } from 'effect'
+import { Array, Number, pipe, String } from 'effect'
 import * as ClaudeCli from '../src/claude-cli'
 
 type Reply = {
@@ -90,6 +91,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await rm(log, { force: true })
   await rm(`${log}.count`, { force: true })
+  await rm(`${log}.started`, { force: true })
   await rm(`${log}.stopped`, { force: true })
 })
 
@@ -145,13 +147,12 @@ const failure = (result: string): Reply => ({
   exitCode: 1,
 })
 
-// The pids of the fake Claude Code processes that were stopped.
-const stopped = async () =>
+const pids = async (kind: 'started' | 'stopped') =>
   pipe(
-    await readFile(`${log}.stopped`, 'utf8').catch(() => ''),
+    await readFile(`${log}.${kind}`, 'utf8').catch(() => ''),
     String.split('\n'),
-    Array.filter(String.isNonEmpty),
-    Array.map(globalThis.Number),
+    Array.map(Number.parse),
+    Array.getSomes,
   )
 
 const run = async (
@@ -503,42 +504,77 @@ describe('stream', () => {
 
     assert.strictEqual((await stream.result()).errorMessage, 'Hook failed')
     const { pid } = JSON.parse(await readFile(log, 'utf8'))
-    await vi.waitFor(async () => assert.include(await stopped(), pid))
+    await vi.waitFor(async () => assert.include(await pids('stopped'), pid))
   })
 
-  it('answers the next request with a Claude Code process started ahead', async () => {
-    await run([reply('msg_1', 'Hi')], { messages: [user('Hi')] })
+  it('answers a request with a Claude Code process started ahead by the one before', async () => {
+    const options = { sessionId: randomUUID() }
+    await run([reply('msg_1', 'Hi')], { messages: [user('Hi')] }, options)
+    await run([reply('msg_2', 'Hi')], { messages: [user('Hi')] }, options)
+    await vi.waitFor(async () => assert.lengthOf(await pids('started'), 3))
     const requested = Date.now()
-    const { message, received } = await run([reply('msg_2', 'Hi')], {
-      messages: [user('Hi'), assistant([{ type: 'text', text: 'Hi' }]), user('Bye')],
-    })
+    const { message, received } = await run(
+      [reply('msg_3', 'Hi')],
+      { messages: [user('Hi')] },
+      options,
+    )
 
     assert.strictEqual(message.stopReason, 'stop')
     assert.isBelow(received.startedAt, requested)
   })
 
-  it('starts Claude Code afresh when the next request needs another setup', async () => {
-    await run([reply('msg_1', 'Hi')], {
-      systemPrompt: 'Be terse.',
-      messages: [user('Hi')],
-    })
+  it('starts no process ahead for the first request of a session, such as a summary', async () => {
+    const options = { sessionId: randomUUID() }
+    await run([reply('msg_1', 'Hi')], { messages: [user('Hi')] }, options)
     const requested = Date.now()
-    const { received } = await run([reply('msg_2', 'Hi')], {
-      systemPrompt: 'Be verbose.',
-      messages: [user('Hi')],
-    })
+    const { received } = await run(
+      [reply('msg_2', 'Hi')],
+      { messages: [user('Hi')] },
+      options,
+    )
+
+    assert.isAtLeast(received.startedAt, requested)
+  })
+
+  it('starts Claude Code afresh when the next request needs another setup', async () => {
+    const options = { sessionId: randomUUID() }
+    const terse = { systemPrompt: 'Be terse.', messages: [user('Hi')] }
+    await run([reply('msg_1', 'Hi')], terse, options)
+    await run([reply('msg_2', 'Hi')], terse, options)
+    const requested = Date.now()
+    const { received } = await run(
+      [reply('msg_3', 'Hi')],
+      { systemPrompt: 'Be verbose.', messages: [user('Hi')] },
+      options,
+    )
 
     assert.strictEqual(received.systemPrompt, 'Be verbose.')
     assert.isAtLeast(received.startedAt, requested)
   })
 
   it('stops the processes started ahead when released', async () => {
-    await run([reply('msg_1', 'Hi')], { messages: [user('Hi')] })
-    await vi.waitFor(async () =>
-      assert.strictEqual(await readFile(`${log}.count`, 'utf8'), '2'),
-    )
+    const options = { sessionId: randomUUID() }
+    await run([reply('msg_1', 'Hi')], { messages: [user('Hi')] }, options)
+    await run([reply('msg_2', 'Hi')], { messages: [user('Hi')] }, options)
+    await vi.waitFor(async () => assert.lengthOf(await pids('started'), 3))
     await ClaudeCli.release()
 
-    assert.lengthOf(await stopped(), 2)
+    assert.sameMembers(await pids('stopped'), await pids('started'))
+  })
+
+  it('keeps one process ahead per session when its requests overlap', async () => {
+    process.env['FAKE_CLAUDE_REPLIES'] = JSON.stringify([reply('msg_1', 'Hi')])
+    const options = { sessionId: randomUUID() }
+    const request = () =>
+      ClaudeCli.stream(
+        model,
+        normalizeContext({ messages: [user('Hi')] }),
+        options,
+      ).result()
+    await request()
+    await Promise.all([request(), request(), request()])
+    await ClaudeCli.release()
+
+    assert.sameMembers(await pids('stopped'), await pids('started'))
   })
 })

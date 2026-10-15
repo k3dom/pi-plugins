@@ -1,9 +1,9 @@
 // Stands in for the `claude` CLI. It answers its input with the lines of the
-// next reply in FAKE_CLAUDE_REPLIES, `delayMs` apart, records what it was
-// given to FAKE_CLAUDE_LOG, and adds its pid to FAKE_CLAUDE_LOG.stopped when it
-// is stopped. Like the real CLI, it applies settings from control requests,
-// refuses them with the reply's `settingsError`, and keeps running until it is
-// stopped.
+// next reply in FAKE_CLAUDE_REPLIES, `delayMs` apart, and records what it was
+// given to FAKE_CLAUDE_LOG. It adds its pid to FAKE_CLAUDE_LOG.started when it
+// starts and to FAKE_CLAUDE_LOG.stopped when it is stopped. Like the real CLI,
+// it applies settings from control requests, refuses them with the reply's
+// `settingsError`, and keeps running until it is stopped.
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
@@ -11,6 +11,7 @@ process.on('SIGTERM', () => {
   appendFileSync(`${process.env.FAKE_CLAUDE_LOG}.stopped`, `${process.pid}\n`)
   process.exit(0)
 })
+appendFileSync(`${process.env.FAKE_CLAUDE_LOG}.started`, `${process.pid}\n`)
 
 const args = process.argv.slice(2)
 const option = (name) => args[args.indexOf(name) + 1]
