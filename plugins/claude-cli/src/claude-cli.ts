@@ -144,6 +144,8 @@ const Line = Schema.fromJsonString(
   ]),
 )
 
+const SessionId = Schema.String.check(Schema.isUUID())
+
 export class ClaudeCli extends Context.Service<ClaudeCli>()(
   '@pi-plugins/claude-cli/ClaudeCli',
   {
@@ -156,6 +158,7 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
         readonly model: string
         readonly body: unknown
         readonly betas: Option.Option<string>
+        readonly sessionId: Option.Option<string>
       }) {
         const body = yield* Schema.decodeUnknownEffect(Body)(options.body).pipe(
           Effect.orDie,
@@ -251,6 +254,16 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
                 // directory, home directory and git state to each request.
                 '--permission-mode',
                 'default',
+                // All requests of a pi session form one Claude Code session,
+                // as they would in Claude Code itself.
+                ...pipe(
+                  options.sessionId,
+                  Option.filter(Schema.is(SessionId)),
+                  Option.match({
+                    onNone: () => [],
+                    onSome: (id) => ['--session-id', id],
+                  }),
+                ),
               ],
               {
                 cwd: process.cwd(),
@@ -461,6 +474,7 @@ export function stream(
               betas: Option.fromNullishOr(
                 new Headers(init?.headers).get('anthropic-beta'),
               ),
+              sessionId: Option.fromNullishOr(options?.sessionId),
             })
           }),
         ).pipe(

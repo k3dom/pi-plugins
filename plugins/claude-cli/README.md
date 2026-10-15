@@ -22,7 +22,8 @@ with pi:
 - **pi's tools.** The model sees pi's tools under their own names, and pi runs them.
   Claude Code's built-in tools and MCP servers stay off.
 - **pi's session.** pi keeps the conversation, compaction, retries and thinking
-  level. Claude Code keeps no session of its own.
+  level. The requests of a pi session share one Claude Code session ID, but Claude
+  Code stores nothing.
 - **pi's prompt caching.** The conversation, tools, thinking settings and cache
   breakpoints are those of pi's Anthropic provider, so each request reads the earlier
   conversation from cache. On models that support it, a change to the system prompt

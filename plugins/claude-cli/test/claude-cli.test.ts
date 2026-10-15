@@ -297,6 +297,17 @@ describe('stream', () => {
     )
   })
 
+  it('runs the requests of a pi session as one Claude Code session', async () => {
+    const sessionId = '018f2a3b-1c2d-7e4f-8a9b-0c1d2e3f4a5b'
+    const { received } = await run(
+      [reply('msg_1', 'Hi')],
+      { messages: [Helpers.user('Hi')] },
+      { sessionId },
+    )
+
+    assert.include(received.args.join(' '), `--session-id ${sessionId}`)
+  })
+
   it('passes Claude Code a conversation beyond the limits of settings files and the environment', async () => {
     const contents = 'x'.repeat(3 * 1024 * 1024)
     const { message, body } = await run([reply('msg_1', 'Done')], {
