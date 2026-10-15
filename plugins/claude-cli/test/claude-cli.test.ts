@@ -20,7 +20,7 @@ import { deepStrictEqual } from '@effect/vitest/utils'
 import * as ClaudeCli from '../src/claude-cli'
 import * as Helpers from './helpers'
 
-type Reply = { lines: Array<unknown>; exitCode?: number }
+type Reply = { lines: Array<unknown>; exitCode?: number; settingsError?: string }
 
 let dir: string
 let log: string
@@ -266,6 +266,38 @@ describe('stream', () => {
         message: { role: 'user', content: [{ type: 'text', text: 'Read a.txt' }] },
       },
     ])
+  })
+
+  it('passes Claude Code a conversation beyond the limits of settings files and the environment', async () => {
+    const contents = 'x'.repeat(3 * 1024 * 1024)
+    const { message, received } = await run([reply('msg_1', 'Done')], {
+      messages: [
+        Helpers.user('Read a.txt'),
+        Helpers.assistant([
+          { type: 'toolCall', id: 'call_1', name: 'read', arguments: {} },
+        ]),
+        Helpers.toolResult('call_1', contents),
+      ],
+    })
+
+    assert.strictEqual(message.stopReason, 'stop')
+    expect(JSON.parse(received.settings.env.CLAUDE_CODE_EXTRA_BODY)).toMatchObject({
+      messages: [{}, {}, { content: [{ type: 'tool_result', content: contents }] }],
+    })
+  })
+
+  it('sends no prompt when Claude Code refuses the request body', async () => {
+    const { message, received } = await run(
+      [{ lines: [], settingsError: 'Unsupported control request subtype' }],
+      { messages: [Helpers.user('Hi')] },
+    )
+
+    expect(message).toMatchObject({
+      stopReason: 'error',
+      errorMessage:
+        'Claude Code did not accept the request: Unsupported control request subtype',
+    })
+    deepStrictEqual(received.input, [])
   })
 
   it('keeps an API key in the environment away from Claude Code', async () => {

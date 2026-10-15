@@ -19,6 +19,7 @@ import {
   Array,
   Config,
   Context,
+  Deferred,
   Effect,
   Fiber,
   FileSystem,
@@ -47,6 +48,11 @@ export class LoginBusyError extends Schema.TaggedError<LoginBusyError>()(
   { result: Schema.String },
 ) {}
 
+export class RejectedError extends Schema.TaggedError<RejectedError>()(
+  'RejectedError',
+  { error: Schema.String },
+) {}
+
 export class NoResponseError extends Schema.TaggedError<NoResponseError>()(
   'NoResponseError',
   { exitCode: Schema.Number, result: Schema.optional(Schema.String) },
@@ -69,6 +75,7 @@ export class ClaudeCliError extends Schema.TaggedError<ClaudeCliError>()(
     reason: Schema.Union([
       NotInstalledError,
       LoginBusyError,
+      RejectedError,
       NoResponseError,
       ProcessError,
     ]),
@@ -80,6 +87,8 @@ export class ClaudeCliError extends Schema.TaggedError<ClaudeCliError>()(
       NotInstalledError: () =>
         'Claude Code CLI not found. Install `claude` on your PATH and sign in with `claude auth login`.',
       LoginBusyError: ({ result }) => result,
+      RejectedError: ({ error }) =>
+        `Claude Code did not accept the request: ${error}`,
       NoResponseError: ({ exitCode, result }) =>
         result ||
         String.trim(this.stderr ?? '') ||
@@ -172,6 +181,13 @@ const Line = Schema.fromJsonString(
   Schema.Union([
     Schema.Struct({ type: Schema.Literal('stream_event'), event: Event }),
     Schema.Struct({
+      type: Schema.Literal('control_response'),
+      response: Schema.Union([
+        Schema.Struct({ subtype: Schema.Literal('success') }),
+        Schema.Struct({ subtype: Schema.Literal('error'), error: Schema.String }),
+      ]),
+    }),
+    Schema.Struct({
       type: Schema.Literal('result'),
       result: Schema.optional(Schema.NullOr(Schema.String)),
     }),
@@ -204,23 +220,15 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
           ]
           const payload = Payload.make(transcript, model, options.stream, cacheTtl)
 
-          // Files rather than arguments, which are limited to 128 KiB each on
-          // Linux. The extra body replaces the matching fields of Claude
-          // Code's own request.
+          // A file rather than an argument, which is limited to 128 KiB on
+          // Linux.
           const dir = yield* fs.makeTempDirectoryScoped({
             prefix: 'pi-claude-cli-',
           })
           const systemPromptFile = path.join(dir, 'system-prompt.md')
-          const settingsFile = path.join(dir, 'settings.json')
           yield* fs.writeFileString(
             systemPromptFile,
             getCurrentSystemPrompt(transcript),
-          )
-          yield* fs.writeFileString(
-            settingsFile,
-            JSON.stringify({
-              env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(payload.body) },
-            }),
           )
 
           // Claude Code's billing header carries a fingerprint of the first
@@ -245,6 +253,43 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
             Option.getOrElse(() => '.'),
           )
 
+          // The extra body replaces the matching fields of Claude Code's own
+          // request. It reaches Claude Code as settings over stdin, because a
+          // settings file is limited to 2 MiB and an environment variable to
+          // 128 KiB on Linux. The prompt follows once Claude Code has applied
+          // them.
+          const applied = yield* Deferred.make<void>()
+          const input = Stream.make(
+            JSON.stringify({
+              type: 'control_request',
+              request_id: 'extra-body',
+              request: {
+                subtype: 'apply_flag_settings',
+                settings: {
+                  env: { CLAUDE_CODE_EXTRA_BODY: JSON.stringify(payload.body) },
+                },
+              },
+            }),
+          ).pipe(
+            Stream.concat(
+              Stream.fromEffect(
+                Deferred.await(applied).pipe(
+                  Effect.as(
+                    JSON.stringify({
+                      type: 'user',
+                      message: {
+                        role: 'user',
+                        content: [{ type: 'text', text: prompt }],
+                      },
+                    }),
+                  ),
+                ),
+              ),
+            ),
+            Stream.map((line) => `${line}\n`),
+            Stream.encodeText,
+          )
+
           const handle = yield* spawner
             .spawn(
               ChildProcess.make(
@@ -261,8 +306,6 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
                   '--include-partial-messages',
                   '--system-prompt-file',
                   systemPromptFile,
-                  '--settings',
-                  settingsFile,
                   '--setting-sources',
                   '',
                   '--tools',
@@ -304,15 +347,7 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
                     CLAUDE_CODE_PROMPT_CACHE_TTL: cacheTtl,
                     DISABLE_PROMPT_CACHING: cacheTtl === undefined ? '1' : undefined,
                   },
-                  stdin: Stream.make(
-                    `${JSON.stringify({
-                      type: 'user',
-                      message: {
-                        role: 'user',
-                        content: [{ type: 'text', text: prompt }],
-                      },
-                    })}\n`,
-                  ).pipe(Stream.encodeText),
+                  stdin: input,
                   forceKillAfter: '3 seconds',
                 },
               ),
@@ -345,13 +380,33 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
             Stream.runFoldEffect(
               () => ({ stopped: false, result: Option.none<string>() }),
               (previous, line) =>
-                Effect.sync(() => {
-                  if (line.type === 'result') {
-                    return { ...previous, result: Option.fromNullishOr(line.result) }
-                  }
-                  options.onEvent(line.event)
-                  return { ...previous, stopped: line.event.type === 'message_stop' }
-                }),
+                Match.value(line).pipe(
+                  Match.discriminatorsExhaustive('type')({
+                    control_response: ({ response }) =>
+                      response.subtype === 'success'
+                        ? Deferred.succeed(applied, undefined).pipe(
+                            Effect.as(previous),
+                          )
+                        : Effect.fail(
+                            new ClaudeCliError({
+                              reason: new RejectedError({ error: response.error }),
+                            }),
+                          ),
+                    result: ({ result }) =>
+                      Effect.succeed({
+                        ...previous,
+                        result: Option.fromNullishOr(result),
+                      }),
+                    stream_event: ({ event }) =>
+                      Effect.sync(() => {
+                        options.onEvent(event)
+                        return {
+                          ...previous,
+                          stopped: event.type === 'message_stop',
+                        }
+                      }),
+                  }),
+                ),
             ),
           )
           if (state.stopped) {

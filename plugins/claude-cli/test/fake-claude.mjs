@@ -1,6 +1,8 @@
 // Stands in for the `claude` CLI. It answers its input with the lines of the
 // next reply in FAKE_CLAUDE_REPLIES and records what it was given to
-// FAKE_CLAUDE_LOG. Like the real CLI, it keeps running until it is stopped.
+// FAKE_CLAUDE_LOG. Like the real CLI, it applies settings from control
+// requests, refuses them with the reply's `settingsError`, and keeps running
+// until it is stopped.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
@@ -15,13 +17,31 @@ const log = {
   args,
   env: process.env,
   systemPrompt: readFileSync(option('--system-prompt-file'), 'utf8'),
-  settings: JSON.parse(readFileSync(option('--settings'), 'utf8')),
+  settings: {},
   input: [],
 }
 const print = (line) => process.stdout.write(`${JSON.stringify(line)}\n`)
 
 createInterface({ input: process.stdin }).on('line', (line) => {
-  log.input.push(JSON.parse(line))
+  const message = JSON.parse(line)
+  if (message.type === 'control_request') {
+    const { request_id } = message
+    if (reply.settingsError === undefined) {
+      Object.assign(log.settings, message.request.settings)
+      print({
+        type: 'control_response',
+        response: { subtype: 'success', request_id },
+      })
+    } else {
+      print({
+        type: 'control_response',
+        response: { subtype: 'error', request_id, error: reply.settingsError },
+      })
+    }
+    writeFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify(log))
+    return
+  }
+  log.input.push(message)
   writeFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify(log))
   reply.lines.forEach(print)
   if (reply.exitCode !== undefined) {

@@ -4,13 +4,6 @@ Use a Claude subscription in [pi](https://github.com/earendil-works/pi) through 
 official Claude Code CLI. Every request is made by Claude Code itself, so using your
 subscription this way stays within Anthropic's terms of service.
 
-<!-- prettier-ignore -->
-> [!WARNING]
-> The session history reaches Claude Code through a settings file, which Claude Code
-> limits to 2 MiB. Images count towards it too, so a few screenshots can be enough.
-> Once a session outgrows the limit, every request fails with
-> `Settings file exceeds the 2MiB limit`.
-
 ## How it works
 
 Every model request starts a fresh `claude --print` process. pi hands it the
