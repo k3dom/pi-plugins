@@ -8,20 +8,19 @@ Install only the pieces you need.
 
 ## Plugins
 
-| Package                                | What it does                                                       | Entry point                             |
-| -------------------------------------- | ------------------------------------------------------------------ | --------------------------------------- |
-| [`checkpoint`](plugins/checkpoint)     | Restore files when navigating session history.                     | `/tree`, `/checkpoint-cleanup`          |
-| [`claude-cli`](plugins/claude-cli)     | Use a Claude subscription through the Claude Code CLI.             | `claude-cli` models                     |
-| [`claude-oauth`](plugins/claude-oauth) | Adapt Anthropic OAuth requests for use with a Claude subscription. | Automatic                               |
-| [`elapsed`](plugins/elapsed)           | Show a live timer in the working indicator.                        | Automatic                               |
-| [`exit`](plugins/exit)                 | Quit pi with a plain-text prompt.                                  | `exit`, `quit`                          |
-| [`fast-mode`](plugins/fast-mode)       | Request priority inference for selected models.                    | `/fast`, `--fast`                       |
-| [`skills`](plugins/skills)             | Review code for bugs and opportunities to simplify.                | `/skill:code-review`, `/skill:simplify` |
-| [`speed`](plugins/speed)               | Show estimated generation speed and time to first token.           | Automatic                               |
-| [`subagent`](plugins/subagent)         | Delegate a self-contained task to a separate pi session.           | `subagent`                              |
-| [`usage`](plugins/usage)               | Check Claude, OpenAI Codex, and GLM Coding plan limits.            | `/usage`                                |
-| [`webfetch`](plugins/webfetch)         | Fetch web pages as Markdown or raw HTML.                           | `web_fetch`                             |
-| [`websearch`](plugins/websearch)       | Search the web and get titles, URLs and excerpts.                  | `web_search`                            |
+| Package                            | What it does                                             | Entry point                             |
+| ---------------------------------- | -------------------------------------------------------- | --------------------------------------- |
+| [`checkpoint`](plugins/checkpoint) | Restore files when navigating session history.           | `/tree`, `/checkpoint-cleanup`          |
+| [`claude-cli`](plugins/claude-cli) | Use a Claude subscription through the Claude Code CLI.   | `claude-cli` models                     |
+| [`elapsed`](plugins/elapsed)       | Show a live timer in the working indicator.              | Automatic                               |
+| [`exit`](plugins/exit)             | Quit pi with a plain-text prompt.                        | `exit`, `quit`                          |
+| [`fast-mode`](plugins/fast-mode)   | Request priority inference for selected models.          | `/fast`, `--fast`                       |
+| [`skills`](plugins/skills)         | Review code for bugs and opportunities to simplify.      | `/skill:code-review`, `/skill:simplify` |
+| [`speed`](plugins/speed)           | Show estimated generation speed and time to first token. | Automatic                               |
+| [`subagent`](plugins/subagent)     | Delegate a self-contained task to a separate pi session. | `subagent`                              |
+| [`usage`](plugins/usage)           | Check Claude, OpenAI Codex, and GLM Coding plan limits.  | `/usage`                                |
+| [`webfetch`](plugins/webfetch)     | Fetch web pages as Markdown or raw HTML.                 | `web_fetch`                             |
+| [`websearch`](plugins/websearch)   | Search the web and get titles, URLs and excerpts.        | `web_search`                            |
 
 ## Requirements
 
