@@ -1,5 +1,12 @@
 # @pi-plugins/claude-cli
 
+## 0.2.2
+
+### Patch Changes
+
+- e55688b: Load in pi again. Since 0.2.0 the plugin imported a part of pi-ai that pi does not
+  provide to extensions, so pi failed to load it and offered no `claude-cli` models.
+
 ## 0.2.1
 
 ### Patch Changes
