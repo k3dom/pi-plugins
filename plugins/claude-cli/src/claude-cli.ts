@@ -6,7 +6,9 @@ import type {
   SimpleStreamOptions,
   TranscriptContext,
 } from '@earendil-works/pi-ai'
-import * as AnthropicMessages from '@earendil-works/pi-ai/api/anthropic-messages'
+// Pi provides extensions only some of pi-ai's entry points, which include
+// `compat` but not `api/anthropic-messages`.
+import * as PiAi from '@earendil-works/pi-ai/compat'
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import {
   Array,
@@ -580,7 +582,7 @@ export function stream(
   context: TranscriptContext,
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
-  return AnthropicMessages.streamSimple(
+  return PiAi.anthropicMessagesApi().streamSimple(
     {
       ...model,
       api: 'anthropic-messages',
