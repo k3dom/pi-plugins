@@ -1,5 +1,13 @@
 # @pi-plugins/claude-cli
 
+## 0.2.1
+
+### Patch Changes
+
+- 6affc3c: Keep working after pi's working directory is moved during a session. Every request
+  used to fail with "Claude Code CLI not found", because Claude Code was started in the
+  directory's old path.
+
 ## 0.2.0
 
 ### Minor Changes
