@@ -1,5 +1,21 @@
 # `@pi-plugins/claude-oauth`
 
+<!-- prettier-ignore -->
+> [!WARNING]
+> This package is deprecated. Use
+> [`@pi-plugins/claude-cli`](https://github.com/k3dom/pi-plugins/tree/master/plugins/claude-cli)
+> instead. It sends requests through the official Claude Code CLI rather than copying
+> Claude Code's headers and request signing, which needed an update for most Claude
+> Code releases.
+>
+> To switch, sign in with `claude auth login`, replace the package and pick a model
+> from the `claude-cli` provider, such as `claude-cli/claude-sonnet-5-5`:
+>
+> ```bash
+> pi remove npm:@pi-plugins/claude-oauth
+> pi install npm:@pi-plugins/claude-cli
+> ```
+
 Compatibility fixes for using a Claude subscription in
 [pi](https://github.com/earendil-works/pi). This plugin is for subscription sign-ins,
 not API-key access.
