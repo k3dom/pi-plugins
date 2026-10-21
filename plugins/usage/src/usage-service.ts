@@ -76,10 +76,10 @@ export class RequestFailed extends Schema.TaggedError<RequestFailed>()(
 
 export class ClaudeCodeLoginMissing extends Schema.TaggedError<ClaudeCodeLoginMissing>()(
   'ClaudeCodeLoginMissing',
-  { path: Schema.String },
+  { path: Schema.String, keychain: Schema.Boolean },
 ) {
   override get message(): string {
-    return process.platform === 'darwin'
+    return this.keychain
       ? `no Claude Code login found in ${this.path} — on macOS Claude Code keeps its login in the Keychain, which this plugin can't read yet`
       : `no Claude Code login found in ${this.path} — run \`claude auth login\``
   }
@@ -99,7 +99,7 @@ export class ClaudeCodeLoginExpired extends Schema.TaggedError<ClaudeCodeLoginEx
   {},
 ) {
   override get message(): string {
-    return "Claude Code's access token has expired — it renews it on its next request"
+    return "Claude Code's access token has expired, and Claude Code renews it with the next request of a claude-cli model"
   }
 }
 
@@ -133,7 +133,7 @@ export class UsageServiceError extends Schema.TaggedError<UsageServiceError>()(
   }
 }
 
-const ClaudeCodeCredentials = Schema.fromJsonString(Schema.Unknown)
+const Json = Schema.fromJsonString(Schema.Unknown)
 
 const ClaudeCodeLogin = Schema.Struct({
   claudeAiOauth: Schema.Struct({
@@ -170,7 +170,11 @@ export class UsageService extends Context.Service<UsageService>()(
   {
     make: Effect.fnUntraced(function* (
       registry: ModelRegistry,
-      claudeCodeCredentials: string,
+      claudeCodeLogin: {
+        readonly credentialsPath: string
+        /** Whether Claude Code keeps its login in the macOS Keychain instead. */
+        readonly keychain: boolean
+      },
     ) {
       const fs = yield* FileSystem.FileSystem
       const http = (yield* HttpClient.HttpClient).pipe(
@@ -253,22 +257,19 @@ export class UsageService extends Context.Service<UsageService>()(
       const claudeCode = Effect.fn('UsageService.claudeCode')(function* () {
         const fail = (reason: UsageServiceError['reason']) =>
           Effect.fail(new UsageServiceError({ reason }))
-        const path = claudeCodeCredentials
+        const { credentialsPath: path, keychain } = claudeCodeLogin
         const credentials = yield* fs.readFileString(path).pipe(
-          Effect.flatMap(Schema.decodeEffect(ClaudeCodeCredentials)),
+          Effect.flatMap(Schema.decodeEffect(Json)),
           Effect.catchReason('PlatformError', 'NotFound', () =>
-            fail(new ClaudeCodeLoginMissing({ path })),
+            fail(new ClaudeCodeLoginMissing({ path, keychain })),
           ),
-          Effect.catchTags({
-            PlatformError: (cause) =>
-              fail(new ClaudeCodeLoginUnreadable({ path, cause })),
-            SchemaError: (cause) =>
-              fail(new ClaudeCodeLoginUnreadable({ path, cause })),
-          }),
+          Effect.catchTag(['PlatformError', 'SchemaError'], (cause) =>
+            fail(new ClaudeCodeLoginUnreadable({ path, cause })),
+          ),
         )
         const login = Schema.decodeUnknownOption(ClaudeCodeLogin)(credentials)
         if (Option.isNone(login)) {
-          return yield* fail(new ClaudeCodeLoginMissing({ path }))
+          return yield* fail(new ClaudeCodeLoginMissing({ path, keychain }))
         }
         const { accessToken, expiresAt } = login.value.claudeAiOauth
         if (DateTime.isLessThanOrEqualTo(expiresAt, yield* DateTime.now)) {
@@ -351,9 +352,9 @@ export const layer = (registry: ModelRegistry) =>
       const configDir = yield* Config.String('CLAUDE_CONFIG_DIR').pipe(
         Config.withDefault(path.join(homedir(), '.claude')),
       )
-      return yield* UsageService.make(
-        registry,
-        path.join(configDir, '.credentials.json'),
-      )
+      return yield* UsageService.make(registry, {
+        credentialsPath: path.join(configDir, '.credentials.json'),
+        keychain: process.platform === 'darwin',
+      })
     }),
   ).pipe(Layer.provide([FetchHttpClient.layer, NodeServices.layer]))
