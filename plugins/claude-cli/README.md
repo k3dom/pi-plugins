@@ -67,8 +67,8 @@ The provider offers the same Claude models as pi's built-in `anthropic` provider
 ## Notes
 
 - Requests are billed to the account `claude` is signed in to, not to pi's `/login`.
-  The [`usage`](../usage) plugin reads Claude limits through pi's login, so sign both
-  in to the same account to see the right limits.
+  The [`usage`](../usage) plugin reads the limits of `claude-cli` models from that
+  account too, so pi needs no Claude sign-in of its own.
 - API keys in the environment, such as `ANTHROPIC_API_KEY`, are not passed on to
   Claude Code, so requests always use the subscription.
 - Cache retention follows pi's `PI_CACHE_RETENTION` setting. It is five minutes by

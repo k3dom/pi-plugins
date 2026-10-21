@@ -36,14 +36,24 @@ limits above the editor.
 
 ## Supported providers
 
-The plugin uses the credentials you have already configured in pi.
+The plugin uses the credentials you have already configured in pi, or Claude Code's
+login for the `claude-cli` provider.
 
-| Provider           | Pi provider     | Authentication                      |
-| ------------------ | --------------- | ----------------------------------- |
-| Claude             | `anthropic`     | Subscription sign-in with `/login`. |
-| OpenAI Codex       | `openai-codex`  | Subscription sign-in with `/login`. |
-| GLM Coding         | `zai`           | API key.                            |
-| GLM Coding (China) | `zai-coding-cn` | API key.                            |
+| Provider           | Pi provider     | Authentication                                  |
+| ------------------ | --------------- | ----------------------------------------------- |
+| Claude             | `anthropic`     | Subscription sign-in with `/login`.             |
+| Claude Code        | `claude-cli`    | Claude Code's sign-in with `claude auth login`. |
+| OpenAI Codex       | `openai-codex`  | Subscription sign-in with `/login`.             |
+| GLM Coding         | `zai`           | API key.                                        |
+| GLM Coding (China) | `zai-coding-cn` | API key.                                        |
+
+The `claude-cli` provider from [`@pi-plugins/claude-cli`](../claude-cli) bills the
+account the `claude` CLI is signed in to, so its limits come from Claude Code's login
+in `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude/.credentials.json`).
+The plugin only reads that login and never renews it, since Claude Code renews it on
+its next request. With the provider loaded, `/usage` shows a Claude Code section and
+leaves out the Claude section unless pi has its own Claude sign-in. On macOS Claude
+Code keeps its login in the Keychain, which the plugin doesn't read yet.
 
 ## Configuration
 

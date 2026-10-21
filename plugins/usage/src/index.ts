@@ -1,4 +1,8 @@
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
+import {
+  type ExtensionAPI,
+  type ExtensionContext,
+  readStoredCredential,
+} from '@earendil-works/pi-coding-agent'
 import { Text } from '@earendil-works/pi-tui'
 import * as ExtensionConfig from '@pi-plugins/shared/config'
 import * as Run from '@pi-plugins/shared/run'
@@ -16,13 +20,14 @@ const UsageConfig = Schema.Struct({
   showWidget: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 })
 
-type WidgetProvider = 'claude' | 'codex' | Zai.Provider
+type WidgetProvider = 'claude' | 'claude-code' | 'codex' | Zai.Provider
 
 function widgetProvider(
   model: ExtensionContext['model'],
 ): Option.Option<WidgetProvider> {
   return Match.value(model?.provider).pipe(
-    Match.whenOr('anthropic', 'claude-cli', (): WidgetProvider => 'claude'),
+    Match.when('anthropic', (): WidgetProvider => 'claude'),
+    Match.when('claude-cli', (): WidgetProvider => 'claude-code'),
     Match.when('openai-codex', (): WidgetProvider => 'codex'),
     Match.whenOr('zai', 'zai-coding-cn', (provider) => provider),
     Match.option,
@@ -100,6 +105,8 @@ export default function usage(pi: ExtensionAPI): void {
       switch (provider) {
         case 'claude':
           return Widget.claudeLimits((yield* service.claude()).usage)
+        case 'claude-code':
+          return Widget.claudeLimits((yield* service.claudeCode()).usage)
         case 'codex':
           return Widget.codexLimits(yield* service.codex(), yield* DateTime.now)
         default:
@@ -154,22 +161,52 @@ export default function usage(pi: ExtensionAPI): void {
         ),
         Option.getOrElse((): Zai.Provider => 'zai'),
       )
+      // Requests of the claude-cli provider are billed to Claude Code's login,
+      // so pi's own Anthropic login only matters once it is set up.
+      const claudeCli = Array.contains(
+        ctx.modelRegistry.getRegisteredProviderIds(),
+        'claude-cli',
+      )
+      const piClaude =
+        !claudeCli || readStoredCredential('anthropic')?.type === 'oauth'
       const program = Effect.gen(function* () {
         const service = yield* UsageService.UsageService
         const now = yield* DateTime.now
         const sections = yield* Effect.all(
           [
-            section(
-              'Claude',
-              service
-                .claude()
-                .pipe(
-                  Effect.tap((data) =>
-                    recordLimits('claude', Widget.claudeLimits(data.usage)),
+            ...(piClaude
+              ? [
+                  section(
+                    'Claude',
+                    service
+                      .claude()
+                      .pipe(
+                        Effect.tap((data) =>
+                          recordLimits('claude', Widget.claudeLimits(data.usage)),
+                        ),
+                      ),
+                    (data) => Report.claudeSection(data, 'Claude'),
                   ),
-                ),
-              Report.claudeSection,
-            ),
+                ]
+              : []),
+            ...(claudeCli
+              ? [
+                  section(
+                    'Claude Code',
+                    service
+                      .claudeCode()
+                      .pipe(
+                        Effect.tap((data) =>
+                          recordLimits(
+                            'claude-code',
+                            Widget.claudeLimits(data.usage),
+                          ),
+                        ),
+                      ),
+                    (data) => Report.claudeSection(data, 'Claude Code'),
+                  ),
+                ]
+              : []),
             section(
               'OpenAI Codex',
               service
