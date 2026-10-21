@@ -161,7 +161,7 @@ function sectionTitle(
 
 export function claudeSection(
   { usage, profile }: Anthropic.AccountUsage,
-  name: string,
+  heading: string,
 ): Section {
   const limits = usage.limits ?? []
   // `is_active` marks the currently binding limit, not visibility, so every limit
@@ -261,7 +261,7 @@ export function claudeSection(
     Match.when({ account: { has_claude_pro: true } }, () => 'Pro'),
     Match.orElse(() => undefined),
   )
-  return { title: sectionTitle(name, plan, profile?.account?.email), rows }
+  return { title: sectionTitle(heading, plan, profile?.account?.email), rows }
 }
 
 function codexWindowRows(

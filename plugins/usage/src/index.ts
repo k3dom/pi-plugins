@@ -163,18 +163,18 @@ export default function usage(pi: ExtensionAPI): void {
       )
       // Requests of the claude-cli provider are billed to Claude Code's login,
       // so pi's own Anthropic login only matters once it is set up.
-      const claudeCli = Array.contains(
+      const claudeCliRegistered = Array.contains(
         ctx.modelRegistry.getRegisteredProviderIds(),
         'claude-cli',
       )
-      const piClaude =
-        !claudeCli || readStoredCredential('anthropic')?.type === 'oauth'
+      const showPiClaude =
+        !claudeCliRegistered || readStoredCredential('anthropic')?.type === 'oauth'
       const program = Effect.gen(function* () {
         const service = yield* UsageService.UsageService
         const now = yield* DateTime.now
         const sections = yield* Effect.all(
           [
-            ...(piClaude
+            ...(showPiClaude
               ? [
                   section(
                     'Claude',
@@ -189,7 +189,7 @@ export default function usage(pi: ExtensionAPI): void {
                   ),
                 ]
               : []),
-            ...(claudeCli
+            ...(claudeCliRegistered
               ? [
                   section(
                     'Claude Code',
