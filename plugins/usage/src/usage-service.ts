@@ -1,13 +1,19 @@
+import { homedir } from 'node:os'
 import {
   type ModelRegistry,
   readStoredCredential,
 } from '@earendil-works/pi-coding-agent'
+import * as NodeServices from '@effect/platform-node/NodeServices'
 import {
   Cause,
+  Config,
   Context,
+  DateTime,
   Effect,
+  FileSystem,
   Layer,
   Option,
+  Path,
   pipe,
   Predicate,
   Schedule,
@@ -68,6 +74,35 @@ export class RequestFailed extends Schema.TaggedError<RequestFailed>()(
   }
 }
 
+export class ClaudeCodeLoginMissing extends Schema.TaggedError<ClaudeCodeLoginMissing>()(
+  'ClaudeCodeLoginMissing',
+  { path: Schema.String },
+) {
+  override get message(): string {
+    return process.platform === 'darwin'
+      ? `no Claude Code login found in ${this.path} — on macOS Claude Code keeps its login in the Keychain, which this plugin can't read yet`
+      : `no Claude Code login found in ${this.path} — run \`claude auth login\``
+  }
+}
+
+export class ClaudeCodeLoginUnreadable extends Schema.TaggedError<ClaudeCodeLoginUnreadable>()(
+  'ClaudeCodeLoginUnreadable',
+  { path: Schema.String, cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return `couldn't read Claude Code's login from ${this.path} — check the file, or run \`claude auth login\` to rewrite it`
+  }
+}
+
+export class ClaudeCodeLoginExpired extends Schema.TaggedError<ClaudeCodeLoginExpired>()(
+  'ClaudeCodeLoginExpired',
+  {},
+) {
+  override get message(): string {
+    return "Claude Code's access token has expired — it renews it on its next request"
+  }
+}
+
 /** The GLM API answers HTTP 200 for failures too, so filterStatusOk can't catch them. */
 export class GlmApiFailed extends Schema.TaggedError<GlmApiFailed>()(
   'GlmApiFailed',
@@ -85,6 +120,9 @@ export class UsageServiceError extends Schema.TaggedError<UsageServiceError>()(
       CredentialsMissing,
       TokenRefreshFailed,
       AccountIdMissing,
+      ClaudeCodeLoginMissing,
+      ClaudeCodeLoginUnreadable,
+      ClaudeCodeLoginExpired,
       RequestFailed,
       GlmApiFailed,
     ]),
@@ -94,6 +132,15 @@ export class UsageServiceError extends Schema.TaggedError<UsageServiceError>()(
     return this.reason.message
   }
 }
+
+const ClaudeCodeCredentials = Schema.fromJsonString(Schema.Unknown)
+
+const ClaudeCodeLogin = Schema.Struct({
+  claudeAiOauth: Schema.Struct({
+    accessToken: Schema.String,
+    expiresAt: Schema.DateTimeUtcFromMillis,
+  }),
+})
 
 const StoredCodexCredential = Schema.Struct({
   type: Schema.Literal('oauth'),
@@ -121,7 +168,11 @@ const AccessToken = Schema.TemplateLiteralParser([
 export class UsageService extends Context.Service<UsageService>()(
   '@pi-plugins/usage/UsageService',
   {
-    make: Effect.fnUntraced(function* (registry: ModelRegistry) {
+    make: Effect.fnUntraced(function* (
+      registry: ModelRegistry,
+      claudeCodeCredentials: string,
+    ) {
+      const fs = yield* FileSystem.FileSystem
       const http = (yield* HttpClient.HttpClient).pipe(
         HttpClient.mapRequest(HttpClientRequest.acceptJson),
         HttpClient.filterStatusOk,
@@ -164,8 +215,7 @@ export class UsageService extends Context.Service<UsageService>()(
         return token
       })
 
-      const claude = Effect.fn('UsageService.claude')(function* () {
-        const accessToken = yield* oauthToken('anthropic')
+      const claudeUsage = Effect.fnUntraced(function* (accessToken: string) {
         const client = yield* HttpApiClient.makeWith(Anthropic.UsageApi, {
           baseUrl: Anthropic.BASE_URL,
           httpClient: http.pipe(
@@ -189,6 +239,42 @@ export class UsageService extends Context.Service<UsageService>()(
           { concurrency: 'unbounded' },
         )
         return { usage, profile } satisfies Anthropic.AccountUsage
+      })
+
+      const claude = Effect.fn('UsageService.claude')(function* () {
+        return yield* claudeUsage(yield* oauthToken('anthropic'))
+      })
+
+      /**
+       * Usage of the account Claude Code is logged into, which the `claude-cli`
+       * provider bills. Claude Code rotates the refresh token whenever it renews
+       * the access token, so this only reads its login and never renews it.
+       */
+      const claudeCode = Effect.fn('UsageService.claudeCode')(function* () {
+        const fail = (reason: UsageServiceError['reason']) =>
+          Effect.fail(new UsageServiceError({ reason }))
+        const path = claudeCodeCredentials
+        const credentials = yield* fs.readFileString(path).pipe(
+          Effect.flatMap(Schema.decodeEffect(ClaudeCodeCredentials)),
+          Effect.catchReason('PlatformError', 'NotFound', () =>
+            fail(new ClaudeCodeLoginMissing({ path })),
+          ),
+          Effect.catchTags({
+            PlatformError: (cause) =>
+              fail(new ClaudeCodeLoginUnreadable({ path, cause })),
+            SchemaError: (cause) =>
+              fail(new ClaudeCodeLoginUnreadable({ path, cause })),
+          }),
+        )
+        const login = Schema.decodeUnknownOption(ClaudeCodeLogin)(credentials)
+        if (Option.isNone(login)) {
+          return yield* fail(new ClaudeCodeLoginMissing({ path }))
+        }
+        const { accessToken, expiresAt } = login.value.claudeAiOauth
+        if (DateTime.isLessThanOrEqualTo(expiresAt, yield* DateTime.now)) {
+          return yield* fail(new ClaudeCodeLoginExpired())
+        }
+        return yield* claudeUsage(accessToken)
       })
 
       const codex = Effect.fn('UsageService.codex')(function* () {
@@ -251,12 +337,23 @@ export class UsageService extends Context.Service<UsageService>()(
         return envelope.data
       })
 
-      return { claude, codex, glm } as const
+      return { claude, claudeCode, codex, glm } as const
     }),
   },
 ) {}
 
 export const layer = (registry: ModelRegistry) =>
-  Layer.effect(UsageService, UsageService.make(registry)).pipe(
-    Layer.provide(FetchHttpClient.layer),
-  )
+  Layer.effect(
+    UsageService,
+    Effect.gen(function* () {
+      const path = yield* Path.Path
+      // Where Claude Code itself looks, which the claude CLI inherits from pi.
+      const configDir = yield* Config.String('CLAUDE_CONFIG_DIR').pipe(
+        Config.withDefault(path.join(homedir(), '.claude')),
+      )
+      return yield* UsageService.make(
+        registry,
+        path.join(configDir, '.credentials.json'),
+      )
+    }),
+  ).pipe(Layer.provide([FetchHttpClient.layer, NodeServices.layer]))
