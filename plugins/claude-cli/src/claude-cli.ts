@@ -13,6 +13,7 @@ import * as NodeServices from '@effect/platform-node/NodeServices'
 import {
   Array,
   Cause,
+  Config,
   Context,
   Effect,
   Equal,
@@ -33,7 +34,6 @@ import {
   Predicate,
   Queue,
   Record,
-  Result,
   Schedule,
   Schema,
   Scope,
@@ -70,6 +70,16 @@ export class NoResponseError extends Schema.TaggedError<NoResponseError>()(
   },
 ) {}
 
+export class UsageCreditsChargedError extends Schema.TaggedError<UsageCreditsChargedError>()(
+  'UsageCreditsChargedError',
+  {},
+) {}
+
+export class UsageCreditsRequiredError extends Schema.TaggedError<UsageCreditsRequiredError>()(
+  'UsageCreditsRequiredError',
+  { result: Schema.String },
+) {}
+
 export class ProcessError extends Schema.TaggedError<ProcessError>()(
   'ProcessError',
   { cause: Schema.Defect() },
@@ -90,6 +100,8 @@ export class ClaudeCliError extends Schema.TaggedError<ClaudeCliError>()(
       RejectedError,
       AbortedError,
       NoResponseError,
+      UsageCreditsChargedError,
+      UsageCreditsRequiredError,
       ProcessError,
     ]),
     stderr: Schema.optional(Schema.String),
@@ -109,6 +121,11 @@ export class ClaudeCliError extends Schema.TaggedError<ClaudeCliError>()(
         result ||
         String.trim(this.stderr ?? '') ||
         `Claude Code exited with code ${exitCode}.`,
+      // Pi does not retry errors that mention billing.
+      UsageCreditsChargedError: () =>
+        'Stopped to avoid further billing: Claude Code charged this response to your Claude usage credits instead of your plan limits. To stay on your plan limits, turn off usage credits at claude.ai/settings/usage. To keep using credits, set PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS=1 and restart pi.',
+      UsageCreditsRequiredError: ({ result }) =>
+        `Claude Code's request was refused for billing: Anthropic would charge it to your Claude usage credits instead of your plan limits. This happens once your plan limit is used up, or when Anthropic counts the request as use by a third-party app. Claude Code said: ${result}`,
       ProcessError: (reason) => `Failed to run Claude Code: ${reason.message}`,
     })
   }
@@ -157,6 +174,12 @@ const Line = Schema.fromJsonString(
       ]),
     }),
     Schema.Struct({
+      type: Schema.Literal('rate_limit_event'),
+      rate_limit_info: Schema.Struct({
+        isUsingOverage: Schema.optional(Schema.Boolean),
+      }),
+    }),
+    Schema.Struct({
       type: Schema.Literal('result'),
       result: Schema.optional(Schema.NullOr(Schema.String)),
     }),
@@ -182,7 +205,9 @@ type Claude = {
 export class ClaudeCli extends Context.Service<ClaudeCli>()(
   '@pi-plugins/claude-cli/ClaudeCli',
   {
-    make: Effect.fnUntraced(function* () {
+    make: Effect.fnUntraced(function* (config: {
+      readonly allowUsageCredits: boolean
+    }) {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
@@ -448,6 +473,91 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
           Stream.filterMap(
             Filter.fromPredicateOption(Schema.decodeUnknownOption(Line)),
           ),
+          // Claude Code reports which limits paid for the response only after
+          // its `message_stop`, so that is held back until the report or the
+          // result.
+          Stream.mapAccumEffect(
+            Option.none<
+              Extract<typeof Line.Type, { readonly type: 'stream_event' }>['event']
+            >,
+            (stop, line) =>
+              Match.value(line).pipe(
+                Match.discriminatorsExhaustive('type')({
+                  // The prompt follows only once Claude Code has applied pi's
+                  // request body, so it never answers the prompt without pi's
+                  // conversation.
+                  control_response: Effect.fnUntraced(function* ({ response }) {
+                    if (response.subtype === 'error') {
+                      return yield* new ClaudeCliError({
+                        reason: new RejectedError({ error: response.error }),
+                      })
+                    }
+                    yield* Queue.offer(
+                      claude.input,
+                      JSON.stringify({
+                        type: 'user',
+                        message: {
+                          role: 'user',
+                          content: [{ type: 'text', text: prompt }],
+                        },
+                      }),
+                    )
+                    yield* Queue.end(claude.input)
+                    return [stop, []] as const
+                  }),
+                  stream_event: ({ event }) =>
+                    Effect.succeed(
+                      Option.isSome(stop)
+                        ? ([stop, []] as const)
+                        : event.type === 'message_stop'
+                          ? ([Option.some(event), []] as const)
+                          : ([stop, [event]] as const),
+                    ),
+                  rate_limit_event: ({ rate_limit_info }) =>
+                    rate_limit_info.isUsingOverage === true &&
+                    !config.allowUsageCredits
+                      ? Effect.fail(
+                          new ClaudeCliError({
+                            reason: new UsageCreditsChargedError(),
+                          }),
+                        )
+                      : Effect.succeed([stop, Array.fromOption(stop)] as const),
+                  // A result before the response means there is none.
+                  result: ({ result: text }) =>
+                    pipe(
+                      Option.fromNullishOr(text),
+                      Option.filter(String.isNonEmpty),
+                      Option.filter(() => Option.isNone(stop)),
+                      Option.match({
+                        onNone: () =>
+                          Effect.succeed([stop, Array.fromOption(stop)] as const),
+                        onSome: (result) =>
+                          Effect.fail(
+                            new ClaudeCliError({
+                              reason: Match.value(result).pipe(
+                                Match.when(
+                                  String.includes(
+                                    'another Claude Code process is refreshing',
+                                  ),
+                                  () => new LoginBusyError({ result }),
+                                ),
+                                Match.when(
+                                  (message) =>
+                                    /third-party apps now draw from your extra usage|out of extra usage|draws? from your usage credits/i.test(
+                                      message,
+                                    ),
+                                  () => new UsageCreditsRequiredError({ result }),
+                                ),
+                                Match.orElse(() => new NoResponseError({ result })),
+                              ),
+                            }),
+                          ),
+                      }),
+                    ),
+                }),
+              ),
+            { onHalt: Array.fromOption },
+          ),
           // Only reached when Claude Code ends before a response or a result.
           Stream.concat(
             Stream.fromEffect(
@@ -460,58 +570,7 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
               }),
             ),
           ),
-          Stream.takeUntil(
-            (line) =>
-              line.type === 'stream_event' && line.event.type === 'message_stop',
-          ),
-          Stream.filterMapEffect((line) =>
-            Match.value(line).pipe(
-              Match.discriminatorsExhaustive('type')({
-                // The prompt follows only once Claude Code has applied pi's
-                // request body, so it never answers the prompt without pi's
-                // conversation.
-                control_response: Effect.fnUntraced(function* ({ response }) {
-                  if (response.subtype === 'error') {
-                    return yield* new ClaudeCliError({
-                      reason: new RejectedError({ error: response.error }),
-                    })
-                  }
-                  yield* Queue.offer(
-                    claude.input,
-                    JSON.stringify({
-                      type: 'user',
-                      message: {
-                        role: 'user',
-                        content: [{ type: 'text', text: prompt }],
-                      },
-                    }),
-                  )
-                  yield* Queue.end(claude.input)
-                  return Result.failVoid
-                }),
-                // A result before the response means there is none.
-                result: ({ result: text }) =>
-                  pipe(
-                    Option.fromNullishOr(text),
-                    Option.filter(String.isNonEmpty),
-                    Option.match({
-                      onNone: () => Effect.succeed(Result.failVoid),
-                      onSome: (result) =>
-                        Effect.fail(
-                          new ClaudeCliError({
-                            reason: String.includes(
-                              'another Claude Code process is refreshing',
-                            )(result)
-                              ? new LoginBusyError({ result })
-                              : new NoResponseError({ result }),
-                          }),
-                        ),
-                    }),
-                  ),
-                stream_event: ({ event }) => Effect.succeed(Result.succeed(event)),
-              }),
-            ),
-          ),
+          Stream.takeUntil((event) => event.type === 'message_stop'),
           Stream.map(
             (event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
           ),
@@ -521,8 +580,9 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
 
       // Runs one Messages API request from pi's Anthropic provider through
       // one `claude --print` process and streams the response as server-sent
-      // events up to the first `message_stop`. The process is stopped there,
-      // before Claude Code can act on the response.
+      // events up to the first `message_stop`. The process is stopped once
+      // Claude Code has reported the limits that paid for the response, before
+      // it can send another request.
       const request = (options: Parameters<typeof run>[0]) =>
         Stream.unwrap(run(options)).pipe(
           Stream.catchTag('PlatformError', (cause) =>
@@ -557,9 +617,15 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
   },
 ) {}
 
-export const layer = Layer.effect(ClaudeCli, ClaudeCli.make()).pipe(
-  Layer.provide(NodeServices.layer),
-)
+export const layer = Layer.effect(
+  ClaudeCli,
+  Effect.gen(function* () {
+    const allowUsageCredits = yield* Config.Boolean(
+      'PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS',
+    ).pipe(Config.withDefault(false))
+    return yield* ClaudeCli.make({ allowUsageCredits })
+  }),
+).pipe(Layer.provide(NodeServices.layer))
 
 const runtime = ManagedRuntime.make(layer)
 

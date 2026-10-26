@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  isRetryableAssistantError,
   normalizeContext,
   type Api,
   type AssistantMessage,
@@ -13,6 +14,7 @@ import {
   type SimpleStreamOptions,
 } from '@earendil-works/pi-ai'
 import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all'
+import * as NodeServices from '@effect/platform-node/NodeServices'
 import {
   afterAll,
   afterEach,
@@ -25,7 +27,7 @@ import {
   vi,
 } from '@effect/vitest'
 import { deepStrictEqual } from '@effect/vitest/utils'
-import { Array, Number, pipe, String } from 'effect'
+import { Array, Effect, Layer, Number, Option, pipe, Stream, String } from 'effect'
 import * as ClaudeCli from '../src/claude-cli'
 
 type Reply = {
@@ -117,7 +119,15 @@ const messageStart = (id: string) =>
     },
   })
 
-const reply = (id: string, text: string): Reply => ({
+// What Claude Code reports after the response about the limits that paid for
+// it, and the result that ends its turn.
+const limits = (isUsingOverage: boolean) => ({
+  type: 'rate_limit_event',
+  rate_limit_info: { status: 'allowed', rateLimitType: 'five_hour', isUsingOverage },
+})
+const done = { type: 'result', subtype: 'success', is_error: false, num_turns: 1 }
+
+const reply = (id: string, text: string, isUsingOverage = false): Reply => ({
   lines: [
     messageStart(id),
     event({
@@ -137,6 +147,8 @@ const reply = (id: string, text: string): Reply => ({
       usage: { output_tokens: 20 },
     }),
     event({ type: 'message_stop' }),
+    limits(isUsingOverage),
+    done,
   ],
 })
 
@@ -466,6 +478,68 @@ describe('stream', () => {
     expect(message).toMatchObject({
       stopReason: 'error',
       errorMessage: 'API Error: 529 Overloaded',
+    })
+  })
+
+  it('stops when Claude Code charges the response to usage credits', async () => {
+    const { message } = await run([reply('msg_1', 'Hello', true)], {
+      messages: [user('Hi')],
+    })
+
+    expect(message).toMatchObject({
+      stopReason: 'error',
+      errorMessage: expect.stringContaining('usage credits'),
+    })
+    assert.isFalse(isRetryableAssistantError(message))
+  })
+
+  it.live('lets a response charged to usage credits through when allowed', () =>
+    Effect.gen(function* () {
+      process.env['FAKE_CLAUDE_REPLIES'] = JSON.stringify([
+        reply('msg_1', 'Hello', true),
+      ])
+      const claudeCli = yield* ClaudeCli.ClaudeCli
+      const response = yield* claudeCli
+        .request({
+          model: model.id,
+          body: JSON.stringify({ messages: [{ role: 'user', content: 'Hi' }] }),
+          betas: Option.none(),
+          sessionId: Option.none(),
+        })
+        .pipe(Stream.decodeText, Stream.mkString)
+
+      assert.include(response, 'event: message_stop')
+    }).pipe(
+      Effect.provide(
+        Layer.effect(
+          ClaudeCli.ClaudeCli,
+          ClaudeCli.ClaudeCli.make({ allowUsageCredits: true }),
+        ).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    ),
+  )
+
+  it('does not retry a request Anthropic would charge to usage credits', async () => {
+    const result =
+      'API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"You\'re out of extra usage. Add more at claude.ai/settings/usage and keep going."}}'
+    const { message } = await run([failure(result)], { messages: [user('Hi')] })
+
+    expect(message).toMatchObject({
+      stopReason: 'error',
+      errorMessage: expect.stringContaining(result),
+    })
+    assert.isFalse(isRetryableAssistantError(message))
+  })
+
+  it('finishes the response when Claude Code ends without reporting its limits', async () => {
+    const { message } = await run(
+      [{ lines: reply('msg_1', 'Hello').lines.slice(0, 6), exitCode: 0 }],
+      { messages: [user('Hi')] },
+    )
+
+    expect(message).toMatchObject({
+      stopReason: 'stop',
+      content: [{ type: 'text', text: 'Hello' }],
     })
   })
 
