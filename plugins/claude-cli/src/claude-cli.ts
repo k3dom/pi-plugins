@@ -123,9 +123,9 @@ export class ClaudeCliError extends Schema.TaggedError<ClaudeCliError>()(
         `Claude Code exited with code ${exitCode}.`,
       // Pi does not retry errors that mention billing.
       UsageCreditsChargedError: () =>
-        'Stopped to avoid further billing: Claude Code charged this response to your Claude usage credits instead of your plan limits. To stay on your plan limits, turn off usage credits at claude.ai/settings/usage. To keep using credits, set PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS=1 and restart pi.',
+        'Claude Code charged this response to your Claude usage credits instead of your plan limits, so pi stopped to avoid further billing. To stay on your plan limits, turn off usage credits at claude.ai/settings/usage. To keep using credits, set PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS=1 and restart pi.',
       UsageCreditsRequiredError: ({ result }) =>
-        `Claude Code's request was refused for billing: Anthropic would charge it to your Claude usage credits instead of your plan limits. This happens once your plan limit is used up, or when Anthropic counts the request as use by a third-party app. Claude Code said: ${result}`,
+        `Anthropic did not accept this request on your plan limits and would charge it to your Claude usage credits instead. This happens once a plan limit is used up, or when Anthropic counts the request as use by a third-party app. Wait for the limit to reset, or check your usage and billing at claude.ai/settings/usage. Claude Code said: ${result}`,
       ProcessError: (reason) => `Failed to run Claude Code: ${reason.message}`,
     })
   }
@@ -507,53 +507,51 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
                   }),
                   stream_event: ({ event }) =>
                     Effect.succeed(
-                      Option.isSome(stop)
-                        ? ([stop, []] as const)
-                        : event.type === 'message_stop'
-                          ? ([Option.some(event), []] as const)
-                          : ([stop, [event]] as const),
-                    ),
-                  rate_limit_event: ({ rate_limit_info }) =>
-                    rate_limit_info.isUsingOverage === true &&
-                    !config.allowUsageCredits
-                      ? Effect.fail(
-                          new ClaudeCliError({
-                            reason: new UsageCreditsChargedError(),
-                          }),
-                        )
-                      : Effect.succeed([stop, Array.fromOption(stop)] as const),
-                  // A result before the response means there is none.
-                  result: ({ result: text }) =>
-                    pipe(
-                      Option.fromNullishOr(text),
-                      Option.filter(String.isNonEmpty),
-                      Option.filter(() => Option.isNone(stop)),
-                      Option.match({
+                      Option.match(stop, {
+                        onSome: () => [stop, []] as const,
                         onNone: () =>
-                          Effect.succeed([stop, Array.fromOption(stop)] as const),
-                        onSome: (result) =>
-                          Effect.fail(
-                            new ClaudeCliError({
-                              reason: Match.value(result).pipe(
-                                Match.when(
-                                  String.includes(
-                                    'another Claude Code process is refreshing',
-                                  ),
-                                  () => new LoginBusyError({ result }),
-                                ),
-                                Match.when(
-                                  (message) =>
-                                    /third-party apps now draw from your extra usage|out of extra usage|draws? from your usage credits/i.test(
-                                      message,
-                                    ),
-                                  () => new UsageCreditsRequiredError({ result }),
-                                ),
-                                Match.orElse(() => new NoResponseError({ result })),
-                              ),
-                            }),
-                          ),
+                          event.type === 'message_stop'
+                            ? ([Option.some(event), []] as const)
+                            : ([stop, [event]] as const),
                       }),
                     ),
+                  rate_limit_event: Effect.fnUntraced(function* ({
+                    rate_limit_info,
+                  }) {
+                    if (
+                      rate_limit_info.isUsingOverage === true &&
+                      !config.allowUsageCredits
+                    ) {
+                      return yield* new ClaudeCliError({
+                        reason: new UsageCreditsChargedError(),
+                      })
+                    }
+                    return [stop, Array.fromOption(stop)] as const
+                  }),
+                  // A result before the response means there is none.
+                  result: Effect.fnUntraced(function* ({ result: text }) {
+                    if (Option.isSome(stop) || !text) {
+                      return [stop, Array.fromOption(stop)] as const
+                    }
+                    return yield* new ClaudeCliError({
+                      reason: Match.value(text).pipe(
+                        Match.when(
+                          String.includes(
+                            'another Claude Code process is refreshing',
+                          ),
+                          (result) => new LoginBusyError({ result }),
+                        ),
+                        Match.when(
+                          (result) =>
+                            /third-party apps now draw from your extra usage|out of extra usage|draws? from your usage credits/i.test(
+                              result,
+                            ),
+                          (result) => new UsageCreditsRequiredError({ result }),
+                        ),
+                        Match.orElse((result) => new NoResponseError({ result })),
+                      ),
+                    })
+                  }),
                 }),
               ),
             { onHalt: Array.fromOption },
