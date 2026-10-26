@@ -119,13 +119,17 @@ const messageStart = (id: string) =>
     },
   })
 
-// What Claude Code reports after the response about the limits that paid for
-// it, and the result that ends its turn.
+// What Claude Code reports after the response about the limits that paid for it.
 const limits = (isUsingOverage: boolean) => ({
   type: 'rate_limit_event',
   rate_limit_info: { status: 'allowed', rateLimitType: 'five_hour', isUsingOverage },
 })
-const done = { type: 'result', subtype: 'success', is_error: false, num_turns: 1 }
+const success = {
+  type: 'result',
+  subtype: 'success',
+  is_error: false,
+  num_turns: 1,
+}
 
 const reply = (id: string, text: string, isUsingOverage = false): Reply => ({
   lines: [
@@ -148,7 +152,7 @@ const reply = (id: string, text: string, isUsingOverage = false): Reply => ({
     }),
     event({ type: 'message_stop' }),
     limits(isUsingOverage),
-    done,
+    success,
   ],
 })
 
@@ -533,7 +537,7 @@ describe('stream', () => {
 
   it('finishes the response when Claude Code ends without reporting its limits', async () => {
     const { message } = await run(
-      [{ lines: reply('msg_1', 'Hello').lines.slice(0, 6), exitCode: 0 }],
+      [{ lines: Array.dropRight(reply('msg_1', 'Hello').lines, 2), exitCode: 0 }],
       { messages: [user('Hi')] },
     )
 
