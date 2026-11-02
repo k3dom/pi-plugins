@@ -42,24 +42,24 @@
     "format:check": "oxfmt --check"
   },
   "dependencies": {
-    "defuddle": "0.19.2",
-    "linkedom": "0.18.13",
+    "defuddle": "0.19.6",
+    "linkedom": "0.18.14",
     "turndown": "7.2.4"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.99.1",
-    "@earendil-works/pi-coding-agent": "0.99.1",
-    "@earendil-works/pi-tui": "0.99.1",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
     "@pi-plugins/fmt": "workspace:*",
     "@pi-plugins/lint": "workspace:*",
     "@pi-plugins/shared": "workspace:*",
     "@pi-plugins/tsconfig": "workspace:*",
-    "@types/node": "26.1.2",
-    "effect": "4.0.0-rc.115",
-    "oxfmt": "0.62.0",
-    "oxlint": "1.77.0",
-    "tsdown": "0.22.14",
-    "typebox": "1.3.10",
+    "@types/node": "26.6.6",
+    "effect": "4.1.1",
+    "oxfmt": "0.75.0",
+    "oxlint": "1.90.0",
+    "tsdown": "0.23.4",
+    "typebox": "1.4.3",
     "typescript": "7.0.2"
   },
   "peerDependencies": {

@@ -17,7 +17,7 @@ import {
   HttpClient,
   HttpClientRequest,
   HttpClientResponse,
-} from 'effect/unstable/http'
+} from 'effect/http'
 import * as WebSearch from './web-search'
 
 const SearchResponse = Schema.Struct({
