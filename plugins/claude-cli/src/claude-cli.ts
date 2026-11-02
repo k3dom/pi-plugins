@@ -40,7 +40,7 @@ import {
   Stream,
   String,
 } from 'effect'
-import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+import { ChildProcess, ChildProcessSpawner } from 'effect/process'
 
 export class NotInstalledError extends Schema.TaggedError<NotInstalledError>()(
   'NotInstalledError',

@@ -1,5 +1,5 @@
 import { Array, DateTime, Order, pipe, Schema } from 'effect'
-import { HttpApi, HttpApiEndpoint, HttpApiGroup } from 'effect/unstable/httpapi'
+import { HttpApi, HttpApiEndpoint, HttpApiGroup } from 'effect/http-api'
 
 export const BASE_URL = {
   zai: 'https://api.z.ai',

@@ -45,17 +45,17 @@
     "format:check": "oxfmt --check"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.99.1",
-    "@effect/platform-node": "4.0.0-rc.115",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@effect/platform-node": "4.1.1",
     "@pi-plugins/fmt": "workspace:*",
     "@pi-plugins/lint": "workspace:*",
     "@pi-plugins/shared": "workspace:*",
     "@pi-plugins/tsconfig": "workspace:*",
-    "@types/node": "26.1.2",
-    "effect": "4.0.0-rc.115",
-    "oxfmt": "0.62.0",
-    "oxlint": "1.77.0",
-    "tsdown": "0.22.14",
+    "@types/node": "26.6.6",
+    "effect": "4.1.1",
+    "oxfmt": "0.75.0",
+    "oxlint": "1.90.0",
+    "tsdown": "0.23.4",
     "typescript": "7.0.2"
   },
   "peerDependencies": {

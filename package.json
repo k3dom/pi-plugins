@@ -13,10 +13,10 @@
     "release": "changeset publish"
   },
   "devDependencies": {
-    "@changesets/cli": "2.31.1",
+    "@changesets/cli": "3.0.3",
     "@pi-plugins/fmt": "workspace:*",
-    "oxfmt": "0.62.0",
-    "turbo": "2.10.8"
+    "oxfmt": "0.75.0",
+    "turbo": "2.11.10"
   },
   "packageManager": "pnpm@11.20.0"
 }
