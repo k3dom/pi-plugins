@@ -31,7 +31,6 @@ time spent using tools. There are no commands or settings.
 
 - Available only in interactive terminal mode.
 - Automatic retries can reset the timer.
-- Hides pi's animated spinner, because each spinner frame redraws the whole
-  transcript and takes a lot of CPU in long fullscreen sessions. The timer ticks once
-  a second instead.
+- Pi's spinner redraws the whole transcript every 80 ms, which takes a lot of CPU in
+  long fullscreen sessions.
 - Use [`speed`](../speed) for generation speed and time to first token.
