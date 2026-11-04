@@ -1,6 +1,6 @@
 {
   "name": "@pi-plugins/no-spinner",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Spinner remover for pi-agent: stops the working spinner from redrawing the screen 12 times a second.",
   "keywords": [
     "performance",
