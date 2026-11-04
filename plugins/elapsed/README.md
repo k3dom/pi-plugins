@@ -1,5 +1,20 @@
 # `@pi-plugins/elapsed`
 
+<!-- prettier-ignore -->
+> [!WARNING]
+> This package is deprecated. Use
+> [`@pi-plugins/no-spinner`](https://github.com/k3dom/pi-plugins/tree/master/plugins/no-spinner)
+> instead. Each tick of the timer redraws the whole transcript, which still takes a lot
+> of CPU in sessions with long tool output. `no-spinner` keeps the working indicator
+> still, so pi redraws only when something else changes.
+>
+> To switch:
+>
+> ```bash
+> pi remove npm:@pi-plugins/elapsed
+> pi install npm:@pi-plugins/no-spinner
+> ```
+
 Track how long the agent has been working in
 [pi](https://github.com/earendil-works/pi) with a live timer in the working
 indicator.
