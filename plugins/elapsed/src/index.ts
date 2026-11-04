@@ -26,6 +26,15 @@ export default function elapsed(pi: ExtensionAPI) {
     ctx.ui.setWorkingMessage()
   }
 
+  pi.on('session_start', (_event, ctx) => {
+    if (ctx.mode !== 'tui') {
+      return
+    }
+    // The ticking timer shows that pi is working. Pi's spinner would redraw the
+    // whole transcript every 80 ms, which takes a third to half of a core in long sessions.
+    ctx.ui.setWorkingIndicator({ frames: [] })
+  })
+
   pi.on('agent_start', (_event, ctx) => {
     if (ctx.mode !== 'tui') {
       return
