@@ -31,7 +31,8 @@ export default function elapsed(pi: ExtensionAPI) {
       return
     }
     // The ticking timer shows that pi is working. Pi's spinner would redraw the
-    // whole transcript every 80 ms, which takes a third to half of a core in long sessions.
+    // whole transcript every 80 ms, which takes a third to half of a core in long
+    // sessions.
     ctx.ui.setWorkingIndicator({ frames: [] })
   })
 
