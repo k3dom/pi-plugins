@@ -28,5 +28,4 @@ available:
   from the selected model.
 - `TTFT` means time to first token: how long the model takes to start responding.
 
-There are no commands or settings. Use [`elapsed`](../elapsed) to track the full
-agent run, including tool calls.
+There are no commands or settings.

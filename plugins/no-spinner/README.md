@@ -31,4 +31,5 @@ something on screen changes.
 ## Notes
 
 - Available only in interactive terminal mode.
-- Pi still redraws once a second while a bash command runs, to update its duration.
+- Pi still redraws once a second while a bash or codemode tool runs, to update its
+  duration.
