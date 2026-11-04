@@ -1,0 +1,7 @@
+{
+  "extends": "@pi-plugins/tsconfig/base.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"]
+}
