@@ -12,9 +12,9 @@ Install only the pieces you need.
 | ---------------------------------- | -------------------------------------------------------- | --------------------------------------- |
 | [`checkpoint`](plugins/checkpoint) | Restore files when navigating session history.           | `/tree`, `/checkpoint-cleanup`          |
 | [`claude-cli`](plugins/claude-cli) | Use a Claude subscription through the Claude Code CLI.   | `claude-cli` models                     |
-| [`elapsed`](plugins/elapsed)       | Show a live timer in the working indicator.              | Automatic                               |
 | [`exit`](plugins/exit)             | Quit pi with a plain-text prompt.                        | `exit`, `quit`                          |
 | [`fast-mode`](plugins/fast-mode)   | Request priority inference for selected models.          | `/fast`, `--fast`                       |
+| [`no-spinner`](plugins/no-spinner) | Remove the working spinner to save CPU.                  | Automatic                               |
 | [`skills`](plugins/skills)         | Review code for bugs and opportunities to simplify.      | `/skill:code-review`, `/skill:simplify` |
 | [`speed`](plugins/speed)           | Show estimated generation speed and time to first token. | Automatic                               |
 | [`subagent`](plugins/subagent)     | Delegate a self-contained task to a separate pi session. | `subagent`                              |
