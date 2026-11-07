@@ -98,7 +98,5 @@ To stay on your plan's limits, turn off usage credits at
   default and one hour with `long`.
 - When another Claude Code process is refreshing the login, a request waits and tries
   again for up to a minute.
-- Starting Claude Code takes about a quarter of a second, so from its second request
-  on, each session keeps one process started ahead for its next request. An idle
-  process takes about 200 MiB. It is stopped after five idle minutes and when the
-  session ends.
+- Each request starts its own `claude` process, which takes about a quarter of a
+  second before the request is sent, and stops it once the response is complete.
