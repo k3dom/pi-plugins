@@ -241,17 +241,18 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
           Option.getOrElse(() => '.'),
         )
 
-        const systemPrompt = pipe(
-          system,
-          Array.flatMapNullishOr(({ text }) => text),
-          Array.join('\n\n'),
-        )
-
         // A file rather than an argument, which is limited to 128 KiB on
         // Linux. Claude Code puts its billing header and identity before it.
         const dir = yield* fs.makeTempDirectoryScoped({ prefix: 'pi-claude-cli-' })
         const systemPromptFile = path.join(dir, 'system-prompt.md')
-        yield* fs.writeFileString(systemPromptFile, systemPrompt)
+        yield* fs.writeFileString(
+          systemPromptFile,
+          pipe(
+            system,
+            Array.flatMapNullishOr(({ text }) => text),
+            Array.join('\n\n'),
+          ),
+        )
 
         const input = yield* Queue.make<string, Cause.Done>()
         const claude = yield* spawner
