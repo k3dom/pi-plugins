@@ -17,7 +17,6 @@ import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all'
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import {
   afterAll,
-  afterEach,
   assert,
   beforeAll,
   beforeEach,
@@ -96,9 +95,6 @@ beforeEach(async () => {
   await rm(`${log}.started`, { force: true })
   await rm(`${log}.stopped`, { force: true })
 })
-
-// So that no test gets a process started ahead in another.
-afterEach(() => ClaudeCli.release())
 
 afterAll(() => rm(dir, { recursive: true, force: true }))
 
@@ -606,23 +602,7 @@ describe('stream', () => {
     await vi.waitFor(async () => assert.include(await pids('stopped'), pid))
   })
 
-  it('answers a request with a Claude Code process started ahead by the one before', async () => {
-    const options = { sessionId: randomUUID() }
-    await run([reply('msg_1', 'Hi')], { messages: [user('Hi')] }, options)
-    await run([reply('msg_2', 'Hi')], { messages: [user('Hi')] }, options)
-    await vi.waitFor(async () => assert.lengthOf(await pids('started'), 3))
-    const requested = Date.now()
-    const { message, received } = await run(
-      [reply('msg_3', 'Hi')],
-      { messages: [user('Hi')] },
-      options,
-    )
-
-    assert.strictEqual(message.stopReason, 'stop')
-    assert.isBelow(received.startedAt, requested)
-  })
-
-  it('starts no process ahead for the first request of a session, such as a summary', async () => {
+  it('starts Claude Code when a request is made and leaves none running after it', async () => {
     const options = { sessionId: randomUUID() }
     await run([reply('msg_1', 'Hi')], { messages: [user('Hi')] }, options)
     const requested = Date.now()
@@ -633,35 +613,13 @@ describe('stream', () => {
     )
 
     assert.isAtLeast(received.startedAt, requested)
-  })
-
-  it('starts Claude Code afresh when the next request needs another setup', async () => {
-    const options = { sessionId: randomUUID() }
-    const terse = { systemPrompt: 'Be terse.', messages: [user('Hi')] }
-    await run([reply('msg_1', 'Hi')], terse, options)
-    await run([reply('msg_2', 'Hi')], terse, options)
-    const requested = Date.now()
-    const { received } = await run(
-      [reply('msg_3', 'Hi')],
-      { systemPrompt: 'Be verbose.', messages: [user('Hi')] },
-      options,
+    await vi.waitFor(async () =>
+      assert.sameMembers(await pids('stopped'), await pids('started')),
     )
-
-    assert.strictEqual(received.systemPrompt, 'Be verbose.')
-    assert.isAtLeast(received.startedAt, requested)
+    assert.lengthOf(await pids('started'), 2)
   })
 
-  it('stops the processes started ahead when released', async () => {
-    const options = { sessionId: randomUUID() }
-    await run([reply('msg_1', 'Hi')], { messages: [user('Hi')] }, options)
-    await run([reply('msg_2', 'Hi')], { messages: [user('Hi')] }, options)
-    await vi.waitFor(async () => assert.lengthOf(await pids('started'), 3))
-    await ClaudeCli.release()
-
-    assert.sameMembers(await pids('stopped'), await pids('started'))
-  })
-
-  it('keeps one process ahead per session when its requests overlap', async () => {
+  it('leaves no Claude Code running after overlapping requests of a session', async () => {
     process.env['FAKE_CLAUDE_REPLIES'] = JSON.stringify([reply('msg_1', 'Hi')])
     const options = { sessionId: randomUUID() }
     const request = () =>
@@ -672,8 +630,10 @@ describe('stream', () => {
       ).result()
     await request()
     await Promise.all([request(), request(), request()])
-    await ClaudeCli.release()
 
-    assert.sameMembers(await pids('stopped'), await pids('started'))
+    await vi.waitFor(async () =>
+      assert.sameMembers(await pids('stopped'), await pids('started')),
+    )
+    assert.lengthOf(await pids('started'), 4)
   })
 })

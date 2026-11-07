@@ -16,27 +16,20 @@ import {
   Config,
   Context,
   Effect,
-  Equal,
-  Exit,
   Fiber,
-  FiberSet,
   FileSystem,
   Filter,
   Layer,
   ManagedRuntime,
   Match,
-  MutableHashMap,
-  MutableHashSet,
   Option,
   Path,
   pipe,
-  type PlatformError,
   Predicate,
   Queue,
   Record,
   Schedule,
   Schema,
-  Scope,
   Stream,
   String,
 } from 'effect'
@@ -188,20 +181,6 @@ const Line = Schema.fromJsonString(
 
 const SessionId = Schema.String.check(Schema.isUUID())
 
-// How a `claude` process is started, apart from its system prompt file.
-type Setup = {
-  readonly systemPrompt: string
-  readonly args: ReadonlyArray<string>
-  readonly env: Record<string, string | undefined>
-}
-
-type Claude = {
-  readonly handle: ChildProcessSpawner.ChildProcessHandle
-  readonly input: Queue.Queue<string, Cause.Done>
-  readonly stderrTail: Fiber.Fiber<string, PlatformError.PlatformError>
-  readonly scope: Scope.Closeable
-}
-
 export class ClaudeCli extends Context.Service<ClaudeCli>()(
   '@pi-plugins/claude-cli/ClaudeCli',
   {
@@ -211,91 +190,6 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const scope = yield* Scope.Scope
-
-      // The process started ahead for the next request of each session, with
-      // the setup of the session's latest request.
-      const spares = MutableHashMap.empty<
-        string,
-        { readonly setup: Setup; readonly claude: Claude }
-      >()
-      // Pi's summaries each use a new session ID, so a process started ahead
-      // for them would never be used. Sessions get one from their second
-      // request.
-      const served = MutableHashSet.empty<string>()
-      const warming = yield* FiberSet.make()
-
-      // Starts `claude` with everything but the request, which follows on
-      // stdin.
-      const spawn = Effect.fnUntraced(function* (setup: Setup) {
-        const claudeScope = yield* Scope.fork(scope)
-        return yield* Effect.gen(function* () {
-          // A file rather than an argument, which is limited to 128 KiB on
-          // Linux. Claude Code puts its billing header and identity before it.
-          const dir = yield* fs.makeTempDirectoryScoped({
-            prefix: 'pi-claude-cli-',
-          })
-          const systemPromptFile = path.join(dir, 'system-prompt.md')
-          yield* fs.writeFileString(systemPromptFile, setup.systemPrompt)
-
-          const input = yield* Queue.make<string, Cause.Done>()
-          const handle = yield* spawner
-            .spawn(
-              ChildProcess.make(
-                'claude',
-                [...setup.args, '--system-prompt-file', systemPromptFile],
-                {
-                  // Inherits pi's working directory. Node caches
-                  // `process.cwd()`, which still names the old path after
-                  // the directory is moved.
-                  extendEnv: true,
-                  env: setup.env,
-                  stdin: Stream.fromQueue(input).pipe(
-                    Stream.map((line) => `${line}\n`),
-                    Stream.encodeText,
-                  ),
-                  forceKillAfter: '3 seconds',
-                },
-              ),
-            )
-            .pipe(
-              Effect.catchReason('PlatformError', 'NotFound', () =>
-                Effect.fail(new ClaudeCliError({ reason: new NotInstalledError() })),
-              ),
-            )
-          const stderrTail = yield* handle.stderr.pipe(
-            Stream.decodeText,
-            Stream.runFold(
-              () => '',
-              (acc, chunk) => String.takeRight(acc + chunk, 4096),
-            ),
-            Effect.forkScoped,
-          )
-          return { handle, input, stderrTail, scope: claudeScope }
-        }).pipe(
-          Scope.provide(claudeScope),
-          Effect.onError((cause) => Scope.close(claudeScope, Exit.failCause(cause))),
-        )
-      })
-
-      // The session's process started ahead, if it was started with this
-      // setup and still runs. Any other is stopped.
-      const take = Effect.fnUntraced(function* (slot: string, setup: Setup) {
-        const spare = MutableHashMap.get(spares, slot)
-        MutableHashMap.remove(spares, slot)
-        if (Option.isNone(spare)) {
-          return Option.none<Claude>()
-        }
-        const { claude } = spare.value
-        const running = yield* claude.handle.isRunning.pipe(
-          Effect.orElseSucceed(() => false),
-        )
-        if (running && Equal.equals(spare.value.setup, setup)) {
-          return Option.some(claude)
-        }
-        yield* Scope.close(claude.scope, Exit.void)
-        return Option.none<Claude>()
-      })
 
       const run = Effect.fnUntraced(function* (options: {
         readonly model: string
@@ -347,104 +241,106 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
           Option.getOrElse(() => '.'),
         )
 
-        const setup: Setup = {
-          systemPrompt: pipe(
-            system,
-            Array.flatMapNullishOr(({ text }) => text),
-            Array.join('\n\n'),
-          ),
-          args: [
-            '--print',
-            '--model',
-            options.model,
-            '--input-format',
-            'stream-json',
-            '--output-format',
-            'stream-json',
-            '--verbose',
-            '--include-partial-messages',
-            '--setting-sources',
-            '',
-            '--tools',
-            '',
-            '--strict-mcp-config',
-            '--disable-slash-commands',
-            '--no-session-persistence',
-            '--max-turns',
-            '1',
-            // Otherwise newer models run in auto mode, which attaches a
-            // server-side tool use classifier and the user's working
-            // directory, home directory and git state to each request.
-            '--permission-mode',
-            'default',
-            // All requests of a pi session form one Claude Code session, as
-            // they would in Claude Code itself.
-            ...Option.match(sessionId, {
-              onNone: () => [],
-              onSome: (id) => ['--session-id', id],
-            }),
-          ],
-          env: {
-            // An API key would silently bill the API instead of the
-            // subscription.
-            ANTHROPIC_API_KEY: undefined,
-            ANTHROPIC_AUTH_TOKEN: undefined,
-            ANTHROPIC_BASE_URL: undefined,
-            ANTHROPIC_BETAS: Option.getOrUndefined(options.betas),
-            // Pi owns retries, compaction and the token budget.
-            CLAUDE_CODE_MAX_RETRIES: '0',
-            DISABLE_AUTO_COMPACT: '1',
-            CLAUDE_CODE_TOTAL_TOKENS_REMINDER: 'off',
-            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-            CLAUDE_CODE_DISABLE_THINKING:
-              params.thinking?.type === 'disabled' ? '1' : undefined,
-            CLAUDE_CODE_PROMPT_CACHE_TTL: Option.getOrUndefined(cacheTtl),
-            DISABLE_PROMPT_CACHING: Option.isNone(cacheTtl) ? '1' : undefined,
-          },
-        }
-        const slot = Option.getOrElse(sessionId, () => '')
+        const systemPrompt = pipe(
+          system,
+          Array.flatMapNullishOr(({ text }) => text),
+          Array.join('\n\n'),
+        )
 
-        // Starting Claude Code takes about a quarter of a second, so a
-        // request uses a process started ahead by the previous request of its
-        // session, if it was started the same way, and starts one for the
-        // next request in turn.
-        const spare = yield* take(slot, setup)
-        const claude = Option.isSome(spare) ? spare.value : yield* spawn(setup)
-        yield* Effect.addFinalizer(() => Scope.close(claude.scope, Exit.void))
-        if (MutableHashSet.has(served, slot)) {
-          yield* Effect.gen(function* () {
-            // Uninterruptible, so that the process is either set aside or
-            // stopped.
-            const next = yield* Effect.gen(function* () {
-              const started = yield* spawn(setup)
-              const previous = MutableHashMap.get(spares, slot)
-              MutableHashMap.set(spares, slot, { setup, claude: started })
-              if (Option.isSome(previous)) {
-                yield* Scope.close(previous.value.claude.scope, Exit.void)
-              }
-              return started
-            }).pipe(Effect.uninterruptible)
-            // An idle Claude Code process takes about 200 MiB.
-            yield* Effect.sleep('5 minutes')
-            if (
-              Option.exists(
-                MutableHashMap.get(spares, slot),
-                (entry) => entry.claude === next,
-              )
-            ) {
-              MutableHashMap.remove(spares, slot)
-              yield* Scope.close(next.scope, Exit.void)
-            }
-          }).pipe(Effect.ignore, FiberSet.run(warming))
-        }
-        MutableHashSet.add(served, slot)
+        // A file rather than an argument, which is limited to 128 KiB on
+        // Linux. Claude Code puts its billing header and identity before it.
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: 'pi-claude-cli-' })
+        const systemPromptFile = path.join(dir, 'system-prompt.md')
+        yield* fs.writeFileString(systemPromptFile, systemPrompt)
+
+        const input = yield* Queue.make<string, Cause.Done>()
+        const claude = yield* spawner
+          .spawn(
+            ChildProcess.make(
+              'claude',
+              [
+                '--print',
+                '--model',
+                options.model,
+                '--input-format',
+                'stream-json',
+                '--output-format',
+                'stream-json',
+                '--verbose',
+                '--include-partial-messages',
+                '--setting-sources',
+                '',
+                '--tools',
+                '',
+                '--strict-mcp-config',
+                '--disable-slash-commands',
+                '--no-session-persistence',
+                '--max-turns',
+                '1',
+                // Otherwise newer models run in auto mode, which attaches a
+                // server-side tool use classifier and the user's working
+                // directory, home directory and git state to each request.
+                '--permission-mode',
+                'default',
+                // All requests of a pi session form one Claude Code session, as
+                // they would in Claude Code itself.
+                ...Option.match(sessionId, {
+                  onNone: () => [],
+                  onSome: (id) => ['--session-id', id],
+                }),
+                '--system-prompt-file',
+                systemPromptFile,
+              ],
+              {
+                // Inherits pi's working directory. Node caches
+                // `process.cwd()`, which still names the old path after the
+                // directory is moved.
+                extendEnv: true,
+                env: {
+                  // An API key would silently bill the API instead of the
+                  // subscription.
+                  ANTHROPIC_API_KEY: undefined,
+                  ANTHROPIC_AUTH_TOKEN: undefined,
+                  ANTHROPIC_BASE_URL: undefined,
+                  ANTHROPIC_BETAS: Option.getOrUndefined(options.betas),
+                  // Pi owns retries, compaction and the token budget.
+                  CLAUDE_CODE_MAX_RETRIES: '0',
+                  DISABLE_AUTO_COMPACT: '1',
+                  CLAUDE_CODE_TOTAL_TOKENS_REMINDER: 'off',
+                  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+                  CLAUDE_CODE_DISABLE_THINKING:
+                    params.thinking?.type === 'disabled' ? '1' : undefined,
+                  CLAUDE_CODE_PROMPT_CACHE_TTL: Option.getOrUndefined(cacheTtl),
+                  DISABLE_PROMPT_CACHING: Option.isNone(cacheTtl) ? '1' : undefined,
+                },
+                stdin: Stream.fromQueue(input).pipe(
+                  Stream.map((line) => `${line}\n`),
+                  Stream.encodeText,
+                ),
+                forceKillAfter: '3 seconds',
+              },
+            ),
+          )
+          .pipe(
+            Effect.catchReason('PlatformError', 'NotFound', () =>
+              Effect.fail(new ClaudeCliError({ reason: new NotInstalledError() })),
+            ),
+          )
+        const stderrTail = yield* claude.stderr.pipe(
+          Stream.decodeText,
+          Stream.runFold(
+            () => '',
+            (acc, chunk) => String.takeRight(acc + chunk, 4096),
+          ),
+          Effect.forkScoped,
+        )
 
         // The rest of pi's request replaces the matching fields of Claude
         // Code's own. It reaches Claude Code as settings over stdin, because
         // a settings file is limited to 2 MiB and an environment variable to
         // 128 KiB on Linux.
         yield* Queue.offer(
-          claude.input,
+          input,
           JSON.stringify({
             type: 'control_request',
             request_id: 'extra-body',
@@ -467,7 +363,7 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
           }),
         )
 
-        return claude.handle.stdout.pipe(
+        return claude.stdout.pipe(
           Stream.decodeText,
           Stream.splitLines,
           Stream.filterMap(
@@ -493,7 +389,7 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
                       })
                     }
                     yield* Queue.offer(
-                      claude.input,
+                      input,
                       JSON.stringify({
                         type: 'user',
                         message: {
@@ -502,7 +398,7 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
                         },
                       }),
                     )
-                    yield* Queue.end(claude.input)
+                    yield* Queue.end(input)
                     return [stop, []] as const
                   }),
                   stream_event: ({ event }) =>
@@ -560,10 +456,10 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
           Stream.concat(
             Stream.fromEffect(
               Effect.gen(function* () {
-                const exitCode = yield* claude.handle.exitCode
+                const exitCode = yield* claude.exitCode
                 return yield* new ClaudeCliError({
                   reason: new NoResponseError({ exitCode }),
-                  stderr: yield* Fiber.join(claude.stderrTail),
+                  stderr: yield* Fiber.join(stderrTail),
                 })
               }),
             ),
@@ -597,20 +493,7 @@ export class ClaudeCli extends Context.Service<ClaudeCli>()(
           Stream.withSpan('ClaudeCli.request'),
         )
 
-      const release = Effect.fn('ClaudeCli.release')(function* () {
-        yield* FiberSet.clear(warming)
-        const all = Array.fromIterable(MutableHashMap.values(spares))
-        MutableHashMap.clear(spares)
-        yield* Effect.forEach(
-          all,
-          ({ claude }) => Scope.close(claude.scope, Exit.void),
-          {
-            discard: true,
-          },
-        )
-      })
-
-      return { request, release }
+      return { request }
     }),
   },
 ) {}
@@ -626,15 +509,6 @@ export const layer = Layer.effect(
 ).pipe(Layer.provide(NodeServices.layer))
 
 const runtime = ManagedRuntime.make(layer)
-
-/** Stops the Claude Code processes started ahead for the next request. */
-export const release = (): Promise<void> =>
-  runtime.runPromise(
-    Effect.gen(function* () {
-      const claudeCli = yield* ClaudeCli
-      yield* claudeCli.release()
-    }),
-  )
 
 /**
  * Pi's `streamSimple` for models of the `claude-cli` provider. Pi's Anthropic
