@@ -1,5 +1,11 @@
 # @pi-plugins/subagent
 
+## 0.4.2
+
+### Patch Changes
+
+- bf3a5c3: Bundle Effect 4.1.2 instead of 4.0.0-rc.115 and build against pi 1.5.0.
+
 ## 0.4.1
 
 ### Patch Changes

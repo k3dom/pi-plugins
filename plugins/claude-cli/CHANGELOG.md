@@ -1,5 +1,15 @@
 # @pi-plugins/claude-cli
 
+## 0.4.0
+
+### Minor Changes
+
+- a832df4: Keep the models that `models.json` adds to the `claude-cli` provider, so a Claude model can be used before pi's catalog has it.
+
+### Patch Changes
+
+- bf3a5c3: Bundle Effect 4.1.2 instead of 4.0.0-rc.115 and build against pi 1.5.0.
+
 ## 0.3.1
 
 ### Patch Changes
