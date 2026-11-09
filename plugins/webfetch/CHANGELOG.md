@@ -1,5 +1,12 @@
 # @pi-plugins/webfetch
 
+## 0.3.2
+
+### Patch Changes
+
+- bf3a5c3: Bundle Effect 4.1.2 instead of 4.0.0-rc.115 and build against pi 1.5.0.
+- 37c7b98: Depend on defuddle 0.19.6, linkedom 0.18.15 and turndown 7.2.5.
+
 ## 0.3.1
 
 ### Patch Changes
