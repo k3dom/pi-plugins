@@ -1,9 +1,7 @@
 import {
   Array,
   Context,
-  Crypto,
   Effect,
-  Encoding,
   Fiber,
   FileSystem,
   Path,
@@ -12,7 +10,8 @@ import {
   Stream,
   String,
 } from 'effect'
-import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+import * as Digest from 'effect/crypto/Digest'
+import { ChildProcess, ChildProcessSpawner } from 'effect/process'
 import * as FileLock from './file-lock'
 
 export class GitError extends Schema.TaggedError<GitError>()('GitError', {
@@ -70,7 +69,7 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
     make: Effect.fnUntraced(function* (cwd: string, agentDir: string) {
       const fs = yield* FileSystem.FileSystem
       const path = yield* Path.Path
-      const crypto = yield* Crypto.Crypto
+      const digest = yield* Digest.Digest
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
 
       const git = Effect.fnUntraced(
@@ -124,15 +123,11 @@ export class Snapshotter extends Context.Service<Snapshotter>()(
         return yield* new SnapshotterError({ reason: new NotAWorktree({ cwd }) })
       }
 
-      const digest = yield* crypto.digest(
-        'SHA-256',
+      const hash = yield* digest.digestHex(
+        Digest.sha256,
         new TextEncoder().encode(worktree),
       )
-      const gitdir = path.join(
-        agentDir,
-        'checkpoints',
-        String.takeLeft(Encoding.encodeHex(digest), 16),
-      )
+      const gitdir = path.join(agentDir, 'checkpoints', String.takeLeft(hash, 16))
 
       const shadowGit = (args: ReadonlyArray<string>) =>
         git(

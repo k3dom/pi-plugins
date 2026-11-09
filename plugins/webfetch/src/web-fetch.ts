@@ -11,12 +11,7 @@ import {
   Schema,
   String,
 } from 'effect'
-import {
-  FetchHttpClient,
-  Headers,
-  HttpClient,
-  HttpClientRequest,
-} from 'effect/unstable/http'
+import { FetchHttpClient, Headers, HttpClient, HttpClientRequest } from 'effect/http'
 import * as HtmlConverter from './html-converter'
 
 export class WebFetchError extends Schema.TaggedError<WebFetchError>()(
