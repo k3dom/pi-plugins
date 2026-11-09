@@ -1,48 +1,24 @@
 {
-  description = "pi-agent plugins monorepo";
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
   };
   outputs = {nixpkgs, ...}: let
-    inherit (nixpkgs) lib;
-    eachSupportedSystem = f:
-      lib.genAttrs lib.systems.flakeExposed (
-        system:
-          f {
-            pkgs = import nixpkgs {inherit system;};
-          }
+    forAllSystems = function:
+      nixpkgs.lib.genAttrs nixpkgs.lib.systems.flakeExposed (
+        system: function nixpkgs.legacyPackages.${system}
       );
   in {
-    devShells = eachSupportedSystem ({pkgs}: let
-      ci = pkgs.writeShellApplication {
-        name = "ci";
-        runtimeInputs = with pkgs; [
-          nodejs_24
-          corepack
-          turbo
-        ];
-        text = ''
-          export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-
-          pnpm install --frozen-lockfile
-          turbo run format:check lint check-types build test
-        '';
-      };
-    in {
+    formatter = forAllSystems (pkgs: pkgs.alejandra);
+    devShells = forAllSystems (pkgs: {
       default = pkgs.mkShell {
         packages = with pkgs; [
-          nodejs_24
-          corepack
-          turbo
-
-          statix
-          zizmor
-
-          ci
+          bun
+          deno
+          nodejs_latest
+          pnpm
+          python3
         ];
       };
     });
-
-    formatter = eachSupportedSystem ({pkgs}: pkgs.alejandra);
   };
 }
