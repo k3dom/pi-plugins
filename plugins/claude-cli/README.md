@@ -90,7 +90,14 @@ in `~/.pi/agent/models.json`, with the fields of a similar model in pi's catalog
           "input": ["text", "image"],
           "cost": { "input": 8, "output": 40, "cacheRead": 0.2, "cacheWrite": 10 },
           "contextWindow": 1000000,
-          "maxTokens": 128000
+          "maxTokens": 128000,
+          "compat": {
+            "forceAdaptiveThinking": true,
+            "supportsMidConvoEffort": true,
+            "supportsMidConvoSystemMessages": true,
+            "supportsMidConvoToolChanges": true,
+            "supportsStrictTools": true
+          }
         }
       ]
     }

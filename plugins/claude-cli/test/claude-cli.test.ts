@@ -698,7 +698,7 @@ describe('provider', () => {
 
       assert.isDefined(added)
       assert.isDefined(modelRuntime.getModel('claude-cli', 'claude-haiku-4-5'))
-      const message = await modelRuntime.completeSimple(added!, {
+      const message = await modelRuntime.completeSimple(added, {
         messages: [user('Hi')],
       })
       const received: { args: Array<string> } = JSON.parse(
