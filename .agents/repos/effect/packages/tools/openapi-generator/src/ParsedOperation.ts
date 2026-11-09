@@ -10,14 +10,14 @@
  *
  * @since 4.0.0
  */
-import type * as Types from "effect/Types"
 import type {
   OpenAPISecurityRequirement,
   OpenAPISpecExternalDocs,
   OpenAPISpecLicense,
-  OpenAPISpecMethodName,
   OpenAPISpecServer
-} from "effect/unstable/httpapi/OpenApi"
+} from "effect/http-api/OpenApi"
+import type { HttpMethod } from "effect/http/HttpMethod"
+import type * as Types from "effect/Types"
 
 /**
  * Root OpenAPI metadata preserved for generated client and HttpApi output.
@@ -152,6 +152,12 @@ export type ParsedOperationMediaTypeSchema =
     readonly schema?: undefined
     readonly effectStream: "uint8array"
   }
+  | {
+    readonly contentType: string
+    readonly encoding: "json"
+    readonly schema: string
+    readonly effectStream: "ndjson"
+  }
 
 /**
  * Parsed response metadata together with generated schema references.
@@ -202,7 +208,7 @@ export interface ParsedOperation {
   readonly id: string
   readonly operationId: string | undefined
   readonly path: string
-  readonly method: OpenAPISpecMethodName
+  readonly method: Lowercase<HttpMethod>
   readonly tags: ReadonlyArray<string>
   readonly metadata: ParsedOperationMetadata
   readonly parameters: {
@@ -219,6 +225,11 @@ export interface ParsedOperation {
   readonly params?: string
   readonly paramsOptional: boolean
   readonly urlParams: ReadonlyArray<string>
+  /**
+   * Query parameters declared with `style: "form"` and `explode: false`, whose
+   * arrays are sent as one comma-separated value.
+   */
+  readonly commaUrlParams: ReadonlyArray<string>
   readonly headers: ReadonlyArray<string>
   readonly cookies: ReadonlyArray<string>
   readonly payload?: string
@@ -243,7 +254,7 @@ export interface ParsedOperation {
  */
 export const makeDeepMutable = (options: {
   readonly id: string
-  readonly method: OpenAPISpecMethodName
+  readonly method: Lowercase<HttpMethod>
   readonly pathIds: Array<string>
   readonly pathTemplate: string
   readonly description: string | undefined
@@ -269,6 +280,7 @@ export const makeDeepMutable = (options: {
   defaultResponse: undefined,
   effectiveSecurity: [],
   urlParams: [],
+  commaUrlParams: [],
   headers: [],
   cookies: [],
   payloadFormData: false,

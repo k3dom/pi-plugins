@@ -9,9 +9,9 @@
  * and have access to the per-connection WebSocket and `IncomingMessage`
  * services.
  *
+ * @stability unstable
  * @since 4.0.0
  */
-import type { Cause } from "effect/Cause"
 import * as Context from "effect/Context"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
@@ -20,16 +20,15 @@ import * as Fiber from "effect/Fiber"
 import { pipe } from "effect/Function"
 import * as Function from "effect/Function"
 import * as Layer from "effect/Layer"
-import * as References from "effect/References"
+import * as NetAddress from "effect/net/NetAddress"
 import * as Scope from "effect/Scope"
-import * as NetAddress from "effect/unstable/net/NetAddress"
-import * as Socket from "effect/unstable/socket/Socket"
-import * as SocketServer from "effect/unstable/socket/SocketServer"
+import * as Socket from "effect/socket/Socket"
+import * as SocketServer from "effect/socket/SocketServer"
 import type * as Http from "node:http"
 import * as Net from "node:net"
 import * as Tls from "node:tls"
 import * as NodeSocket from "./NodeSocket.ts"
-import { NodeWS } from "./NodeSocket.ts"
+import * as NodeWS from "./NodeWS.ts"
 
 const isDeno = "Deno" in globalThis
 
@@ -50,6 +49,7 @@ const socketAddressFromNode = (
  * Service tag for the Node `IncomingMessage` associated with the current
  * WebSocket server connection.
  *
+ * @stability unstable
  * @category services
  * @since 4.0.0
  */
@@ -63,6 +63,7 @@ export class IncomingMessage extends Context.Service<
  * listening with the supplied options, queues pending connections until `run`
  * is called, and closes the server when the scope ends.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -83,6 +84,7 @@ export const make = (
  * Provides a TCP `SocketServer` by creating and managing a scoped Node
  * `net.Server` with the supplied server and listen options.
  *
+ * @stability unstable
  * @category layers
  * @since 4.0.0
  */
@@ -105,6 +107,7 @@ export const layer: (
  * also provided as `NodeSocket.NetSocket`. Connections that fail the handshake
  * are destroyed and the server keeps listening.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -131,6 +134,7 @@ export const makeTls = (
  * Provides a TLS `SocketServer` by creating and managing a scoped Node
  * `tls.Server` with the supplied TLS and listen options.
  *
+ * @stability unstable
  * @category layers
  * @since 4.0.0
  */
@@ -146,6 +150,7 @@ export const layerTls: (
  * providing the WebSocket and its Node `IncomingMessage` to connection
  * handlers and closing the server when the scope ends.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -224,7 +229,7 @@ export const makeWebSocket: (
           )
         ),
         Effect.flatMap(handler),
-        Effect.catchCause(reportUnhandledError),
+        Effect.ignoreCause({ log: "Unhandled", message: "Unhandled error in SocketServer" }),
         Effect.runForkWith(context),
         trackFiber
       )
@@ -253,24 +258,16 @@ export const makeWebSocket: (
  * Provides a WebSocket `SocketServer` backed by the `ws` package and managed
  * with the supplied server options.
  *
+ * @stability unstable
  * @category layers
  * @since 4.0.0
  */
 export const layerWebSocket: (
-  options: NodeSocket.NodeWS.ServerOptions<typeof NodeSocket.NodeWS.WebSocket, typeof Http.IncomingMessage>
+  options: NodeWS.ServerOptions<typeof NodeWS.WebSocket, typeof Http.IncomingMessage>
 ) => Layer.Layer<
   SocketServer.SocketServer,
   SocketServer.SocketServerError
 > = Function.flow(makeWebSocket, Layer.effect(SocketServer.SocketServer))
-
-const reportUnhandledError = <E>(cause: Cause<E>) =>
-  Effect.withFiber<void>((fiber) => {
-    const unhandledLogLevel = fiber.getRef(References.UnhandledLogLevel)
-    if (unhandledLogLevel) {
-      return Effect.logWithLevel(unhandledLogLevel)(cause, "Unhandled error in SocketServer")
-    }
-    return Effect.void
-  })
 
 const makeNetServer = Effect.fnUntraced(function*(options: {
   readonly createServer: () => Net.Server
@@ -364,7 +361,7 @@ const makeNetServer = Effect.fnUntraced(function*(options: {
           { tlsServer: true }
         ),
         Effect.flatMap(handler),
-        Effect.catchCause(reportUnhandledError),
+        Effect.ignoreCause({ log: "Unhandled", message: "Unhandled error in SocketServer" }),
         Effect.runForkWith(Context.add(services, NodeSocket.NetSocket, conn)),
         trackFiber
       )

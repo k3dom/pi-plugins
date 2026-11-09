@@ -6,17 +6,28 @@
  * requests, records GenAI telemetry around those calls, and converts normal or
  * streaming results back into Effect AI response content and metadata.
  *
+ * @stability unstable
  * @since 4.0.0
  */
 /** @effect-diagnostics preferSchemaOverJson:skip-file */
+import * as AiError from "effect/ai/AiError"
+import { toCodecAnthropic } from "effect/ai/AnthropicStructuredOutput"
+import * as IdGenerator from "effect/ai/IdGenerator"
+import * as LanguageModel from "effect/ai/LanguageModel"
+import * as AiModel from "effect/ai/Model"
+import { toCodecOpenAI } from "effect/ai/OpenAiStructuredOutput"
+import * as Prompt from "effect/ai/Prompt"
+import type * as Response from "effect/ai/Response"
+import { addGenAIAnnotations } from "effect/ai/Telemetry"
+import * as Tool from "effect/ai/Tool"
 import * as Arr from "effect/Array"
 import * as Context from "effect/Context"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
-import * as Encoding from "effect/Encoding"
+import * as Base64 from "effect/encoding/Base64"
 import { dual } from "effect/Function"
+import type * as HttpClientResponse from "effect/http/HttpClientResponse"
 import * as Layer from "effect/Layer"
-import * as Option from "effect/Option"
 import * as Predicate from "effect/Predicate"
 import * as Redactable from "effect/Redactable"
 import type * as Schema from "effect/Schema"
@@ -24,18 +35,6 @@ import * as SchemaAST from "effect/SchemaAST"
 import * as Stream from "effect/Stream"
 import type { Span } from "effect/Tracer"
 import type { DeepMutable, Mutable, Simplify } from "effect/Types"
-import * as AiError from "effect/unstable/ai/AiError"
-import { toCodecAnthropic } from "effect/unstable/ai/AnthropicStructuredOutput"
-import * as IdGenerator from "effect/unstable/ai/IdGenerator"
-import * as LanguageModel from "effect/unstable/ai/LanguageModel"
-import * as AiModel from "effect/unstable/ai/Model"
-import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput"
-import type * as Prompt from "effect/unstable/ai/Prompt"
-import type * as Response from "effect/unstable/ai/Response"
-import { addGenAIAnnotations } from "effect/unstable/ai/Telemetry"
-import * as Tool from "effect/unstable/ai/Tool"
-import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
-import type * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
 import type * as Generated from "./Generated.ts"
 import { ReasoningDetailsDuplicateTracker, resolveFinishReason } from "./internal/utilities.ts"
 import { type ChatStreamingResponseChunkData, OpenRouterClient } from "./OpenRouterClient.ts"
@@ -54,6 +53,7 @@ import { type ChatStreamingResponseChunkData, OpenRouterClient } from "./OpenRou
  *
  * @see {@link withConfigOverride} for scoping language model request overrides
  *
+ * @stability unstable
  * @category services
  * @since 4.0.0
  */
@@ -70,8 +70,20 @@ export class Config extends Context.Service<
       /**
        * Whether to use strict JSON schema validation for structured outputs.
        *
-       * Only applies to models that support structured outputs. Defaults to
-       * `true` when structured outputs are supported.
+       * For schema-backed response formats, defaults to `true` when the selected
+       * schema transformer is the OpenAI transformer (`openai/`, `gpt-`, `o1-`,
+       * `o3-`, and `o4-` model prefixes). Other models, including Anthropic models,
+       * send `strict: null` by default, leaving strictness unspecified. Explicit
+       * `true` or `false` overrides either default. This does not affect tool
+       * strictness.
+       *
+       * **Gotchas**
+       *
+       * Transformer selection is not an endpoint-capability check. Support and
+       * enforcement depend on the selected model and provider. For incompatible
+       * endpoints, set `false` to opt out of the strict default. Strict mode may
+       * restrict supported JSON Schema features; see OpenRouter
+       * [structured output guidance](https://openrouter.ai/docs/guides/features/structured-outputs).
        */
       readonly strictJsonSchema?: boolean | undefined
     }
@@ -86,6 +98,7 @@ export class Config extends Context.Service<
  * OpenRouter assistant reasoning detail blocks preserved for multi-turn
  * conversations.
  *
+ * @stability unstable
  * @category models
  * @since 4.0.0
  */
@@ -95,6 +108,7 @@ export type ReasoningDetails = Exclude<typeof Generated.ChatAssistantMessage.Enc
  * File annotations emitted on OpenRouter assistant messages and exposed in
  * finish metadata.
  *
+ * @stability unstable
  * @category models
  * @since 4.0.0
  */
@@ -103,7 +117,7 @@ export type FileAnnotation = Extract<
   { type: "file" }
 >
 
-declare module "effect/unstable/ai/Prompt" {
+declare module "effect/ai/Prompt" {
   /**
    * OpenRouter-specific options for system messages.
    *
@@ -112,6 +126,7 @@ declare module "effect/unstable/ai/Prompt" {
    * These options are used when translating system instructions into
    * OpenRouter chat messages.
    *
+   * @stability unstable
    * @category models
    * @since 4.0.0
    */
@@ -135,6 +150,7 @@ declare module "effect/unstable/ai/Prompt" {
    * These options are used when translating user content into OpenRouter chat
    * messages.
    *
+   * @stability unstable
    * @category models
    * @since 4.0.0
    */
@@ -158,6 +174,7 @@ declare module "effect/unstable/ai/Prompt" {
    * Preserves reasoning metadata when assistant messages are replayed in later
    * OpenRouter requests.
    *
+   * @stability unstable
    * @category models
    * @since 4.0.0
    */
@@ -185,6 +202,7 @@ declare module "effect/unstable/ai/Prompt" {
    * These options are used when converting tool results into OpenRouter chat
    * messages.
    *
+   * @stability unstable
    * @category models
    * @since 4.0.0
    */
@@ -207,6 +225,7 @@ declare module "effect/unstable/ai/Prompt" {
    *
    * Use when you use these options to control how text content is sent to OpenRouter.
    *
+   * @stability unstable
    * @category models
    * @since 4.0.0
    */
@@ -230,6 +249,7 @@ declare module "effect/unstable/ai/Prompt" {
    * Preserves provider reasoning blocks so reasoning-aware conversations can
    * continue across OpenRouter requests.
    *
+   * @stability unstable
    * @category models
    * @since 4.0.0
    */
@@ -256,6 +276,7 @@ declare module "effect/unstable/ai/Prompt" {
    *
    * Controls file naming and prompt caching for files sent to OpenRouter.
    *
+   * @stability unstable
    * @category models
    * @since 4.0.0
    */
@@ -284,6 +305,7 @@ declare module "effect/unstable/ai/Prompt" {
    * Preserves reasoning details associated with tool calls when a conversation
    * is sent back to OpenRouter.
    *
+   * @stability unstable
    * @category models
    * @since 4.0.0
    */
@@ -306,6 +328,7 @@ declare module "effect/unstable/ai/Prompt" {
    *
    * Controls prompt caching for tool results sent to OpenRouter.
    *
+   * @stability unstable
    * @category models
    * @since 4.0.0
    */
@@ -322,7 +345,7 @@ declare module "effect/unstable/ai/Prompt" {
   }
 }
 
-declare module "effect/unstable/ai/Response" {
+declare module "effect/ai/Response" {
   /**
    * OpenRouter metadata attached to completed reasoning response parts.
    *
@@ -330,6 +353,7 @@ declare module "effect/unstable/ai/Response" {
    *
    * Preserves provider reasoning details that can be sent back in later turns.
    *
+   * @stability unstable
    * @category models
    * @since 4.0.0
    */
@@ -352,6 +376,7 @@ declare module "effect/unstable/ai/Response" {
    *
    * Carries the first reasoning detail chunk when OpenRouter exposes one.
    *
+   * @stability unstable
    * @category models
    * @since 4.0.0
    */
@@ -374,6 +399,7 @@ declare module "effect/unstable/ai/Response" {
    *
    * Carries provider reasoning detail chunks as they arrive from OpenRouter.
    *
+   * @stability unstable
    * @category models
    * @since 4.0.0
    */
@@ -397,6 +423,7 @@ declare module "effect/unstable/ai/Response" {
    * Associates tool calls with provider reasoning details when the model emits
    * reasoning and tool calls together.
    *
+   * @stability unstable
    * @category models
    * @since 4.0.0
    */
@@ -420,6 +447,7 @@ declare module "effect/unstable/ai/Response" {
    * Includes citation text and offsets returned by providers that support URL
    * annotations.
    *
+   * @stability unstable
    * @category models
    * @since 4.0.0
    */
@@ -451,6 +479,7 @@ declare module "effect/unstable/ai/Response" {
    * Exposes provider response details that are not represented by the common
    * Effect AI finish part fields.
    *
+   * @stability unstable
    * @category models
    * @since 4.0.0
    */
@@ -501,14 +530,15 @@ declare module "effect/unstable/ai/Response" {
  * @see {@link make} for constructing the language model service effectfully
  * @see {@link withConfigOverride} for scoping OpenRouter request overrides
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
 export const model = (
   model: string,
   config?: Omit<typeof Config.Service, "model">
-): AiModel.Model<"openai", LanguageModel.LanguageModel, OpenRouterClient> =>
-  AiModel.make("openai", model, layer({ model, config }))
+): AiModel.Model<"openrouter", LanguageModel.LanguageModel, OpenRouterClient> =>
+  AiModel.make("openrouter", model, layer({ model, config }))
 
 /**
  * Creates an OpenRouter `LanguageModel` service from a model identifier and
@@ -535,6 +565,7 @@ export const model = (
  * @see {@link model} for creating a model descriptor for `Effect.provide`
  * @see {@link withConfigOverride} for scoping request defaults around operations
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -613,6 +644,7 @@ export const make = Effect.fnUntraced(function*({ model, config: providerConfig 
  * @see {@link make} for constructing the language model service effectfully
  * @see {@link model} for creating a model descriptor for `Effect.provide`
  *
+ * @stability unstable
  * @category layers
  * @since 4.0.0
  */
@@ -639,6 +671,7 @@ export const layer = (options: {
  *
  * @see {@link Config} for available OpenRouter request configuration fields
  *
+ * @stability unstable
  * @category configuration
  * @since 4.0.0
  */
@@ -747,7 +780,7 @@ const prepareMessages = Effect.fnUntraced(
                       url: part.data instanceof URL
                         ? part.data.toString()
                         : part.data instanceof Uint8Array
-                        ? `data:${mediaType};base64,${Encoding.encodeBase64(part.data)}`
+                        ? `data:${mediaType};base64,${Base64.encode(part.data)}`
                         : part.data
                     },
                     ...(Predicate.isNotNull(partCacheControl) ? { cache_control: partCacheControl } : undefined)
@@ -785,7 +818,7 @@ const prepareMessages = Effect.fnUntraced(
                     type: "input_audio",
                     input_audio: {
                       data: part.data instanceof Uint8Array
-                        ? Encoding.encodeBase64(part.data)
+                        ? Base64.encode(part.data)
                         : getBase64FromDataUrl(part.data),
                       format
                     },
@@ -805,7 +838,7 @@ const prepareMessages = Effect.fnUntraced(
                     file_data: part.data instanceof URL
                       ? part.data.toString()
                       : part.data instanceof Uint8Array
-                      ? `data:${part.mediaType};base64,${Encoding.encodeBase64(part.data)}`
+                      ? `data:${part.mediaType};base64,${Base64.encode(part.data)}`
                       : part.data
                   },
                   ...(Predicate.isNotNull(partCacheControl) ? { cache_control: partCacheControl } : undefined)
@@ -822,14 +855,16 @@ const prepareMessages = Effect.fnUntraced(
         }
 
         case "assistant": {
-          let text = ""
           let reasoning = ""
+          const textParts: Array<Prompt.TextPart> = []
           const toolCalls: Array<typeof Generated.ChatToolCall.Encoded> = []
 
           for (const part of message.content) {
             switch (part.type) {
               case "text": {
-                text += part.text
+                if (part.text.length > 0) {
+                  textParts.push(part)
+                }
                 break
               }
 
@@ -879,9 +914,22 @@ const prepareMessages = Effect.fnUntraced(
             }
           }
 
+          // Tool calls cannot carry cache breakpoints; use the last text part.
+          const messageCacheControl = getCacheControl(message)
+          const content = textParts.map<typeof Generated.ChatContentText.Encoded>((part, i) => {
+            const cache_control = getCacheControl(part) ?? (i === textParts.length - 1 ? messageCacheControl : null)
+            return {
+              type: "text",
+              text: part.text,
+              ...(Predicate.isNotNull(cache_control) ? { cache_control } : undefined)
+            }
+          })
+
           messages.push({
             role: "assistant",
-            content: text,
+            content: content.some((part) => Predicate.isNotNullish(part.cache_control))
+              ? content
+              : content.map((part) => part.text).join(""),
             reasoning: reasoning.length > 0 ? reasoning : null,
             ...(Predicate.isNotNull(reasoningDetails) ? { reasoning_details: reasoningDetails } : undefined),
             ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : undefined)
@@ -891,16 +939,24 @@ const prepareMessages = Effect.fnUntraced(
         }
 
         case "tool": {
-          for (const part of message.content) {
-            // Skip tool approval parts
-            if (part.type === "tool-approval-response") {
-              continue
-            }
+          const results = message.content.filter((part) => part.type === "tool-result")
+          const messageCacheControl = getCacheControl(message)
+
+          for (let i = 0; i < results.length; i++) {
+            const part = results[i]
+            const text = Predicate.isNotUndefined(part.modelOutput)
+              ? Prompt.toolModelOutputToText(part.modelOutput)
+              : typeof part.result === "string"
+              ? part.result
+              : JSON.stringify(part.result)
+            const cache_control = getCacheControl(part) ?? (i === results.length - 1 ? messageCacheControl : null)
 
             messages.push({
               role: "tool",
               tool_call_id: part.id,
-              content: typeof part.result === "string" ? part.result : JSON.stringify(part.result)
+              content: Predicate.isNotNull(cache_control) && typeof text === "string" && text.length > 0
+                ? [{ type: "text", text, cache_control }]
+                : text
             })
           }
 
@@ -916,16 +972,6 @@ const prepareMessages = Effect.fnUntraced(
 // =============================================================================
 // HTTP Details
 // =============================================================================
-
-const buildHttpRequestDetails = (
-  request: HttpClientRequest.HttpClientRequest
-): typeof Response.HttpRequestDetails.Type => ({
-  method: request.method,
-  url: request.url,
-  urlParams: Array.from(request.urlParams),
-  hash: Option.getOrUndefined(request.hash),
-  headers: Redactable.redact(request.headers) as Record<string, string>
-})
 
 const buildHttpResponseDetails = (
   response: HttpClientResponse.HttpClientResponse
@@ -954,8 +1000,7 @@ const makeResponse = Effect.fnUntraced(
       type: "response-metadata",
       id: rawResponse.id,
       modelId: rawResponse.model,
-      timestamp: DateTime.formatIso(DateTime.fromDateUnsafe(createdAt)),
-      request: buildHttpRequestDetails(response.request)
+      timestamp: DateTime.formatIso(DateTime.fromDateUnsafe(createdAt))
     })
 
     const choice = rawResponse.choices[0]
@@ -1206,8 +1251,7 @@ const makeStreamResponse = Effect.fnUntraced(
             type: "response-metadata",
             id: event.id,
             modelId: event.model,
-            timestamp: DateTime.formatIso(timestamp),
-            request: buildHttpRequestDetails(response.request)
+            timestamp: DateTime.formatIso(timestamp)
           })
           responseMetadataEmitted = true
         }
@@ -1646,7 +1690,7 @@ const annotateRequest = (
   request: typeof Generated.ChatRequest.Encoded
 ): void => {
   addGenAIAnnotations(span, {
-    system: "openrouter",
+    provider: { name: "openrouter" },
     operation: { name: "chat" },
     request: {
       model: request.model,
@@ -1769,11 +1813,29 @@ const tryJsonSchema = <S extends Schema.Constraint>(
     catch: (error) => unsupportedSchemaError(error, method)
   })
 
+const toolParametersError = (tool: Tool.Any, error: unknown, method: string): AiError.AiError =>
+  unsupportedSchemaError(
+    `Tool "${tool.name}" parameters: ${error instanceof Error ? error.message : String(error)}. ` +
+      "For a tool without parameters, omit `parameters` or use `Tool.EmptyParams`",
+    method
+  )
+
 const tryToolJsonSchema = <T extends Tool.Any>(tool: T, method: string, transformer: LanguageModel.CodecTransformer) =>
   Effect.try({
     try: () => Tool.getJsonSchema(tool, { transformer }),
-    catch: (error) => unsupportedSchemaError(error, method)
-  })
+    catch: (error) => toolParametersError(tool, error, method)
+  }).pipe(Effect.filterOrFail(
+    // A raw JSON Schema given to a dynamic tool is sent unchanged
+    (jsonSchema) =>
+      jsonSchema.type === "object" || Array.isArray(jsonSchema.anyOf) ||
+      (Tool.isDynamic(tool) && tool.jsonSchema !== undefined),
+    (jsonSchema) =>
+      toolParametersError(
+        tool,
+        `expected a JSON Schema with type "object" or "anyOf", received ${JSON.stringify(jsonSchema)}`,
+        method
+      )
+  ))
 
 const getResponseFormat = Effect.fnUntraced(function*({ config, options, transformer }: {
   readonly config: typeof Config.Service
@@ -1788,7 +1850,7 @@ const getResponseFormat = Effect.fnUntraced(function*({ config, options, transfo
       json_schema: {
         name: options.responseFormat.objectName,
         schema: jsonSchema,
-        strict: config.strictJsonSchema ?? null,
+        strict: config.strictJsonSchema ?? (transformer === toCodecOpenAI ? true : null),
         ...(Predicate.isNotUndefined(description) ? { description } : undefined)
       }
     }

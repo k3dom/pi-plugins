@@ -8,7 +8,7 @@ import {
   strictEqual,
   throws
 } from "@effect/vitest/utils"
-import { BigDecimal, Equal, Option } from "effect"
+import { BigDecimal, Equal, Hash, Option } from "effect"
 import * as fc from "fast-check"
 
 const $ = BigDecimal.fromStringUnsafe
@@ -28,9 +28,16 @@ const assertDivide = (x: string, y: string, z: string) => {
 describe("BigDecimal", () => {
   it("make", () => {
     strictEqual(BigDecimal.make(1n, Number.MAX_SAFE_INTEGER).scale, Number.MAX_SAFE_INTEGER)
-    for (const scale of [0.5, NaN, Infinity, Number.MAX_VALUE]) {
+    strictEqual(BigDecimal.make(1n, Number.MIN_SAFE_INTEGER).scale, Number.MIN_SAFE_INTEGER)
+    for (const scale of [0.5, NaN, Infinity, -Infinity, Number.MAX_VALUE, Number.MIN_SAFE_INTEGER - 1]) {
       throws(() => BigDecimal.make(1n, scale), new RangeError(`Scale must be a safe integer, got ${scale}`))
     }
+  })
+
+  it("makeNormalizedUnsafe validates the value and scale", () => {
+    throws(() => BigDecimal.makeNormalizedUnsafe(120n, 0), new RangeError("Value must be normalized"))
+    throws(() => BigDecimal.makeNormalizedUnsafe(-120n, 0), new RangeError("Value must be normalized"))
+    throws(() => BigDecimal.makeNormalizedUnsafe(1n, 0.5), new RangeError("Scale must be a safe integer, got 0.5"))
   })
 
   it("isBigDecimal", () => {
@@ -209,11 +216,20 @@ describe("BigDecimal", () => {
     strictEqual(BigDecimal.Order(below, above), -1)
     strictEqual(BigDecimal.Order(above, below), 1)
     assertFalse(BigDecimal.Equivalence(below, above))
+
+    const power = 10n ** 102n
+    for (const sign of [-1n, 1n]) {
+      const exact = BigDecimal.make(sign, -1)
+      const next = BigDecimal.make(sign * (power + 1n), 101)
+      strictEqual(BigDecimal.Order(exact, next), sign === 1n ? -1 : 1)
+      strictEqual(BigDecimal.Order(next, exact), sign === 1n ? 1 : -1)
+      assertFalse(BigDecimal.Equivalence(exact, next))
+    }
   })
 
   it("Order and Equivalence agree with exact bounded scale alignment", () => {
     const values = [-12345n, -100n, -1n, 0n, 1n, 100n, 12345n]
-    const scales = [-8, -1, 0, 1, 8]
+    const scales = [-102, -101, -100, -8, -1, 0, 1, 8, 100, 101, 102]
     const decimals = values.flatMap((value) => scales.map((scale) => BigDecimal.make(value, scale)))
 
     for (const self of decimals) {
@@ -322,6 +338,35 @@ describe("BigDecimal", () => {
     deepStrictEqual(BigDecimal.normalize($("12300000")), BigDecimal.makeNormalizedUnsafe(123n, -5))
   })
 
+  it("normalize caches results without changing the original value or scale", () => {
+    for (
+      const [value, scale, expectedValue, expectedScale] of [
+        [0n, Number.MAX_SAFE_INTEGER, 0n, 0],
+        [0n, Number.MIN_SAFE_INTEGER, 0n, 0],
+        [123n, 2, 123n, 2],
+        [-123000n, 2, -123n, -1],
+        [10n ** 4097n, 4097, 1n, 0],
+        [100n, Number.MIN_SAFE_INTEGER + 2, 1n, Number.MIN_SAFE_INTEGER]
+      ] as const
+    ) {
+      const decimal = BigDecimal.make(value, scale)
+      const normalized = BigDecimal.normalize(decimal)
+      strictEqual(normalized.value, expectedValue)
+      strictEqual(normalized.scale, expectedScale)
+      strictEqual(BigDecimal.normalize(decimal), normalized)
+      strictEqual(BigDecimal.normalize(normalized), normalized)
+      strictEqual(decimal.value, value)
+      strictEqual(decimal.scale, scale)
+    }
+  })
+
+  it("normalize rejects an unsafe resulting scale", () => {
+    const decimal = BigDecimal.make(10n, Number.MIN_SAFE_INTEGER)
+    const error = new RangeError(`Scale must be a safe integer, got ${Number.MIN_SAFE_INTEGER - 1}`)
+    throws(() => BigDecimal.normalize(decimal), error)
+    throws(() => BigDecimal.normalize(decimal), error)
+  })
+
   it("fromString", () => {
     assertSomeBigDecimal(BigDecimal.fromString("2"), BigDecimal.make(2n, 0))
     assertSomeBigDecimal(BigDecimal.fromString("-2"), BigDecimal.make(-2n, 0))
@@ -346,9 +391,55 @@ describe("BigDecimal", () => {
     assertSomeBigDecimal(BigDecimal.fromString("0.00002e-5"), BigDecimal.make(2n, 10))
     assertNone(BigDecimal.fromString("0.0000e2e1"))
     assertNone(BigDecimal.fromString("0.1.2"))
+    assertNone(BigDecimal.fromString(".-1"))
+    assertNone(BigDecimal.fromString(".+1"))
+  })
+
+  it("fromString rejects scales beyond 10_000", () => {
+    assertSomeBigDecimal(BigDecimal.fromString("1e10000"), BigDecimal.make(1n, -10_000))
+    assertSomeBigDecimal(BigDecimal.fromString("1e-10000"), BigDecimal.make(1n, 10_000))
+    assertNone(BigDecimal.fromString("1e10001"))
+    assertNone(BigDecimal.fromString("1e-10001"))
+    assertNone(BigDecimal.fromString("0.1e-10000"))
+    assertNone(BigDecimal.fromString(`1.${"0".repeat(10_001)}`))
+    assertNone(BigDecimal.fromString("10e10000"))
+    assertNone(BigDecimal.fromString("1e300000000"))
+  })
+
+  it("arithmetic rejects scale alignment beyond 20_000", () => {
+    const throwsRangeError = (thunk: () => unknown) =>
+      throws(thunk, (e) => {
+        assertTrue(e instanceof RangeError)
+      })
+    const large = BigDecimal.make(1n, -20_001)
+    const small = BigDecimal.make(1n, 20_001)
+
+    throwsRangeError(() => BigDecimal.sum(large, $("1")))
+    throwsRangeError(() => BigDecimal.subtract($("1"), large))
+    throwsRangeError(() => BigDecimal.remainder(large, $("1")))
+    throwsRangeError(() => BigDecimal.scale(large, 0))
+    throwsRangeError(() => BigDecimal.truncate(small))
+    throwsRangeError(() => BigDecimal.round(small))
+
+    assertEquals(
+      BigDecimal.sum($("1e10000"), $("1e-10000")),
+      $(`1${"0".repeat(10_000)}.${"0".repeat(9_999)}1`)
+    )
+    assertEquals(BigDecimal.truncate(BigDecimal.make(1n, 20_000)), $("0"))
+
+    // no alignment needed
+    const huge = BigDecimal.make(1n, -300_000_000)
+    assertEquals(BigDecimal.sum(huge, $("0")), huge)
+    assertEquals(BigDecimal.scale(huge, huge.scale), huge)
+    assertEquals(BigDecimal.truncate(huge), huge)
+    assertEquals(BigDecimal.floor(huge), huge)
+    assertEquals(BigDecimal.ceil(huge), huge)
+    assertEquals(BigDecimal.round(huge), huge)
+    assertEquals(BigDecimal.round($("1e10000"), { mode: "half-even" }), $("1e10000"))
   })
 
   it("format", () => {
+    strictEqual(BigDecimal.format($("0")), "0")
     strictEqual(BigDecimal.format($("2")), "2")
     strictEqual(BigDecimal.format($("-2")), "-2")
     strictEqual(BigDecimal.format($("0.123")), "0.123")
@@ -364,6 +455,20 @@ describe("BigDecimal", () => {
     strictEqual(BigDecimal.format(BigDecimal.make(12345n, -25)), "1.2345e+29")
     strictEqual(BigDecimal.format(BigDecimal.make(12345n, 25)), "1.2345e-21")
     strictEqual(BigDecimal.format(BigDecimal.make(-12345n, 20)), "-1.2345e-16")
+  })
+
+  it("format preserves the boundary between plain and scientific notation", () => {
+    strictEqual(BigDecimal.format(BigDecimal.make(1n, 15)), "0.000000000000001")
+    strictEqual(BigDecimal.format(BigDecimal.make(-1n, 16)), "-1e-16")
+    strictEqual(BigDecimal.format(BigDecimal.make(-1n, -15)), "-1000000000000000")
+    strictEqual(BigDecimal.format(BigDecimal.make(1n, -16)), "1e+16")
+  })
+
+  it("toExponential", () => {
+    strictEqual(BigDecimal.toExponential(BigDecimal.make(0n, 42)), "0e+0")
+    strictEqual(BigDecimal.toExponential($("-1")), "-1e+0")
+    strictEqual(BigDecimal.toExponential($("123.4500")), "1.2345e+2")
+    strictEqual(BigDecimal.toExponential($("-0.0012345")), "-1.2345e-3")
   })
 
   it("toJSON()", () => {
@@ -384,6 +489,25 @@ describe("BigDecimal", () => {
 
   it("Equal.symbol", () => {
     assertTrue(Equal.equals($("2"), $("2")))
+    assertTrue(Equal.equals($("2"), $("2.00")))
+    assertFalse(Equal.equals($("2"), $("2.01")))
+    assertFalse(Equal.equals($("2"), 2))
+  })
+
+  it("Hash.symbol preserves hashes across equivalent representations", () => {
+    for (
+      const [value, scale, normalizedValue, normalizedScale] of [
+        [0n, 42, 0n, 0],
+        [12345n, 0, 12345n, 0],
+        [12345000n, 7, 12345n, 4],
+        [-12345000n, 7, -12345n, 4]
+      ] as const
+    ) {
+      const decimal = BigDecimal.make(value, scale)
+      const normalized = BigDecimal.make(normalizedValue, normalizedScale)
+      strictEqual(Hash.hash(decimal), Hash.combine(Hash.hash(normalizedValue), Hash.number(normalizedScale)))
+      strictEqual(Hash.hash(decimal), Hash.hash(normalized))
+    }
   })
 
   it("pipe()", () => {

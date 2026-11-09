@@ -1,10 +1,31 @@
-import type * as Cause from "../../Cause.ts"
+import * as Cause from "../../Cause.ts"
 import * as Effect from "../../Effect.ts"
 import * as Option from "../../Option.ts"
+import * as Result from "../../Result.ts"
+import * as InternalArray from "../array.ts"
 import { done } from "../core.ts"
 
 /** @internal */
 export type ShrinkPull<A> = Effect.Effect<A, Cause.Done>
+
+/**
+ * Builds a cause handler that recovers typed failures, or propagates only
+ * defects and interruptions, preserving their original annotations.
+ *
+ * @internal
+ */
+export const onTypedFailure = <E, A, E2, R>(
+  f: (error: E) => Effect.Effect<A, E2, R>
+) =>
+(cause: Cause.Cause<E>): Effect.Effect<A, E2, R> => {
+  if (!cause.reasons.every(Cause.isFailReason)) {
+    return Effect.failCause(Cause.fromReasons<never>(cause.reasons.filter(
+      (reason): reason is Cause.Die | Cause.Interrupt => reason._tag !== "Fail"
+    )))
+  }
+  const error = Cause.findError(cause)
+  return Result.isFailure(error) ? Effect.failCause(error.failure) : f(error.success)
+}
 
 /** @internal */
 export interface Sample<out A> {
@@ -128,10 +149,13 @@ export function concatPulls<A>(pulls: ReadonlyArray<ShrinkPull<A>>): ShrinkPull<
     Effect.suspend(() =>
       index >= pulls.length
         ? done()
-        : Effect.catch(pulls[index], () => {
-          index++
-          return loop()
-        })
+        : Effect.catchCause(
+          pulls[index],
+          onTypedFailure(() => {
+            index++
+            return loop()
+          })
+        )
     )
   return loop()
 }
@@ -143,10 +167,70 @@ export const makeSample = <A>(value: A, shrinks?: ShrinkPull<Attempt<A>>): Sampl
   shrinks
 })
 
-function replaceAt<A>(values: ReadonlyArray<A>, index: number, value: A): Array<A> {
-  const out = values.slice()
-  out[index] = value
-  return out
+/** @internal */
+export function makeSampleWithLazyShrinks<A>(
+  value: A,
+  makeShrinks: () => ShrinkPull<Attempt<A>> | undefined
+): Sample<A> {
+  let shrinks: ShrinkPull<Attempt<A>> | undefined
+  return makeSample(
+    value,
+    Effect.suspend(() => {
+      shrinks ??= makeShrinks() ?? done()
+      return shrinks
+    })
+  )
+}
+
+/** @internal */
+export interface Retained<out A> {
+  readonly _tag: "Retained"
+  readonly value: A
+  readonly shrinks: (() => ShrinkPull<Retained<A> | Discarded>) | undefined
+}
+
+// Collection candidates share their children. Give each candidate its own cursor
+// over a lazy child history so exploring one branch cannot exhaust another.
+/** @internal */
+export function retain<A>(sample: Sample<A>): Retained<A> {
+  const source = sample.shrinks
+  if (source === undefined) return { _tag: "Retained", value: sample.value, shrinks: undefined }
+  let history: Array<Retained<A> | Discarded> | undefined
+  let ended = false
+  return {
+    _tag: "Retained",
+    value: sample.value,
+    shrinks: () => {
+      let index = 0
+      return Effect.suspend(() => {
+        if (history !== undefined && index < history.length) return Effect.succeed(history[index++])
+        if (ended) return done()
+        return Effect.matchCauseEffect(source, {
+          onFailure: onTypedFailure(() => {
+            ended = true
+            return done()
+          }),
+          onSuccess: (attempt) => {
+            const item = attempt._tag === "Discarded" ? attempt : retain(attempt)
+            history ??= []
+            history.push(item)
+            index++
+            return Effect.succeed(item)
+          }
+        })
+      })
+    }
+  }
+}
+
+/** @internal */
+export function fromRetained<A>(self: Retained<A>): Sample<A> {
+  return makeSample(
+    self.value,
+    self.shrinks === undefined
+      ? undefined
+      : Effect.map(self.shrinks(), (attempt) => attempt._tag === "Discarded" ? attempt : fromRetained(attempt))
+  )
 }
 
 /** @internal */
@@ -169,20 +253,17 @@ export function sampleFromValidatedShrink<A>(
   shrink: (value: A) => ReadonlyArray<A>,
   validate: (value: A) => Computation<Option.Option<A>>
 ): Sample<A> {
-  let candidates: ShrinkPull<A> | undefined
-  return makeSample(
+  return makeSampleWithLazyShrinks(
     value,
-    Effect.suspend(() => {
-      candidates ??= pullFromArray(shrink(value))
-      return Effect.flatMapEager(
-        candidates,
+    () =>
+      Effect.flatMapEager(
+        pullFromArray(shrink(value)),
         (candidate) =>
           Effect.mapEager(toEffect(validate(candidate)), (validated) =>
             Option.isSome(validated)
               ? sampleFromValidatedShrink(validated.value, shrink, validate)
               : discarded)
       )
-    })
   )
 }
 
@@ -199,20 +280,26 @@ export function mapSample<A, B>(self: Sample<A>, f: (value: A) => B): Sample<B> 
 /** @internal */
 export function productSample<A>(
   children: ReadonlyArray<Sample<any>>,
-  make: (children: ReadonlyArray<Sample<any>>) => A,
-  rebuild: (children: ReadonlyArray<Sample<any>>) => Sample<A> = (children) => productSample(children, make)
+  make: (children: ReadonlyArray<{ readonly value: any }>) => A
 ): Sample<A> {
-  const pulls: Array<ShrinkPull<Attempt<A>>> = []
-  for (let index = 0; index < children.length; index++) {
-    const shrinks = children[index].shrinks
-    if (shrinks !== undefined) {
-      pulls.push(Effect.map(
-        shrinks,
-        (attempt) => mapAttempt(attempt, (sample) => rebuild(replaceAt(children, index, sample)))
-      ))
+  const value = make(children)
+  if (!children.some((child) => child.shrinks !== undefined)) return makeSample(value)
+  const rebuild = (children: ReadonlyArray<Retained<any>>, start = 0): Sample<A> => {
+    const pulls: Array<ShrinkPull<Attempt<A>>> = []
+    // Preserve field order explicitly instead of relying on exhausted sibling cursors.
+    for (let index = start; index < children.length; index++) {
+      const shrinks = children[index].shrinks
+      if (shrinks !== undefined) {
+        pulls.push(Effect.map(
+          shrinks(),
+          (attempt) =>
+            attempt._tag === "Discarded" ? attempt : rebuild(InternalArray.replaceAt(children, index, attempt), index)
+        ))
+      }
     }
+    return makeSample(make(children), pulls.length === 0 ? undefined : concatPulls(pulls))
   }
-  return makeSample(make(children), pulls.length === 0 ? undefined : concatPulls(pulls))
+  return makeSampleWithLazyShrinks(value, () => rebuild(children.map(retain)).shrinks)
 }
 
 function filterMapPull<A, B>(
@@ -224,11 +311,11 @@ function filterMapPull<A, B>(
     Effect.suspend(() => {
       const current = stack[stack.length - 1]
       if (current === undefined) return done()
-      return Effect.matchEffect(current, {
-        onFailure: () => {
+      return Effect.matchCauseEffect(current, {
+        onFailure: onTypedFailure(() => {
           stack.pop()
           return loop()
-        },
+        }),
         onSuccess: (attempt) => {
           if (attempt._tag === "Discarded") return Effect.succeed<Attempt<B>>(attempt)
           const sample = attempt
@@ -254,11 +341,11 @@ function filterPull<A>(source: ShrinkPull<Attempt<A>>, predicate: (value: A) => 
     Effect.suspend(() => {
       const current = stack[stack.length - 1]
       if (current === undefined) return done()
-      return Effect.matchEffect(current, {
-        onFailure: () => {
+      return Effect.matchCauseEffect(current, {
+        onFailure: onTypedFailure(() => {
           stack.pop()
           return loop()
-        },
+        }),
         onSuccess: (attempt) => {
           if (attempt._tag === "Discarded") return Effect.succeed<Attempt<A>>(attempt)
           const sample = attempt

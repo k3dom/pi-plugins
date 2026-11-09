@@ -7,15 +7,19 @@
  * remaining entries when the cache is closed. Lookups for the same missing key
  * share one in-progress effect, and entries can expire, be refreshed, be
  * invalidated, or be evicted by capacity limits.
+ * Expiry cleanup is lazy: an expired entry is removed on access to that key or
+ * a `keys`/`values`/`entries` scan, not by a background timer.
  *
+ * @stability stable
  * @since 4.0.0
  */
 import * as Arr from "./Array.ts"
+import * as Cause from "./Cause.ts"
 import * as Context from "./Context.ts"
 import * as Deferred from "./Deferred.ts"
 import * as Duration from "./Duration.ts"
 import type * as Effect from "./Effect.ts"
-import type * as Exit from "./Exit.ts"
+import * as Exit from "./Exit.ts"
 import * as Fiber from "./Fiber.ts"
 import { dual, identity } from "./Function.ts"
 import * as core from "./internal/core.ts"
@@ -36,18 +40,20 @@ const TypeId = "~effect/ScopedCache"
  * **When to use**
  *
  * Use to cache values that acquire scoped resources and must release those
- * resources when entries expire, are evicted, or are invalidated.
+ * resources when entries are removed or the owning scope closes.
  *
  * **Details**
  *
  * Concurrent requests for the same key share the same in-flight lookup.
  * Entries can expire based on the lookup exit, are evicted when capacity is
- * exceeded, and release their entry scopes when invalidated, evicted, expired,
- * or when the cache's owning scope closes.
+ * exceeded, and release their entry scopes when invalidated, evicted, or when
+ * the cache's owning scope closes. Expired entries are cleaned up lazily on
+ * access to that key or a `keys`/`values`/`entries` scan, never in the background.
  *
  * @see {@link make} for creating a scoped cache with a fixed time-to-live
  * @see {@link makeWith} for creating a scoped cache with dynamic time-to-live
  *
+ * @stability stable
  * @category models
  * @since 2.0.0
  */
@@ -72,6 +78,7 @@ export interface ScopedCache<in out Key, in out A, in out E = never, out R = nev
  * `Closed` means the owning scope has closed and the cache can no longer
  * perform lookup operations.
  *
+ * @stability stable
  * @category models
  * @since 4.0.0
  */
@@ -98,6 +105,7 @@ export type State<K, A, E> = {
  *
  * @see {@link State} for the open/closed cache state that stores entries by key
  *
+ * @stability stable
  * @category models
  * @since 4.0.0
  */
@@ -105,6 +113,8 @@ export interface Entry<A, E> {
   expiresAt: number | undefined
   readonly deferred: Deferred.Deferred<A, E>
   readonly scope: Scope.Closeable
+  awaiters: number
+  fiber?: Fiber.Fiber<A, E>
 }
 
 /**
@@ -119,13 +129,15 @@ export interface Entry<A, E> {
  * **Details**
  *
  * The cache must be constructed in a `Scope`. Each lookup runs in its own entry
- * scope, and that scope is closed when the entry expires, is invalidated, is
- * evicted by capacity, or when the cache's owning scope closes.
+ * scope, and that scope is closed when the entry is invalidated, is evicted by
+ * capacity, or when the cache's owning scope closes. Expired entries are cleaned
+ * up on access to that key or a `keys`/`values`/`entries` scan, not in the background.
  * `requireServicesAt` controls whether lookup services are captured at
  * construction time or required when lookup operations run.
  *
  * @see {@link make} for creating a scoped cache with one fixed time-to-live
  *
+ * @stability stable
  * @category constructors
  * @since 2.0.0
  */
@@ -183,11 +195,13 @@ export const makeWith = <
  *
  * This is the constant-TTL variant of `makeWith`: values are acquired by the
  * lookup effect in per-entry scopes, capacity can evict older entries, and
- * entry scopes are closed when entries expire, are invalidated, are evicted, or
- * when the cache's owning scope closes.
+ * entry scopes are closed when entries are invalidated, are evicted, or when
+ * the cache's owning scope closes. Expiry cleanup is lazy: expired entries close
+ * on access to that key or a `keys`/`values`/`entries` scan, not in the background.
  *
  * @see {@link makeWith} for computing time-to-live from each lookup result and key
  *
+ * @stability stable
  * @category constructors
  * @since 2.0.0
  */
@@ -248,6 +262,7 @@ const defaultTimeToLive = <A, E>(_: Exit.Exit<A, E>, _key: unknown): Duration.Du
  * @see {@link getSuccess} for inspecting an already-completed successful entry
  * @see {@link refresh} for forcing a new lookup
  *
+ * @stability stable
  * @category combinators
  * @since 4.0.0
  */
@@ -268,31 +283,75 @@ export const get: {
           // Move the entry to the end of the map to keep it fresh
           MutableHashMap.remove(state.map, key)
           MutableHashMap.set(state.map, key, oentry.value)
-          return restore(Deferred.await(oentry.value.deferred))
+          return awaitEntry(self, key, oentry.value, restore)
         }
         const scope = Scope.makeUnsafe()
         const deferred = Deferred.makeUnsafe<A, E>()
         const entry: Entry<A, E> = {
           expiresAt: undefined,
           deferred,
-          scope
+          scope,
+          awaiters: 0
         }
         MutableHashMap.set(state.map, key, entry)
         return checkCapacity(fiber, state.map, self.capacity).pipe(
-          Option.isSome(oentry) ? effect.flatMap(() => Scope.close(oentry.value.scope, effect.exitVoid)) : identity,
-          effect.flatMap(() => Scope.provide(restore(self.lookup(key)), scope)),
-          effect.onExit((exit) => {
-            Deferred.doneUnsafe(deferred, exit)
-            const ttl = self.timeToLive(exit, key)
-            if (Duration.isFinite(ttl)) {
-              entry.expiresAt = fiber.getRef(effect.ClockRef).currentTimeMillisUnsafe() + Duration.toMillis(ttl)
-            }
-            return effect.void
+          Option.isSome(oentry) ? effect.flatMap(() => closeEvicted(oentry.value)) : identity,
+          effect.flatMap(() => {
+            entry.fiber = effect.forkUnsafe(
+              fiber,
+              effect.onExit(effect.suspend(() => Scope.provide(self.lookup(key), scope)), (exit) => {
+                if (effect.exitHasInterrupts(exit)) {
+                  removeEntry(self, key, entry)
+                  Deferred.doneUnsafe(deferred, exit)
+                  return Scope.close(scope, exit)
+                }
+                try {
+                  const ttl = self.timeToLive(exit, key)
+                  if (Duration.isFinite(ttl)) {
+                    entry.expiresAt = fiber.getRef(effect.ClockRef).currentTimeMillisUnsafe() + Duration.toMillis(ttl)
+                  }
+                } finally {
+                  Deferred.doneUnsafe(deferred, exit)
+                }
+                return effect.void
+              }),
+              true,
+              true
+            )
+            return awaitEntry(self, key, entry, restore)
           })
         )
       })
     )
 )
+
+const awaitEntry = <Key, A, E, R>(
+  self: ScopedCache<Key, A, E, R>,
+  key: Key,
+  entry: Entry<A, E>,
+  restore: <X, Y, Z>(effect: Effect.Effect<X, Y, Z>) => Effect.Effect<X, Y, Z>
+): Effect.Effect<A, E> => {
+  if (Deferred.isDoneUnsafe(entry.deferred)) return restore(Deferred.await(entry.deferred))
+  entry.awaiters++
+  // Install cleanup before restore so a pending interrupt cannot skip the decrement.
+  return effect.onExit(restore(Deferred.await(entry.deferred)), () => {
+    entry.awaiters--
+    const fiber = entry.fiber
+    if (entry.awaiters > 0 || fiber === undefined || Deferred.isDoneUnsafe(entry.deferred)) return effect.void
+    // Detach before interruption so callers arriving during finalization start fresh.
+    removeEntry(self, key, entry)
+    return effect.flatMap(effect.fiberInterrupt(fiber), () => {
+      const exit = fiber.pollUnsafe()!
+      return Exit.isFailure(exit) && Cause.hasDies(exit.cause) ? effect.failCause(exit.cause) : effect.void
+    })
+  })
+}
+
+const removeEntry = <Key, A, E, R>(self: ScopedCache<Key, A, E, R>, key: Key, entry: Entry<A, E>): void => {
+  if (self.state._tag !== "Open") return
+  const current = MutableHashMap.get(self.state.map, key)
+  if (Option.isSome(current) && current.value === entry) MutableHashMap.remove(self.state.map, key)
+}
 
 const hasExpired = <A, E>(entry: Entry<A, E>, fiber: Fiber.Fiber<unknown, unknown>): boolean => {
   if (entry.expiresAt === undefined) {
@@ -300,6 +359,13 @@ const hasExpired = <A, E>(entry: Entry<A, E>, fiber: Fiber.Fiber<unknown, unknow
   }
   return fiber.getRef(effect.ClockRef).currentTimeMillisUnsafe() >= entry.expiresAt
 }
+
+// Expiry and capacity eviction report cleanup failures without failing unrelated readers.
+const closeEvicted = <A, E>(entry: Entry<A, E>): Effect.Effect<void> =>
+  effect.ignoreCause(Scope.close(entry.scope, effect.exitVoid), {
+    log: "Unhandled",
+    message: "Unhandled error in ScopedCache finalizer"
+  })
 
 const checkCapacity = <K, A, E>(
   parent: Fiber.Fiber<unknown, unknown>,
@@ -313,7 +379,7 @@ const checkCapacity = <K, A, E>(
   const fibers = Arr.empty<Fiber.Fiber<unknown, unknown>>()
   for (const [key, entry] of map) {
     MutableHashMap.remove(map, key)
-    fibers.push(effect.forkUnsafe(parent as any, Scope.close(entry.scope, effect.exitVoid), true))
+    fibers.push(effect.forkUnsafe(parent as any, closeEvicted(entry), true))
     diff--
     if (diff === 0) break
   }
@@ -337,6 +403,7 @@ const checkCapacity = <K, A, E>(
  * @see {@link get} for running the lookup on missing or expired keys
  * @see {@link getSuccess} for inspecting only already-completed successful entries
  *
+ * @stability stable
  * @category combinators
  * @since 4.0.0
  */
@@ -350,7 +417,7 @@ export const getOption: {
       core.withFiber((fiber) =>
         effect.flatMap(
           getImpl(self, key, fiber),
-          (entry) => entry ? effect.asSome(restore(Deferred.await(entry.deferred))) : effect.succeedNone
+          (entry) => entry ? effect.asSome(awaitEntry(self, key, entry, restore)) : effect.succeedNone
         )
       )
     )
@@ -372,7 +439,7 @@ const getImpl = <Key, A, E, R>(
   } else if (hasExpired(oentry.value, fiber)) {
     MutableHashMap.remove(state.map, key)
     return effect.as(
-      Scope.close(oentry.value.scope, effect.exitVoid),
+      closeEvicted(oentry.value),
       undefined
     )
   } else if (isRead) {
@@ -399,6 +466,7 @@ const getImpl = <Key, A, E, R>(
  * @see {@link get} for awaiting or starting the lookup effect
  * @see {@link getOption} for awaiting an already-cached entry without starting a lookup
  *
+ * @stability stable
  * @category combinators
  * @since 4.0.0
  */
@@ -441,6 +509,7 @@ export const getSuccess: {
  * @see {@link get} for reading or computing a cached value
  * @see {@link refresh} for replacing an entry by running the lookup function
  *
+ * @stability stable
  * @category combinators
  * @since 4.0.0
  */
@@ -464,6 +533,7 @@ export const set: {
         MutableHashMap.set(state.map, key, {
           scope: Scope.makeUnsafe(),
           deferred,
+          awaiters: 0,
           expiresAt: Duration.isFinite(ttl)
             ? fiber.getRef(effect.ClockRef).currentTimeMillisUnsafe() + Duration.toMillis(ttl)
             : undefined
@@ -493,6 +563,7 @@ export const set: {
  * @see {@link getOption} for reading an existing cached entry
  * @see {@link get} for running the lookup on missing or expired keys
  *
+ * @stability stable
  * @category combinators
  * @since 4.0.0
  */
@@ -527,6 +598,7 @@ export const has: {
  * @see {@link invalidateWhen} for invalidating only when a cached value matches a predicate
  * @see {@link invalidateAll} for removing every cached entry
  *
+ * @stability stable
  * @category combinators
  * @since 4.0.0
  */
@@ -568,6 +640,7 @@ export const invalidate: {
  *
  * @see {@link invalidate} for unconditional removal by key
  *
+ * @stability stable
  * @category combinators
  * @since 4.0.0
  */
@@ -583,7 +656,7 @@ export const invalidateWhen: {
           if (entry === undefined) {
             return effect.succeed(false)
           }
-          return restore(Deferred.await(entry.deferred)).pipe(
+          return awaitEntry(self, key, entry, restore).pipe(
             effect.flatMap((value) => {
               if (self.state._tag === "Closed") {
                 return effect.succeed(false)
@@ -620,6 +693,7 @@ export const invalidateWhen: {
  * @see {@link get} for reusing an unexpired entry before running the lookup
  * @see {@link invalidate} for removing an entry without recomputing it
  *
+ * @stability stable
  * @category combinators
  * @since 4.0.0
  */
@@ -631,39 +705,35 @@ export const refresh: {
   <Key, A, E, R>(self: ScopedCache<Key, A, E, R>, key: Key): Effect.Effect<A, E, R> =>
     effect.uninterruptibleMask(effect.fnUntraced(function*(restore) {
       if (self.state._tag === "Closed") return yield* effect.interrupt
+      if (!MutableHashMap.has(self.state.map, key)) return yield* restore(get(self, key))
       const fiber = Fiber.getCurrent()!
       const scope = Scope.makeUnsafe()
       const deferred = Deferred.makeUnsafe<A, E>()
-      const entry: Entry<A, E> = {
-        scope,
-        expiresAt: undefined,
-        deferred
-      }
-      const newEntry = !MutableHashMap.has(self.state.map, key)
-      if (newEntry) {
-        MutableHashMap.set(self.state.map, key, entry)
-        yield* checkCapacity(fiber, self.state.map, self.capacity)
-      }
       const exit = yield* effect.exit(effect.suspend(() => restore(Scope.provide(self.lookup(key), scope))))
       Deferred.doneUnsafe(deferred, exit)
+      if (effect.exitHasInterrupts(exit)) {
+        yield* Scope.close(scope, exit)
+        return yield* exit
+      }
       // @ts-ignore async gap
       if (self.state._tag === "Closed") {
-        if (!newEntry) {
-          yield* Scope.close(scope, effect.exitVoid)
-        }
+        yield* Scope.close(scope, effect.exitVoid)
         return yield* effect.interrupt
       }
       const ttl = self.timeToLive(exit, key)
-      entry.expiresAt = Duration.isFinite(ttl)
-        ? fiber.getRef(effect.ClockRef).currentTimeMillisUnsafe() + Duration.toMillis(ttl)
-        : undefined
-      if (!newEntry) {
-        const oentry = MutableHashMap.get(self.state.map, key)
-        MutableHashMap.set(self.state.map, key, entry)
-        yield* checkCapacity(fiber, self.state.map, self.capacity)
-        if (Option.isSome(oentry)) {
-          yield* Scope.close(oentry.value.scope, effect.exitVoid)
-        }
+      const entry: Entry<A, E> = {
+        scope,
+        deferred,
+        awaiters: 0,
+        expiresAt: Duration.isFinite(ttl)
+          ? fiber.getRef(effect.ClockRef).currentTimeMillisUnsafe() + Duration.toMillis(ttl)
+          : undefined
+      }
+      const oentry = MutableHashMap.get(self.state.map, key)
+      MutableHashMap.set(self.state.map, key, entry)
+      yield* checkCapacity(fiber, self.state.map, self.capacity)
+      if (Option.isSome(oentry)) {
+        yield* Scope.close(oentry.value.scope, effect.exitVoid)
       }
       return yield* exit
     }))
@@ -682,6 +752,7 @@ export const refresh: {
  *
  * @see {@link invalidate} for removing one cached entry
  *
+ * @stability stable
  * @category combinators
  * @since 4.0.0
  */
@@ -700,11 +771,11 @@ const invalidateAllImpl = <Key, A, E>(
   // Detach the batch before finalizers can reenter the cache.
   const entries = Array.from(MutableHashMap.values(map))
   MutableHashMap.clear(map)
-  const fibers = Arr.empty<Fiber.Fiber<unknown, unknown>>()
+  const fibers = Arr.empty<Fiber.Fiber<void>>()
   for (const entry of entries) {
     fibers.push(effect.forkUnsafe(parent as any, Scope.close(entry.scope, effect.exitVoid), true, true))
   }
-  return effect.fiberAwaitAll(fibers)
+  return effect.flatMap(effect.fiberAwaitAll(fibers), Exit.asVoidAll)
 }
 
 /**
@@ -720,6 +791,7 @@ const invalidateAllImpl = <Key, A, E>(
  * The size reflects the current number of entries stored, not the number
  * of valid entries.
  *
+ * @stability stable
  * @category combinators
  * @since 4.0.0
  */
@@ -740,6 +812,7 @@ export const size = <Key, A, E, R>(self: ScopedCache<Key, A, E, R>): Effect.Effe
  * @see {@link entries} for retrieving successful cached key-value pairs
  * @see {@link values} for retrieving only successfully cached values
  *
+ * @stability stable
  * @category combinators
  * @since 4.0.0
  */
@@ -755,7 +828,7 @@ export const keys = <Key, A, E, R>(self: ScopedCache<Key, A, E, R>): Effect.Effe
         keys.push(key)
       } else {
         MutableHashMap.remove(state.map, key)
-        fibers.push(effect.forkUnsafe(fiber, Scope.close(entry.scope, effect.exitVoid), true, true))
+        fibers.push(effect.forkUnsafe(fiber, closeEvicted(entry), true, true))
       }
     }
     return fibers.length === 0 ? effect.succeed(keys) : effect.as(effect.fiberAwaitAll(fibers), keys)
@@ -777,6 +850,7 @@ export const keys = <Key, A, E, R>(self: ScopedCache<Key, A, E, R>): Effect.Effe
  * @see {@link entries} for retrieving successful cached key-value pairs
  * @see {@link keys} for retrieving only cached keys
  *
+ * @stability stable
  * @category combinators
  * @since 4.0.0
  */
@@ -800,6 +874,7 @@ export const values = <Key, A, E, R>(self: ScopedCache<Key, A, E, R>): Effect.Ef
  * @see {@link keys} for retrieving only cached keys
  * @see {@link values} for retrieving only cached values
  *
+ * @stability stable
  * @category combinators
  * @since 4.0.0
  */
@@ -818,7 +893,7 @@ export const entries = <Key, A, E, R>(self: ScopedCache<Key, A, E, R>): Effect.E
         }
       } else {
         MutableHashMap.remove(state.map, key)
-        fibers.push(effect.forkUnsafe(fiber, Scope.close(entry.scope, effect.exitVoid), true, true))
+        fibers.push(effect.forkUnsafe(fiber, closeEvicted(entry), true, true))
       }
     }
     return fibers.length === 0

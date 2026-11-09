@@ -7,6 +7,9 @@
 "@effect/platform/FileSystem#File.Descriptor":
   replacement: "none"
   note: "Native file descriptors are no longer part of the portable File interface; use the File methods and keep any platform handle private in custom implementations."
+"@effect/platform/FileSystem#File.Info":
+  replacement: "FileSystem.File.Info"
+  note: "The module moved to effect/FileSystem. dev is now bigint; ino, rdev, nlink, and blocks are Option<bigint>. Update custom stat results, comparisons, arithmetic, and serialization rather than converting these values to number and losing precision. mode, uid, and gid remain numeric; size and blksize use ByteSize. Node and Bun preserve the 64-bit metadata exactly, while Deno may round large values before converting them to bigint."
 "@effect/platform/FileSystem#FileDescriptor":
   replacement: "none"
   note: "The descriptor branding constructor was removed with the public fd field; use File operations instead of exposing a native descriptor."
@@ -27,7 +30,7 @@
   note: "The helper remains after moving the module to effect/FileSystem."
 "@effect/platform/FileSystem#make":
   replacement: "FileSystem.make"
-  note: "The constructor remains after moving the module to effect/FileSystem; adapt the implementation to the v4 service shape."
+  note: "The constructor remains after moving the module to effect/FileSystem; adapt the implementation to the v4 service shape, which also requires lstat to return File.Info without following symbolic links and readDirectoryEntries to list { name, type } entries (map readDirectory names to type \"Unknown\" if types are unavailable). glob is derived and cannot be passed; override it afterward with FileSystem.of({ ...fs, glob })."
 "@effect/platform/FileSystem#MakeDirectoryOptions":
   replacement: "NonNullable<Parameters<FileSystem.FileSystem[\"makeDirectory\"]>[1]>"
   note: "Operation option interfaces are inline in the v4 FileSystem service."
@@ -63,7 +66,7 @@
   note: "Use ByteSize.bytes or unit constructors for file sizes. Truncation lengths, buffer sizes, and read/write counts use number. File.seek takes and returns signed bigint positions; it can fail with PlatformError, including BadArgument when seeking before the start."
 "@effect/platform/FileSystem#SizeInput":
   replacement: "ByteSize.Input"
-  note: "File-size and path-backed range inputs use ByteSize.Input. Truncation lengths, Web File ranges, and buffer sizes use number."
+  note: "File-size and path-backed range inputs use ByteSize.Input. String inputs must be non-negative decimal integers without leading zeros, followed by a canonical unit symbol or lowercase unit name, with at most one separating space. Parse external strings or fractional quantities with ByteSize.fromString (Option) or ByteSize.fromStringUnsafe (throws), then pass the resulting ByteSize. Truncation lengths, Web File ranges, and buffer sizes use number."
 "@effect/platform/FileSystem#StreamOptions":
   replacement: "NonNullable<Parameters<FileSystem.FileSystem[\"stream\"]>[1]>"
   note: "Stream options are inline; bufferSize was removed, bytesToRead and offset accept ByteSize inputs, and chunkSize uses number."

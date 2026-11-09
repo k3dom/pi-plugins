@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Deferred, Effect, Exit, Fiber, Option } from "effect"
+import { Reactivity } from "effect/reactivity"
 import { TestClock } from "effect/testing"
-import { Reactivity } from "effect/unstable/reactivity"
 import { vi } from "vitest"
 
 const state = vi.hoisted(() => ({ vfsCloseCalls: 0 }))
@@ -97,12 +97,11 @@ class GatedPort extends EventTarget {
   close(): void {}
 }
 
-const settled = <A, E>(effect: Effect.Effect<A, E>) =>
-  Effect.gen(function*() {
-    const fiber = yield* effect.pipe(Effect.exit, Effect.timeoutOption("100 millis"), Effect.forkChild)
-    yield* TestClock.adjust("100 millis")
-    return yield* Fiber.join(fiber)
-  })
+const settled = Effect.fnUntraced(function*<A, E>(effect: Effect.Effect<A, E>) {
+  const fiber = yield* effect.pipe(Effect.exit, Effect.timeoutOption("100 millis"), Effect.forkChild)
+  yield* TestClock.adjust("100 millis")
+  return yield* Fiber.join(fiber)
+})
 
 describe("Client", () => {
   it.effect("should work", () => Effect.void)

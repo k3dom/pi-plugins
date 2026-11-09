@@ -4,11 +4,11 @@ import { Cause, Context, Effect, Fiber, Option, Stream } from "effect"
 // oxlint-disable-next-line @typescript-eslint/no-unused-vars
 import { NodeInspectSymbol } from "effect/Inspectable"
 import * as Layer from "effect/Layer"
-import * as RpcClient from "effect/unstable/rpc/RpcClient"
-import type { RpcClientError } from "effect/unstable/rpc/RpcClientError"
-import type * as RpcGroup from "effect/unstable/rpc/RpcGroup"
-import * as RpcServer from "effect/unstable/rpc/RpcServer"
-import * as RpcTest from "effect/unstable/rpc/RpcTest"
+import * as RpcClient from "effect/rpc/RpcClient"
+import type { RpcClientError } from "effect/rpc/RpcClientError"
+import type * as RpcGroup from "effect/rpc/RpcGroup"
+import * as RpcServer from "effect/rpc/RpcServer"
+import * as RpcTest from "effect/rpc/RpcTest"
 import { AuthClient, AuthLayer, TimingLayer, User, UserRpcs, UsersLayer } from "./rpc-schemas.ts"
 
 export class UsersClient extends Context.Service<
@@ -43,6 +43,17 @@ export const e2eSuite = <E>(
         const user = yield* client.GetUserDeferred({ id: "1" })
         assert.instanceOf(user, User)
         assert.deepStrictEqual(user, new User({ id: "1", name: "John" }))
+      }).pipe(Effect.provide(layer)))
+
+    it.effect("completes a discarded call on its acknowledgement, and fails it when its middleware rejects it", () =>
+      Effect.gen(function*() {
+        const client = yield* UsersClient
+        assert.isUndefined(yield* client.GetUser({ id: "1" }, { discard: true }))
+        const error = yield* client.GetUser({ id: "1" }, { discard: true }).pipe(
+          RpcClient.withHeaders({ unauthorized: "true" }),
+          Effect.flip
+        )
+        assert.strictEqual(error._tag, "Unauthorized")
       }).pipe(Effect.provide(layer)))
 
     it.effect("nested method", () =>

@@ -6,10 +6,10 @@ import * as FileSystem from "effect/FileSystem"
 import * as Layer from "effect/Layer"
 import * as PlatformError from "effect/PlatformError"
 import * as Predicate from "effect/Predicate"
+import { ChildProcess } from "effect/process"
 import * as Stream from "effect/Stream"
 import * as TestClock from "effect/testing/TestClock"
-import { ChildProcess } from "effect/unstable/process"
-import * as ChildProcessSpawnerTest from "../../../effect/test/unstable/process/ChildProcessSpawnerTest.ts"
+import * as ChildProcessSpawnerTest from "../../../effect/test/process/ChildProcessSpawnerTest.ts"
 
 const platformError = (method: string, path: string, cause: unknown) =>
   PlatformError.systemError({
@@ -139,15 +139,9 @@ describe("DenoChildProcessSpawner options", () => {
       assert.strictEqual(childFinalSize, childSizeAfterKill)
     }).pipe(Effect.provide(layer)))
 
-  it.effect("emulates shell true without escaping joined arguments", () =>
-    Effect.gen(function*() {
-      const result = yield* output(ChildProcess.make("printf", ["[%s]", "a b"], { shell: true }))
-      assert.strictEqual(result, "[a][b]")
-    }))
-
   it.effect("uses a custom shell", () =>
     Effect.gen(function*() {
-      const result = yield* output(ChildProcess.make("printf", ["custom-shell"], { shell: "/bin/sh" }))
+      const result = yield* output(ChildProcess.make("printf custom-shell", { shell: "/bin/sh" }))
       assert.strictEqual(result, "custom-shell")
     }))
 })

@@ -1,14 +1,29 @@
+import { assert as runtimeAssert } from "@effect/vitest"
 import * as Cause from "effect/Cause"
 import * as Context from "effect/Context"
+import * as Effect from "effect/Effect"
 import * as Equal from "effect/Equal"
+import * as Exit from "effect/Exit"
 import { pipe } from "effect/Function"
 import * as Hash from "effect/Hash"
 import * as Option from "effect/Option"
 import * as Result from "effect/Result"
 import assert from "node:assert/strict"
+import { inspect } from "node:util"
 import { describe, it } from "vitest"
 
 describe("Cause", () => {
+  it("uses reasons in runtime JSON and Node inspection", () => {
+    const cause = Cause.combine(Cause.fail("boom"), Cause.die("bad"))
+    const json = {
+      _id: "Cause",
+      reasons: [{ _tag: "Fail", error: "boom" }, { _tag: "Die", defect: "bad" }]
+    }
+    runtimeAssert.deepStrictEqual(cause.toJSON(), json)
+    runtimeAssert.strictEqual(JSON.stringify(cause), JSON.stringify(json))
+    runtimeAssert.strictEqual(inspect(cause), inspect(json))
+  })
+
   describe("TypeId", () => {
     it("is a string constant", () => {
       assert.strictEqual(Cause.TypeId, "~effect/Cause")
@@ -299,27 +314,35 @@ describe("Cause", () => {
   })
 
   describe("squash", () => {
-    it("returns the first Fail error", () => {
-      assert.strictEqual(Cause.squash(Cause.fail("error")), "error")
+    it("returns the first Fail even after an interrupt and a defect", () => {
+      const cause = Cause.fromReasons([
+        Cause.makeInterruptReason(1),
+        Cause.makeDieReason("defect"),
+        Cause.makeFailReason("first"),
+        Cause.makeFailReason("second")
+      ])
+      assert.strictEqual(Cause.squash(cause), "first")
     })
 
-    it("returns the first Die defect when no Fail", () => {
-      assert.strictEqual(Cause.squash(Cause.die("defect")), "defect")
+    it("returns the first Die when there are no Fails", () => {
+      const cause = Cause.fromReasons([
+        Cause.makeInterruptReason(1),
+        Cause.makeDieReason("first"),
+        Cause.makeDieReason("second")
+      ])
+      assert.strictEqual(Cause.squash(cause), "first")
     })
 
-    it("returns an Error for interrupt-only cause", () => {
+    it("reports an interrupt-only cause", () => {
       const result = Cause.squash(Cause.interrupt(1))
       assert.ok(result instanceof Error)
+      assert.strictEqual(result.message, "All fibers interrupted without error")
     })
 
-    it("returns an Error for empty cause", () => {
+    it("reports an empty cause", () => {
       const result = Cause.squash(Cause.empty)
       assert.ok(result instanceof Error)
-    })
-
-    it("prefers Fail over Die", () => {
-      const combined = Cause.combine(Cause.die("defect"), Cause.fail("error"))
-      assert.strictEqual(Cause.squash(combined), "error")
+      assert.strictEqual(result.message, "Empty cause")
     })
   })
 
@@ -584,6 +607,41 @@ describe("Cause", () => {
       const errors = Cause.prettyErrors(Cause.empty)
       assert.ok(Array.isArray(errors))
     })
+
+    it("preserves falsy Error causes", () => {
+      for (const value of [0, false, "", null]) {
+        const [error] = Cause.prettyErrors(Cause.fail(new Error("outer", { cause: value })))
+        assert.ok(error.cause instanceof Error)
+        assert.strictEqual(error.cause.message, `Unknown error: ${value}`)
+      }
+      for (const original of [new Error("outer"), new Error("outer", { cause: undefined })]) {
+        const [error] = Cause.prettyErrors(Cause.fail(original))
+        assert.strictEqual(error.cause, undefined)
+      }
+    })
+
+    it("restores Error.stackTraceLimit when formatting a reason throws", () => {
+      const limit = Error.stackTraceLimit
+      const error = new Error("boom")
+      Object.defineProperty(error, "stack", {
+        get() {
+          throw new Error("stack getter")
+        }
+      })
+      assert.throws(() => Cause.prettyErrors(Cause.fail(error)), /stack getter/)
+      assert.strictEqual(Error.stackTraceLimit, limit)
+    })
+
+    it("stops at a cyclic Error cause", () => {
+      const a = new Error("a")
+      const b = new Error("b", { cause: a })
+      a.cause = b
+      const [error] = Cause.prettyErrors(Cause.fail(a))
+      assert.strictEqual(error.message, "a")
+      assert.ok(error.cause instanceof Error)
+      assert.strictEqual(error.cause.message, "b")
+      assert.strictEqual(error.cause.cause, undefined)
+    })
   })
 
   describe("pretty", () => {
@@ -604,6 +662,54 @@ describe("Cause", () => {
     it("returns a string for empty cause", () => {
       const rendered = Cause.pretty(Cause.empty)
       assert.strictEqual(typeof rendered, "string")
+    })
+
+    it("cuts the stack of a defect at the internal frame that called user code", async () => {
+      const render = async (effect: Effect.Effect<unknown, unknown>): Promise<string> => {
+        const exit = await Effect.runPromiseExit(effect)
+        assert.ok(Exit.isFailure(exit))
+        return Cause.pretty(exit.cause)
+      }
+      for (
+        const effect of [
+          Effect.try({ try: userCode, catch: userCode }),
+          // the catcher runs outside the run loop, so it relies on the marker frame
+          Effect.tryPromise({ try: () => Promise.reject(1), catch: userCode })
+        ]
+      ) {
+        const rendered = await render(effect)
+        assert.match(rendered, /at userCode /)
+        assert.doesNotMatch(rendered, /~effect\/Utils\/internal/)
+      }
+    })
+
+    const userCode = (): never => {
+      throw new Error("boom")
+    }
+    const assertCleanStack = (effect: Effect.Effect<unknown, unknown>): void => {
+      const exit = Effect.runSyncExit(effect)
+      assert.ok(Exit.isFailure(exit))
+      const rendered = Cause.pretty(exit.cause)
+      assert.match(rendered, /\buserCode \(/)
+      assert.doesNotMatch(rendered, /\/src\/internal\/|~effect\/Utils\/internal/)
+    }
+
+    it("does not render internal frames from match and matchCause handlers", () => {
+      for (const source of [Effect.succeed(1), Effect.fail("error")]) {
+        assertCleanStack(Effect.match(source, { onSuccess: userCode, onFailure: userCode }))
+        assertCleanStack(Effect.matchCause(source, { onSuccess: userCode, onFailure: userCode }))
+      }
+    })
+
+    it("does not render internal frames from map", () => {
+      assertCleanStack(Effect.map(Effect.succeed(1), userCode))
+    })
+
+    // Bun's Suspend tail call drops the frame the cleaner cuts at, so only V8
+    // runtimes are covered
+    it.skipIf(process.versions.bun !== undefined)("keeps the throw location of defects from sync and suspend", () => {
+      assertCleanStack(Effect.sync(userCode))
+      assertCleanStack(Effect.suspend(userCode))
     })
   })
 

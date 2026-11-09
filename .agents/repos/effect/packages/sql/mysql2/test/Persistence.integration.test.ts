@@ -1,17 +1,21 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Layer, Schema } from "effect"
-import * as PersistedCacheTest from "effect-test/unstable/persistence/PersistedCacheTest"
-import * as PersistedQueueTest from "effect-test/unstable/persistence/PersistedQueueTest"
-import * as SqlCleanupTest from "effect-test/unstable/persistence/SqlCleanupTest"
+import * as PersistedCacheTest from "effect-test/persistence/PersistedCacheTest"
+import * as PersistedQueueSqlTest from "effect-test/persistence/PersistedQueueSqlTest"
+import * as PersistedQueueTest from "effect-test/persistence/PersistedQueueTest"
+import * as SqlCleanupTest from "effect-test/persistence/SqlCleanupTest"
+import * as Arr from "effect/Array"
+import { PersistedQueue, Persistence } from "effect/persistence"
+import { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
-import { PersistedQueue, Persistence } from "effect/unstable/persistence"
-import { SqlClient } from "effect/unstable/sql"
 import { MysqlContainer } from "./utils.ts"
 
 it.layer(MysqlContainer.layerClient, { timeout: "90 seconds" })("Persistence", (it) => {
   PersistedCacheTest.suiteWith("sql-mysql2-multi", Persistence.layerSqlMultiTable, it)
 
   PersistedQueueTest.suiteWith("sql-mysql2", PersistedQueue.layerStoreSql(), it)
+
+  PersistedQueueSqlTest.suiteWith(it)
 
   // elements are stored in a MEDIUMTEXT column, so payloads must survive the
   // 64KB TEXT limit
@@ -60,6 +64,7 @@ it.layer(MysqlContainer.layerClient, { timeout: "90 seconds" })("Persistence", (
           value: "{}",
           expires: SqlCleanupTest.expiredAtEpoch
         }))
+        assert(Arr.isArrayNonEmpty(entries))
         yield* sql`INSERT INTO ${table} ${sql.insert(entries)}`.unprepared
         yield* sql`
           INSERT INTO ${table} (store_id, id, value, expires)

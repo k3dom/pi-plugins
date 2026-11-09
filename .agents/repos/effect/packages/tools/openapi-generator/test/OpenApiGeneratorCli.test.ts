@@ -1,10 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Layer, Stdio, Stream } from "effect"
+import { CliOutput } from "effect/cli"
 import * as Exit from "effect/Exit"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { TestConsole } from "effect/testing"
-import { CliOutput } from "effect/unstable/cli"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
 const makeLayer = (args: ReadonlyArray<string>) =>
   Layer.mergeAll(
@@ -102,7 +102,7 @@ describe("openapigen CLI", () => {
       assert.strictEqual(defaultResult.stdout, httpclientResult.stdout)
       assert.include(httpclientResult.stdout, "import * as Schema from \"effect/Schema\"")
       assert.notInclude(typeOnlyResult.stdout, "import * as Schema from \"effect/Schema\"")
-      assert.include(typeOnlyResult.stdout, "import type * as HttpClient from \"effect/unstable/http/HttpClient\"")
+      assert.include(typeOnlyResult.stdout, "import type * as HttpClient from \"effect/http/HttpClient\"")
       assert.include(httpapiResult.stdout, "export class CliClient extends HttpApi.make(\"CliClient\")")
     }))
 
@@ -122,10 +122,10 @@ describe("openapigen CLI", () => {
       const result = yield* runCli(["--spec", spec, "--name", "CliClient"])
 
       assert.isTrue(Exit.isSuccess(result.exit))
-      assert.include(result.stdout, "export const make = (")
-      assert.include(result.stderr, "WARNING [cookie-parameter-dropped]")
-      assert.include(result.stderr, "cookie-parameter-dropped")
-      assert.notInclude(result.stdout, "cookie-parameter-dropped")
+      assert.include(result.stdout, "export const make = <E, R>(")
+      assert.include(result.stderr, "WARNING [default-response-remapped]")
+      assert.include(result.stderr, "default-response-remapped")
+      assert.notInclude(result.stdout, "default-response-remapped")
       assert.notInclude(result.stderr, "export const make = (")
     }))
 
@@ -135,12 +135,12 @@ describe("openapigen CLI", () => {
       const result = yield* runCliProcess(["--spec", spec, "--name", "CliClient"])
 
       assert.strictEqual(result.exitCode, ChildProcessSpawner.ExitCode(0))
-      assert.include(result.stdout, "export const make = (")
+      assert.include(result.stdout, "export const make = <E, R>(")
       assert.notInclude(result.stdout, "WARNING [")
-      assert.notInclude(result.stdout, "cookie-parameter-dropped")
+      assert.notInclude(result.stdout, "default-response-remapped")
       assert.include(
         result.stderr,
-        "WARNING [cookie-parameter-dropped] GET /users/{id} (getUser): Cookie parameter \"session\" was dropped because non-security cookie parameters are not supported."
+        "WARNING [default-response-remapped] GET /users/{id} (getUser): Default response was remapped to 2xx for the current HttpClient outputs."
       )
       assert.notInclude(result.stderr, "export const make = (")
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)))

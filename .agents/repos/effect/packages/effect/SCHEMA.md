@@ -35,7 +35,7 @@ Use Schema to:
 11. **Middlewares** — intercept decoding/encoding to provide fallbacks or inject services.
 12. **Advanced topics** — internal type model and type hierarchy (for library authors).
 13. **Integrations** — working examples for TanStack Form and Elysia.
-14. **Migration from v3** — API mapping from Schema v3 to v4.
+14. **[Migration from v3](../../migration/schema.md)** — API mapping from Schema v3 to v4.
 
 ## Runtime Performance
 
@@ -51,24 +51,151 @@ Values are microseconds per operation and lower is better. Results vary between
 machines, so they are most useful for understanding relative costs. A dash
 means that the library does not provide that benchmark.
 
-| Scenario                              | Effect Schema |    Valibot |      Zod 4 |
-| ------------------------------------- | ------------: | ---------: | ---------: |
-| Create a schema                       |        118.23 |  **40.24** |     318.56 |
-| Create a schema and parser            |    **130.50** |          — |          — |
-| Validate valid data                   |     **5.415** |       5.63 |          — |
-| Validate invalid data                 |         1.348 | **0.2431** |          — |
-| Parse valid data and collect errors   |         5.366 |   **5.22** |       7.16 |
-| Parse invalid data and collect errors |     **9.100** |      15.70 |      41.58 |
-| Parse valid data and stop early       |     **5.294** |       5.37 |          — |
-| Parse invalid data and stop early     |         1.352 | **0.2572** |          — |
-| Standard Schema, valid data           |         5.935 |       5.35 |   **3.83** |
-| Standard Schema, invalid data         |    **15.203** |      16.51 |      32.85 |
-| Standard Schema, valid, stop early    |     **5.843** |          — |          — |
-| Standard Schema, invalid, stop early  |     **2.244** |          — |          — |
-| Encode with a typed codec             |        0.3420 |          — | **0.0405** |
-| Decode with a typed codec             |        0.3762 |          — | **0.0463** |
-| Encode unknown input                  |    **0.3472** |          — |          — |
-| Decode unknown input                  |    **0.3637** |          — |          — |
+| Scenario                              | Effect Schema | Valibot 1.5.0 | Zod 4.6.2 |
+| ------------------------------------- | ------------: | ------------: | --------: |
+| Create a schema                       |       60.1297 |        1.0926 |   83.7496 |
+| Validate valid data                   |        4.1473 |        3.5389 |         — |
+| Validate invalid data                 |        0.2571 |        0.1823 |         — |
+| Parse valid data and collect errors   |        5.0261 |        3.5393 |    7.0073 |
+| Parse invalid data and collect errors |        7.4838 |        5.7206 |   19.3064 |
+| Parse valid data and stop early       |        4.1559 |        3.5941 |         — |
+| Parse invalid data and stop early     |        0.2525 |        0.1917 |         — |
+| Standard Schema, valid data           |    **5.3408** |        3.5565 |    3.5755 |
+| Standard Schema, invalid data         |       11.7723 |        5.4422 |   15.9974 |
+| Encode with a typed codec             |        0.0827 |             — |    0.0441 |
+| Decode with a typed codec             |        0.1063 |             — |    0.0427 |
+
+## Experimental schema compilers
+
+Enable JIT compilation at application startup with a side-effect import:
+
+```ts
+import "effect/schema/SchemaJITCompiler/enable"
+```
+
+Alternatively, `SchemaJITCompiler.enable(schema.ast)` enables one AST and the
+dependencies reached while parsing it. Importing `SchemaJITCompiler` or the
+`schema` barrel alone does not enable compilation. Operations are
+prepared on first use. If dynamic function construction is blocked or compilation
+fails, the interpreter remains available. Exceptions from executing a parser are
+not treated as compilation failures and do not trigger a retry.
+
+JIT and AOT use the same source generator. To generate an AOT module at build
+time, call `SchemaAOTCompiler.compile(targets)` with an ordered array of ASTs
+and the operations to prepare:
+
+```ts
+SchemaAOTCompiler.compile([
+  { ast: User.ast, operations: ["decode"] },
+  { ast: SchemaAST.toType(User.ast), operations: ["is", "make"] }
+])
+```
+
+The module exports `install(asts)`. Call it with the target ASTs in the same
+order before using normal `SchemaParser` functions. Generated modules contain
+only the requested operation families and their dependencies. Operations that
+were not requested use the interpreter if they are called. Generated modules
+do not import the generator and work where `new Function` is forbidden.
+
+The low-level installation trusts the supplied root order and AST definitions.
+Target `SchemaAST.toType(schema.ast)` with `is` or `make` for guards and
+construction. Target `SchemaAST.flip(schema.ast)` with `decode` for encoding.
+
+`effect/schema/SchemaAOTCompiler/Build` provides the higher-level
+workflow. Its `build` function loads direct Schema exports, writes a
+self-installing module through `FileSystem`, and prepares decoding by default:
+
+```ts
+import * as SchemaAOTCompilerBuild from "effect/schema/SchemaAOTCompiler/Build"
+
+SchemaAOTCompilerBuild.build({
+  modules: {
+    "./schemas/User.js": () => import("./schemas/User.js"),
+    "./schemas/Order.js": () => import("./schemas/Order.js")
+  },
+  baseUrl: import.meta.url,
+  outFile: "./generated/schema-aot.js"
+})
+```
+
+Import the generated file at application startup. Module keys identify imports
+relative to `baseUrl`; each loader must return that same module during the
+build. The lazy record produced by `import.meta.glob` can be passed directly.
+Request `encode`, `is`, or `make` explicitly when those directions also need
+AOT roots. Loading executes the selected application modules during the build.
+Run the returned Effect with the platform's `FileSystem` and `Path` services,
+and ensure the bundler retains the generated side-effect import.
+
+Regenerate AOT modules when schema definitions or the Effect version change.
+Callbacks and symbols are read from runtime ASTs, not serialized.
+
+### One registry for all implementations
+
+A single `WeakMap` associates each exact AST with its decoder entry. The cache
+stores functions, never parsing results. The interpreter, JIT, AOT and
+`SchemaCompiler.set(ast, decoder)` all use it.
+
+| Operation      | Result                                      | Purpose                                                                                         |
+| -------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `decodeEffect` | `Effect` with output or detailed issues     | Required complete decoding, including asynchronous work and transformations.                    |
+| `decode`       | Output or `SchemaCompiler.invalid`          | Optional synchronous decoding fast path without detailed diagnostics.                           |
+| `is`           | Boolean                                     | Optional validation without constructing output.                                                |
+| `make`         | Output or `SchemaCompiler.invalid`          | Optional synchronous construction fast path without detailed diagnostics.                       |
+| `makeEffect`   | `Effect` with a constructed value or issues | Optional specialized construction. The registry caches the interpreted constructor when absent. |
+
+Decoding tries `decode` when available. Success provides the output directly;
+failure calls `decodeEffect` for diagnostics. The diagnostic traversal uses child
+decoders directly, without restarting their validation fast paths. A boolean
+guard prefers `is`, otherwise it uses ordinary decoding (including `decode`
+when available). An `invalid` result needs that diagnostic fallback because the
+marker is also a possible input value. Composite checks
+can require stripped, reconstructed values, so `is` is omitted when it cannot
+avoid constructing those values safely.
+
+Each operation initializes independently. Synchronous construction tries `make`
+when available and falls back to `makeEffect` for detailed issues. Compilers omit
+`make` whenever replay could repeat defaults, Class constructors,
+transformations, middleware, or other effects. `makeEffect` itself never uses
+validation replay. Field defaults belong to the parent occurrence, not to
+construction of the root. Runtime parse options, including product concurrency,
+retain the interpreter's semantics.
+
+Installing a decoder replaces the entry for that AST. Existing consumers that
+already captured an entry retain it. Late installation is allowed, but startup
+installation is needed to optimize every consumer. Custom decoders supplied to
+`set` are trusted to implement the AST's semantics.
+
+An AOT module installs entries for explicitly requested roots and their static
+dependencies. Each generated operation initializes on first use. All entries
+live in the same `WeakMap`: there is no separate AOT cache, and a later
+`SchemaCompiler.set` for the same AST replaces any compiled entry in the same way.
+
+### What is specialized
+
+Encoding-free graphs of supported primitives, Objects, Arrays, tuples, Unions
+and template literals can use generated validators. Struct and homogeneous Array
+decoding and construction also have generated loops. Pure fixed Struct and
+homogeneous Array constructors can additionally use the synchronous `make` fast
+path; composite children are resolved through the same registry. These loops
+share the interpreter's diagnostic and asynchronous continuation helpers.
+Other detailed traversals and constructors use the existing interpreter with
+registry-resolved children; there is no separate diagnostic interpreter in the
+compiler.
+
+Transformations and middleware never participate in validation replay. A single
+synchronous transformation between supported leaf types can use generated
+orchestration directly. Other transformations and middleware use the interpreted
+orchestration, while pure child checkpoints can still use generated validators.
+Suspend is resolved lazily by JIT. AOT does not evaluate Suspend thunks at build
+time, so dynamically reached schemas fall back to the interpreter unless installed
+separately. Declaration callbacks remain runtime code; their type parameters can
+be compiled.
+
+Checks and property getters in replayable validation must be deterministic and
+free of side effects. Proxy inputs and modifications to built-in object behavior
+are not supported by the optimization contract. Large or unsupported graphs
+retain interpreted paths. AOT removes dynamic source generation, not all parser
+initialization or the need for runtime schema objects.
 
 # Defining Elementary Schemas
 
@@ -175,11 +302,11 @@ import { Schema } from "effect"
 
 Schema.String.check(Schema.isMaxLength(5))
 Schema.String.check(Schema.isMinLength(5))
-Schema.String.check(Schema.isLengthBetween(5, 5))
+Schema.String.check(Schema.isBetweenLength(5, 5))
 Schema.String.check(Schema.isPattern(/^[a-z]+$/))
-Schema.String.check(Schema.isStartsWith("aaa"))
-Schema.String.check(Schema.isEndsWith("zzz"))
-Schema.String.check(Schema.isIncludes("---"))
+Schema.String.check(Schema.isStartingWith("aaa"))
+Schema.String.check(Schema.isEndingWith("zzz"))
+Schema.String.check(Schema.isIncluding("---"))
 Schema.String.check(Schema.isUppercased())
 Schema.String.check(Schema.isLowercased())
 ```
@@ -922,6 +1049,20 @@ An index signature lets a struct accept any string key in addition to its fixed 
 
 Filters applied to either the struct or the record are preserved when combined.
 
+The base schema must have an object-shaped encoded type. Whole-object transformations are not supported, even when the rest array is empty. For JSON-string encoding, wrap the completed schema with `Schema.fromJsonString` rather than passing a JSON-string schema to `Schema.StructWithRest`:
+
+```ts
+import { Schema } from "effect"
+
+const base = Schema.Record(Schema.Literals(["bash", "sh"]), Schema.NonEmptyString)
+const records = [Schema.Record(Schema.NonEmptyString, Schema.NonEmptyString)] as const
+const schema = Schema.fromJsonString(Schema.StructWithRest(base, records), { space: 2 })
+
+type Encoded = typeof schema.Encoded // string
+```
+
+Object-shaped encoded types alone do not guarantee compatibility: unsupported whole-object encodings are still rejected at runtime. Transformations on individual fields remain supported.
+
 **Example** (Combining fixed properties with an index signature)
 
 ```ts
@@ -1656,6 +1797,8 @@ A record schema describes an object whose keys are dynamic (not known ahead of t
 
 Properties that are not selected by the key schema are ignored by that record. For example, `Schema.Record(Schema.String.check(Schema.isPattern(/^a/)), Schema.Number)` decodes only string keys that start with `"a"`.
 
+Dynamic records already allow keys to be absent, so their value schemas cannot use `Schema.optionalKey` or `Schema.optional`. Use `Schema.UndefinedOr` when a present property may contain `undefined`. Records with finite literal keys become struct-like schemas and may use the optional combinators.
+
 ### Key Transformations
 
 `Schema.Record` supports transforming keys during decoding and encoding. This can be useful when working with different naming conventions.
@@ -2033,7 +2176,7 @@ This helper has some advantages over a dedicated constructor:
 - You can choose among multiple possible tag fields if present.
 - It supports unions that include nested unions.
 
-Each member must have a unique discriminant property key. `toTaggedUnion` throws when it encounters a duplicate. Numeric and string values that resolve to the same property key, such as `1` and `"1"`, are considered duplicates.
+Each member must have a unique discriminant property key. `toTaggedUnion` throws when it encounters a duplicate at runtime, including in nested unions. Numeric and string values that resolve to the same property key, such as `1` and `"1"`, are considered duplicates.
 
 **Note**. If the tag is the standard `_tag` field, you can use `Schema.TaggedUnion` instead.
 
@@ -2445,7 +2588,9 @@ The default formatter chooses the error label from the level that failed:
 
 An `identifier` does not name a failed filter. Use `expected` to name the
 filter in the default formatter, or `message` to replace the filter failure
-message completely.
+message completely. A filter's `message` annotation also overrides messages
+returned by the filter, whether they are returned directly or attached to a
+nested path. Without a `message` annotation, returned messages are preserved.
 
 **Example** (Schema identifier versus filter expected message)
 
@@ -2684,6 +2829,15 @@ const refined = Schema.Array(Schema.String).pipe(
 
 Use `Schema.brand` to add a brand to a schema.
 
+The identifier must be a single concrete string literal. `Schema.brand` adds
+a nominal distinction to the decoded TypeScript type. It does not add runtime
+validation or metadata to the schema AST. Apply it once per identifier when a
+type has multiple brands.
+
+Because branding is type-only, `SchemaRepresentation` does not preserve it.
+Reapply `Schema.brand` after rebuilding a representation or generating schema
+code when the branded TypeScript type is still required.
+
 **Example** (Brand a string as a UserId)
 
 ```ts
@@ -2692,6 +2846,32 @@ import { Schema } from "effect"
 //      ┌─── Schema.brand<Schema.String, "UserId">
 //      ▼
 const branded = Schema.String.pipe(Schema.brand("UserId"))
+```
+
+### Using Brand constructors
+
+Use `Schema.fromBrand` to reuse the checks from a `Brand.Constructor`. The
+constructor must have exactly one concrete brand key, and the identifier must
+match that key. Apply `Schema.fromBrand` once per constructor to compose
+distinct brands. Use `Schema.Union` for alternatives instead.
+
+With a string enum brand key, pass the enum member rather than its string value.
+
+**Example** (Compose checked brands)
+
+```ts
+import { Brand, Schema } from "effect"
+
+type Int = number & Brand.Brand<"Int">
+const Int = Brand.check<Int>(Schema.isInt())
+
+type Positive = number & Brand.Brand<"Positive">
+const Positive = Brand.check<Positive>(Schema.isGreaterThan(0))
+
+const PositiveInt = Schema.Number.pipe(
+  Schema.fromBrand("Int", Int),
+  Schema.fromBrand("Positive", Positive)
+)
 ```
 
 ## Structural Filters
@@ -3080,57 +3260,65 @@ Transformation<T, E, RD, RE>
 - `RD`: the context used while decoding
 - `RE`: the context used while encoding
 
-A `Transformation` consists of two `Getter` functions:
+A `Transformation` consists of two `Getter` values:
 
 - `decode: Getter<T, E, RD>` — transforms a value during decoding
 - `encode: Getter<E, T, RE>` — transforms a value during encoding
 
-Each `Getter` receives an input and an optional context and returns either a value or an error. Getters can be composed to build more complex logic.
+Each `Getter` is a tagged description of one operation:
+
+- `Transform` transforms a present value synchronously.
+- `TransformOptional` transforms an `Option` synchronously and can handle a missing value.
+- `TransformEffect` and `TransformOptionalEffect` are the corresponding effectful forms.
+- `Passthrough` returns its input unchanged.
+
+Getter values expose `pipe`. Use the dual standalone functions `SchemaGetter.map` and `SchemaGetter.compose` to build
+larger transformations. `SchemaGetter.run` executes a getter directly and always returns an `Effect`; schemas execute
+their getters through `SchemaParser` instead.
 
 **Example** (Implementation of `Transformation.trim`)
 
 ```ts
+import { SchemaGetter, SchemaTransformation } from "effect"
+
 /**
  * @category String transformations
  * @since 4.0.0
  */
-export function trim(): Transformation<string, string> {
-  return new Transformation(Getter.trim(), Getter.passthrough())
+export function trim(): SchemaTransformation.Transformation<string, string> {
+  return new SchemaTransformation.Transformation(SchemaGetter.trim(), SchemaGetter.passthrough())
 }
 ```
 
 In this case:
 
-- The `decode` process uses `Getter.trim()` to remove leading and trailing whitespace.
-- The `encode` process uses `Getter.passthrough()`, which returns the input as is.
+- The `decode` process uses `SchemaGetter.trim()` to remove leading and trailing whitespace.
+- The `encode` process uses `SchemaGetter.passthrough()`, which returns the input as is.
 
 ## Composing Transformations
 
-You can combine transformations using the `.compose` method. The resulting transformation applies the `decode` and `encode` logic of both transformations in sequence.
+You can combine transformations using `SchemaTransformation.composeTransformation`. The resulting transformation applies the `decode` and `encode` logic of both transformations in sequence.
 
 **Example** (Trim and lowercase a string)
 
 ```ts
-import { Option, SchemaTransformation } from "effect"
+import { Schema, SchemaTransformation } from "effect"
 
 // Compose two transformations: trim followed by toLowerCase
-const trimToLowerCase = SchemaTransformation.trim().compose(SchemaTransformation.toLowerCase())
+const trimToLowerCase = SchemaTransformation.composeTransformation(
+  SchemaTransformation.trim(),
+  SchemaTransformation.toLowerCase()
+)
+const schema = Schema.String.pipe(Schema.decode(trimToLowerCase))
 
-// Run the decode logic manually to inspect the result
-console.log(trimToLowerCase.decode.run(Option.some("  Abc"), {}))
-/*
-{
-  _id: 'Exit',
-  _tag: 'Success',
-  value: { _id: 'Option', _tag: 'Some', value: 'abc' }
-}
-*/
+Schema.decodeUnknownSync(schema)("  Abc")
+// "abc"
 ```
 
 In this example:
 
-- The `decode` logic applies `Getter.trim()` followed by `Getter.toLowerCase()`, producing a string that is trimmed and lowercased.
-- The `encode` logic is `Getter.passthrough()`, which simply returns the input as-is.
+- The `decode` logic applies `SchemaGetter.trim()` followed by `SchemaGetter.toLowerCase()`, producing a string that is trimmed and lowercased.
+- The `encode` logic is `SchemaGetter.passthrough()`, which returns the input unchanged.
 
 ## Transforming One Schema into Another
 
@@ -4070,7 +4258,7 @@ Effect.runPromiseExit(program).then((exit) => console.log(JSON.stringify(exit, n
   "_tag": "Failure",
   "cause": {
     "_id": "Cause",
-    "failures": [
+    "reasons": [
       {
         "_tag": "Fail",
         "error": {
@@ -4222,6 +4410,10 @@ console.log(A.ast.annotations?.title)
 #### extend
 
 Use `extend` to create a subclass that adds fields to the base schema. Instance fields declared on the base class are also available on the subclass.
+
+To subclass a `Schema.Class`, use `Base.extend<Self>(...)`, even when only adding methods or getters. Pass `{}` for the fields when none are added. Plain `class Child extends Base` is unsupported.
+
+Fields with the same name replace inherited fields. Use this to refine validation or change encoding. Effect does not check compatibility; the caller must ensure the replacement preserves the base class contract.
 
 **Example** (Extending a class with new fields)
 
@@ -4499,32 +4691,26 @@ Serialization converts typed values into a format suitable for storage or transm
 
 ## JSON Support
 
-#### UnknownFromJsonString
-
-A schema that decodes a JSON-encoded string into an unknown value.
-
-This schema takes a string as input and attempts to parse it as JSON during decoding. If parsing succeeds, the result is passed along as an unknown value. If the string is not valid JSON, decoding fails.
-
-When encoding, any value is converted back into a JSON string using JSON.stringify. If the value is not a valid JSON value, encoding fails.
-
-**Example**
-
-```ts
-import { Schema } from "effect"
-
-Schema.decodeUnknownSync(Schema.UnknownFromJsonString)(`{"a":1,"b":2}`)
-// => { a: 1, b: 2 }
-```
-
 #### fromJsonString
 
 Returns a schema that decodes a JSON string and then decodes the parsed value using the given schema.
 
-This is useful when working with JSON-encoded strings where the actual structure of the value is known and described by an existing schema.
+Use `Schema.Unknown` to parse the JSON string without validating its structure, or provide a more specific schema to validate the parsed value.
 
-The resulting schema first parses the input string as JSON, and then runs the provided schema on the parsed result.
+Decoding fails if the input is not valid JSON or the parsed value does not satisfy the provided schema.
 
-**Example**
+During encoding, the schema encodes the value with the provided schema and then converts the result to a JSON string.
+
+**Example** (Parsing without validation)
+
+```ts
+import { Schema } from "effect"
+
+Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(`{"a":1,"b":2}`)
+// => { a: 1, b: 2 }
+```
+
+**Example** (Parsing and validating a known structure)
 
 ```ts
 import { Schema } from "effect"
@@ -4956,6 +5142,34 @@ console.log(serialized)
 // date1 uses your custom number format, date2 uses the default ISO string format
 ```
 
+#### Decoding JSON Written by Go
+
+Go's `encoding/json` writes a nil pointer, slice, or map as `null`, and API documents rarely say which fields can be `null`. `Schema.toCodecGoJson` is `Schema.toCodecJson` with these rules added at every level of the schema:
+
+- an optional key that is `null` decodes as a missing key
+- a required array that is `null` decodes as `[]`
+- a required record that is `null` decodes as `{}`
+
+Encoding is unchanged from `Schema.toCodecJson`. A key whose schema already accepts `null` (such as `Schema.NullOr(X)`) keeps that behavior. Array and record rules also apply to top-level and nested collections, but not tuples, non-empty arrays, or structs; collection checks still apply. The codec also accepts `encoding/json/v2` output, which uses `[]` and `{}` for nil slices and maps by default.
+
+This unstable codec deliberately normalizes nil collections to empty ones. Go distinguishes nil from non-nil empty slices and maps, and unmarshalling missing keys, `null`, and empty collections can affect existing values differently. Use `Schema.toCodecJson` with explicit nullable schemas if those distinctions matter.
+
+```ts
+import { Schema } from "effect"
+
+const Container = Schema.Struct({
+  Id: Schema.String,
+  Names: Schema.Array(Schema.String),
+  Labels: Schema.Record(Schema.String, Schema.String),
+  Status: Schema.optionalKey(Schema.String)
+})
+
+const codec = Schema.toCodecGoJson(Container)
+
+console.log(Schema.decodeUnknownSync(codec)({ Id: "a", Names: null, Labels: null, Status: null }))
+// Output: { Id: 'a', Names: [], Labels: {} }
+```
+
 ### StringTree Canonical Codec
 
 The `StringTree` codec converts all values to strings, keeping the structure but not the original types.
@@ -5128,8 +5342,8 @@ Properties not modeled by an object schema use `onExcessProperty: "ignore"` by
 default, matching the decoder default. This emits `additionalProperties: true`.
 Pass `{ onExcessProperty: "error" }` to the generator and decoder to reject
 unmatched properties whenever the key space is representable. An
-index-signature key check that cannot be represented leaves unmatched
-properties open so that JSON Schema does not reject inputs Effect may accept.
+index-signature key check that cannot be translated to an exact selector uses
+a conservative fallback so that JSON Schema does not reject inputs Effect may accept.
 The generator does not merge conjunctive key patterns into a new regular
 expression. With `onExcessProperty: "ignore"`, it leaves that index signature
 open. With `onExcessProperty: "error"`, it uses the generated key schemas under
@@ -5138,9 +5352,11 @@ open. With `onExcessProperty: "error"`, it uses the generated key schemas under
 decoder enforces the exact association between keys and values.
 
 Known differences include Unicode code-point versus UTF-16 string length,
-JavaScript RegExp flags, property checks applied before versus after decoding,
-and `oneOf` with overlapping members. Custom `toJsonSchema` callbacks are also
-responsible for the semantics they emit.
+JavaScript RegExp flags, and property checks applied before versus after decoding.
+When a `oneOf` branch has a known approximation, the compiler emits `anyOf` so
+that newly overlapping branches cannot reject valid values. It retains `oneOf`
+when all branches are exact. Custom `toJsonSchema` callbacks declare approximate
+results with `[schema, true]`; see [Check exporters and approximation](#check-exporters-and-approximation).
 
 The result is a data structure including:
 
@@ -5867,6 +6083,13 @@ console.log(decoded.representation._tag)
 Consequently, rebuilding `encoded` produces a schema for the string representation; it does not recreate the original
 string-to-number transformation.
 
+Representations describe runtime schema structure, so they do not preserve
+TypeScript-only distinctions. `Schema.brand` is absent because it does not
+change the AST. A check introduced by `Schema.refine` can remain part of the
+runtime representation, but its narrowed TypeScript type cannot be recovered.
+Reapply these type-level operations after rebuilding a representation or
+generating schema code when needed.
+
 ### Live and persisted documents
 
 A live `Document` can contain functions in its ordinary annotations. These callbacks allow compilers to handle custom
@@ -5934,10 +6157,12 @@ inline even when the same AST occurs more than once. Recursive schemas always re
 available, the converter assigns a synthetic name such as `Objects_` or `Suspend_`.
 
 The default policy uses an explicit `identifier` as the reference name. Reusing the same schema shares its reference.
-Context-only copies created through `SchemaAST.replaceContext` retain the original AST as their reference owner, including
-across several successive context changes. Context still belongs to each occurrence and does not, by itself, create a new
-candidate. Independently constructed ASTs are not canonicalized merely because they are structurally equal. When distinct
-schemas request the same name, the first schema keeps it and later schemas receive numeric suffixes in encounter order,
+AST copies that change only their own `context` or `encoding` share a decoded body. Type and encoded projections preserve
+this sharing while keeping each occurrence's context and following its actual encoding chain. Changing checks, value
+annotations, or children creates a distinct body; child contexts are part of the parent's structure. Reference owners omit
+their own encoding, so reference policies inspect the represented body. Independently constructed ASTs are not
+canonicalized merely because they are structurally equal. When distinct schemas request the same name, the first schema
+keeps it and later schemas receive numeric suffixes in encounter order,
 such as `Value_1` and `Value_2`. Internal `~identifier` annotations are fallback allocation hints; their generated names
 use the `Encoded` suffix and follow the same collision rules.
 
@@ -6092,25 +6317,70 @@ different allocation rule.
 
 Generated JSON Schema is a preliminary validation layer. The Effect decoder
 remains the final authority because string length, RegExp flags,
-decoded-object property checks, and `oneOf` can differ between the two
-validators. The default `onExcessProperty: "ignore"` emits
+and decoded-object property checks can differ between the two validators.
+If a `oneOf` branch contains a known approximation, the compiler emits `anyOf`.
+This prevents the approximation from rejecting values by making multiple
+branches match. Unions whose branches are all exact retain `oneOf`.
+
+Checks on individual `Schema.TemplateLiteral` segments are omitted from the
+generated pattern. These omissions count as approximations, including checks in
+named segments, nested templates, and unions. Checks on the whole template are
+compiled normally. Nonempty segment unions using `oneOf` are also approximated,
+because regular expression alternatives do not require exactly one branch to match.
+Empty segment unions produce a pattern that matches no strings.
+
+The default `onExcessProperty: "ignore"` emits
 `additionalProperties: true`; use `onExcessProperty: "error"` in both
 generation and decoding to reject unmatched properties whenever the key space
-is representable. Unrepresentable index-signature key checks leave unmatched
-properties open under the default mode. The compiler does not merge
-conjunctive key patterns into a new regular expression. In `error` mode it uses
-the generated key schemas under `propertyNames`. For properties not otherwise
-selected, it accepts any index-signature value schema and leaves the exact
-key-value association to the Effect decoder.
+has an exact selector. For `Schema.Record(Key, Value)`, a `patternProperties`
+selector must represent the key check exactly. A looser pattern could select
+extra keys and impose `Value` constraints on properties the Effect decoder ignores.
+
+When a key cannot be translated to an exact selector, including conjunctive key
+patterns that the compiler does not merge into a single regular expression:
+
+- With `onExcessProperty: "ignore"`, the compiler omits that index-signature constraint.
+- With `onExcessProperty: "error"`, it emits the generated key schemas under
+  `propertyNames`, also allowing explicitly declared property names. Properties
+  not selected by `properties` or exact `patternProperties` selectors may satisfy
+  any candidate index-signature value schema. The Effect decoder enforces the
+  exact association between keys and values.
+
+Exact selectors from other index signatures remain active. An exact key selector
+is also retained when only its value schema is approximate.
 
 At the lower level, `SchemaRepresentation.toJsonSchemaDocument(document)` compiles a live `Document`, and
 `toJsonSchemaMultiDocument` compiles a live `MultiDocument`. Check-level `toJsonSchema` callbacks contribute JSON Schema
 constraints. Opaque declarations that have not been structurally lowered compile to an unconstrained JSON Schema.
 Callback authors are responsible for the semantics of their output.
 
-`toJsonSchema` callbacks must treat their input schemas as immutable and return a valid JSON Schema object graph. After a
-callback returns, it must not mutate that object or anything reachable from it; returning a new graph is the supported way
-to produce different output during a later compilation. The compiler may cache structural comparisons while
+#### Check exporters and approximation
+
+Check-level `toJsonSchema` callbacks return `SchemaRepresentation.ToJsonSchema.CheckOutput`:
+
+| Return value     | Meaning                                                                      |
+| ---------------- | ---------------------------------------------------------------------------- |
+| `schema`         | The fragment represents the check exactly.                                   |
+| `[schema, true]` | The fragment accepts every value accepted by the check, and may accept more. |
+
+Use the tightest safe approximation available. Return `[{}, true]` when the
+constraint must be omitted. Returning a bare `{}` instead declares that the
+check imposes no constraint. The compiler trusts this declaration; it does not
+prove that a custom export is exact or safely looser.
+
+Approximation propagates through grouped checks, array elements, object
+properties, unions, and references, including recursive definitions. It also
+propagates from dependencies listed in a check's `representation.schemas`, even
+if its callback returns a plain fragment. The callback receives those compiled
+dependencies in its `schemas` input. Filters without a `toJsonSchema` callback
+and opaque declarations without a structural codec are treated as approximate.
+
+This information controls the `oneOf` and record-key fallbacks described above.
+It is used during compilation and adds no metadata to the emitted JSON Schema.
+
+`toJsonSchema` callbacks must treat their input schemas as immutable and return a valid JSON Schema fragment, either
+directly or in the tuple above. After a callback returns, it must not mutate that fragment or anything reachable from it;
+returning a new graph is the supported way to produce different output during a later compilation. The compiler may cache structural comparisons while
 deduplicating completed definitions, so mutating a previously returned graph can make equality results stale.
 
 Definitions are compared only with definitions in the same internal fallback-identifier group. Equal definitions in
@@ -6126,9 +6396,14 @@ schema with revivers first.
 `SchemaRepresentation.fromJsonSchemaDocument` imports a JSON Schema Draft 2020-12 document as a runtime `Schema.Top`.
 It does not return a representation document.
 
-Only direct local references to top-level definitions in the form `#/$defs/<escaped-token>` are supported. Root
-references, external references, and pointers below a definition are rejected with the supported reference format.
-Missing definitions are reported by name. References reached inside a nested schema
+The input is assumed to be a valid Draft 2020-12 document and is not validated
+against the meta-schema. Instance validation assumes JSON-compatible JavaScript
+values produced by `JSON.parse`.
+
+Local references to top-level definitions in the form `#/$defs/<escaped-token>` are supported, including pointers
+below a definition. Pointer targets are shared and can recurse through object properties or array items;
+circular pointer aliases are rejected. Root and external references are rejected with the supported reference format.
+Missing definitions are reported by name, and missing pointer targets include the full reference. References reached inside a nested schema
 resource introduced by `$id` are rejected with their path instead of being resolved against the top-level definitions.
 A root `$id`, or a nested `$id` without reached references, is supported.
 
@@ -6158,10 +6433,11 @@ validation or a lossless round trip:
   result to a finite set of properties.
 - `minProperties`, `maxProperties`, and `propertyNames` use the existing checks on the decoded object, after excess
   properties have been stripped. No separate validation of the original object is added.
-- String length checks count UTF-16 code units, not Unicode code points. For example, `"😀"` satisfies an imported
-  `minLength: 2` and fails an imported `maxLength: 1`, unlike JSON Schema validation.
+- String `minLength` and `maxLength` count Unicode code points through `Schema.isMinCodePoints` and
+  `Schema.isMaxCodePoints`, except that `minLength: 1` uses the equivalent non-empty check `Schema.isMinLength(1)`.
 - `integer` uses `Schema.isInt` and rejects integers outside JavaScript's safe integer range.
-- Applied patterns use the existing `Schema.isPattern` check without adding a Unicode flag.
+- Applied patterns use `Schema.isPattern` with the `u` flag. Patterns that cannot be compiled in Unicode mode are
+  rejected as unsupported translations, with their source path, rather than interpreted with different semantics.
 
 An Effect struct exported with `additionalProperties: true` therefore imports with a JSON-valued index signature,
 even if the original struct had none. The imported decoder retains additional properties that the original decoder
@@ -6170,13 +6446,41 @@ would strip. Use the imported schema's actual checks and parse options when reas
 Import translates a Draft 2020-12 subset. `$dynamicRef`, `contains`, `dependentRequired`, `dependentSchemas`,
 active `if` / `then` / `else`, `unevaluatedItems`, and `unevaluatedProperties` are rejected with an error identifying
 the unsupported keyword. Inactive conditional keywords and `minContains` / `maxContains` without
-`contains` have no validation effect and are ignored. Unknown extension keywords are ignored and their semantics are not
-enforced. Objects and arrays used as `const` values or `enum` members are rejected. Only strings, numbers, booleans, and
+`contains` have no validation effect and are ignored. Unknown extension keywords are ignored by default and their
+semantics are not enforced. Objects and arrays used as `const` values or `enum` members are rejected. Only strings, numbers, booleans, and
 null are supported. The optional `onEnter` callback can normalize each JSON Schema node
 before it is translated.
 
+Both import functions accept `includeAnnotationKey` to preserve selected custom keys as Effect schema annotations.
+It pairs with the exporter's option of the same name:
+
+```ts
+import { JsonSchema, Schema, SchemaRepresentation } from "effect"
+
+const document = JsonSchema.fromSchemaDraft2020_12({
+  type: "string",
+  "x-sensitive": true
+})
+const options = { includeAnnotationKey: (key: string) => key.startsWith("x-") }
+const schema = SchemaRepresentation.fromJsonSchemaDocument(document, options)
+const exported = Schema.toJsonSchemaDocument(schema, options)
+// exported.schema: { type: "string", "x-sensitive": true }
+```
+
+Standard annotations such as `title` and `description` are imported independently of the predicate. Selection runs
+after `onEnter` and only considers additional own enumerable keys. JSON Schema structural and validation keywords,
+Effect's reserved annotation keys, and keys starting with `~` are excluded before calling the predicate. Selected
+values must be JSON-compatible. Objects and arrays are retained as opaque metadata, without interpreting nested
+schema keywords. Exceptions raised by the predicate pass through unchanged.
+
+Selected metadata stays on the value's schema when intersections merge checks or simplify to literals. When annotations
+collide, later values overwrite earlier ones according to the existing merge order. Metadata belonging only to eliminated
+alternatives or unreachable children is discarded. The resulting schema can have a different structure from the input;
+retaining annotations does not provide a lossless round trip or enforce custom validation rules.
+
 Intersections of overlapping unions are limited to disjoint root-type partitions and finite primitive `anyOf` literal
-sets. Other union intersections, including cases that would duplicate a nested choice, are rejected.
+sets, which may also be duplicated across branches. Other union intersections, including cases that would duplicate any
+other nested choice, are rejected.
 
 Regular expression constraints reached during translation are rejected by default because imported patterns use the
 runtime's native regular expression engine and may block validation for an unbounded amount of time. Set
@@ -6533,9 +6837,9 @@ const schema = Schema.Struct({
 const r = SchemaParser.decodeUnknownExit(schema)({ a: "", c: [] }, { errors: "all" })
 
 if (r._tag === "Failure") {
-  const failures = r.cause.failures
-  if (failures[0]?._tag === "Fail") {
-    const failureResult = SchemaIssue.makeFormatterStandardSchemaV1()(failures[0].error)
+  const reasons = r.cause.reasons
+  if (reasons[0]?._tag === "Fail") {
+    const failureResult = SchemaIssue.makeFormatterStandardSchemaV1()(reasons[0].error)
     const serializer = Schema.toCodecJson(Schema.StandardSchemaV1FailureResult)
     console.dir(Schema.encodeSync(serializer)(failureResult), { depth: null })
   }

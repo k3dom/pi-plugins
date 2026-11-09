@@ -1,7 +1,7 @@
 import { NodeClusterSocket, NodeSocketServer } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
 import { BigDecimal, Cause, Deferred, Effect, Exit, Fiber, Layer, Option, PrimaryKey, Schema } from "effect"
-import type { Sharding } from "effect/unstable/cluster"
+import type { Sharding } from "effect/cluster"
 import {
   ClusterSchema,
   Entity,
@@ -11,9 +11,9 @@ import {
   RunnerStorage,
   ShardingConfig,
   SocketRunner
-} from "effect/unstable/cluster"
-import { Rpc, RpcSerialization } from "effect/unstable/rpc"
-import * as SocketServer from "effect/unstable/socket/SocketServer"
+} from "effect/cluster"
+import { Rpc, RpcSerialization } from "effect/rpc"
+import * as SocketServer from "effect/socket/SocketServer"
 
 const HOST = "127.0.0.1"
 
@@ -118,23 +118,22 @@ const SerializationEntityLayer = SerializationEntity.toLayer(
   Effect.succeed({ Ping: () => Effect.succeed("pong") })
 )
 
-const assertSerialization = (
+const assertSerialization = Effect.fnUntraced(function*(
   serverSerialization: Layer.Layer<RpcSerialization.RpcSerialization>,
   clientSerialization?: "binary" | "ndjson"
-) =>
-  Effect.gen(function*() {
-    const port = yield* startRunner(SerializationEntityLayer, serverSerialization)
+) {
+  const port = yield* startRunner(SerializationEntityLayer, serverSerialization)
 
-    const result = yield* Effect.gen(function*() {
-      const makeClient = yield* SerializationEntity.client
-      return yield* makeClient("serialization-entity").Ping()
-    }).pipe(
-      Effect.provide(makeConfiguredClientLayer(port, clientSerialization)),
-      Effect.scoped
-    )
+  const result = yield* Effect.gen(function*() {
+    const makeClient = yield* SerializationEntity.client
+    return yield* makeClient("serialization-entity").Ping()
+  }).pipe(
+    Effect.provide(makeConfiguredClientLayer(port, clientSerialization)),
+    Effect.scoped
+  )
 
-    assert.strictEqual(result, "pong")
-  }).pipe(Effect.provide(SharedStorage))
+  assert.strictEqual(result, "pong")
+}, Effect.provide(SharedStorage))
 
 // An entity whose reply cannot be serialized: the handler returns a
 // non-integer for a `Schema.Int` success schema, so `Reply.serialize` fails

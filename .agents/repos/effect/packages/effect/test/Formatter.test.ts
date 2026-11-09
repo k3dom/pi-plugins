@@ -13,6 +13,7 @@ import {
   SchemaParser
 } from "effect"
 import { format, formatJson } from "effect/Formatter"
+import { runInNewContext } from "node:vm"
 import { assertFalse, assertTrue, deepStrictEqual, strictEqual } from "./utils/assert.ts"
 
 class SensitiveData implements Redactable.Redactable {
@@ -338,10 +339,55 @@ describe("Formatter", () => {
       strictEqual(formatJson({ left: shared, right: shared }), `{"left":{"a":1},"right":{"a":1}}`)
     })
 
+    it.each([
+      ["Number", Object(42), `42`],
+      ["Boolean", Object(false), `false`],
+      ["String", Object("abc"), `"abc"`],
+      ["cross-realm Number", runInNewContext("new Number(42)"), `42`],
+      ["cross-realm Boolean", runInNewContext("new Boolean(false)"), `false`],
+      ["cross-realm String", runInNewContext("new String(\"abc\")"), `"abc"`]
+    ])("should serialize boxed %s values", (_, value, expected) => {
+      strictEqual(formatJson(value), expected)
+      strictEqual(formatJson({ value }), `{"value":${expected}}`)
+      // JSON.stringify unboxes wrappers and ignores their own properties
+      Object.defineProperty(value, "extra", { get: () => 1, enumerable: true })
+      strictEqual(formatJson(value), expected)
+      strictEqual(formatJson({ value }), `{"value":${expected}}`)
+    })
+
     it("should stringify BigInt values", () => {
       strictEqual(formatJson(123n), `"123n"`)
       strictEqual(formatJson({ value: 123n }), `{"value":"123n"}`)
       strictEqual(formatJson([1n, 2n]), `["1n","2n"]`)
+    })
+
+    it("should serialize Error objects with name, message, and enumerable fields", () => {
+      strictEqual(formatJson(new Error("boom")), `{"name":"Error","message":"boom"}`)
+      strictEqual(formatJson({ error: new Error("boom") }), `{"error":{"name":"Error","message":"boom"}}`)
+
+      const nodeErr = Object.assign(new Error("ENOENT: no such file or directory"), {
+        errno: -2,
+        code: "ENOENT",
+        syscall: "open",
+        path: "/tmp/foo"
+      })
+      strictEqual(
+        formatJson(nodeErr),
+        `{"errno":-2,"code":"ENOENT","syscall":"open","path":"/tmp/foo","name":"Error","message":"ENOENT: no such file or directory"}`
+      )
+
+      const circularErr = new Error("boom")
+      ;(circularErr as any).self = circularErr
+      strictEqual(formatJson(circularErr), `{"name":"Error","message":"boom"}`)
+    })
+
+    it("should keep structured serialization for Errors that define toJSON", () => {
+      class Tagged extends Error {
+        toJSON() {
+          return { _tag: "Tagged", message: "boom" }
+        }
+      }
+      strictEqual(formatJson(new Tagged("boom")), `{"_tag":"Tagged","message":"boom"}`)
     })
 
     it("should redact sensitive data", () => {
@@ -353,6 +399,126 @@ describe("Formatter", () => {
       strictEqual(formatJson({ a: data }), `{"a":{"secret":"[REDACTED]"}}`)
       strictEqual(formatJson([data]), `[{"secret":"[REDACTED]"}]`)
       strictEqual(formatJson(date), `"[REDACTED]"`)
+    })
+
+    it("should redact sensitive data returned from a getter", () => {
+      strictEqual(
+        formatJson({
+          get a() {
+            return data
+          }
+        }),
+        `{"a":{"secret":"[REDACTED]"}}`
+      )
+    })
+
+    it("should read getters once with the original receiver", () => {
+      let receiverIsHolder = false
+      let reads = 0
+      const holder = {
+        get a() {
+          receiverIsHolder = Object.is(this, holder)
+          // unstable getter: a second read would leak the raw secret
+          return reads++ === 0 ? data : { secret: "my-secret-key" }
+        }
+      }
+
+      strictEqual(formatJson(holder), `{"a":{"secret":"[REDACTED]"}}`)
+      strictEqual(reads, 1)
+      assertTrue(receiverIsHolder)
+    })
+
+    it("should redact sensitive data returned from a frozen accessor", () => {
+      strictEqual(
+        formatJson(Object.freeze({
+          get a() {
+            return data
+          }
+        })),
+        `{"a":{"secret":"[REDACTED]"}}`
+      )
+    })
+
+    it("should redact sensitive data returned from a non-enumerable array index getter", () => {
+      const array: Array<unknown> = []
+      // JSON.stringify reads array indices regardless of enumerability
+      Object.defineProperty(array, "0", { get: () => data })
+      strictEqual(formatJson(array), `[{"secret":"[REDACTED]"}]`)
+    })
+
+    it("should ignore an own keys property on arrays with getters", () => {
+      const array: Array<unknown> = []
+      Object.defineProperty(array, "0", { get: () => 1 })
+      Object.defineProperty(array, "keys", { value: null })
+      strictEqual(formatJson(array), `[1]`)
+    })
+
+    it("should read getters after earlier siblings are serialized", () => {
+      let state = 0
+      strictEqual(
+        formatJson({
+          first: {
+            toJSON() {
+              state = 2
+              return 1
+            }
+          },
+          get second() {
+            return state
+          }
+        }),
+        `{"first":1,"second":2}`
+      )
+    })
+
+    it("should redact data properties replaced by an earlier getter", () => {
+      const value = {
+        get first() {
+          this.secret = data
+          return 1
+        },
+        secret: "my-secret-key" as unknown
+      }
+      strictEqual(formatJson(value), `{"first":1,"secret":{"secret":"[REDACTED]"}}`)
+    })
+
+    it("should keep a __proto__ getter as an own key", () => {
+      strictEqual(
+        formatJson({
+          get __proto__() {
+            return { keep: true }
+          }
+        }),
+        `{"__proto__":{"keep":true}}`
+      )
+    })
+
+    it("should format and redact getters on engines without Proxy", () => {
+      const descriptor = Object.getOwnPropertyDescriptor(globalThis, "Proxy")!
+      // Simulate an engine without Proxy (e.g. Chrome < 49)
+      delete (globalThis as { Proxy?: ProxyConstructor }).Proxy
+      try {
+        strictEqual(
+          formatJson({
+            nested: {
+              get a() {
+                return 1
+              }
+            }
+          }),
+          `{"nested":{"a":1}}`
+        )
+        strictEqual(
+          formatJson({
+            get a() {
+              return data
+            }
+          }),
+          `{"a":{"secret":"[REDACTED]"}}`
+        )
+      } finally {
+        Object.defineProperty(globalThis, "Proxy", descriptor)
+      }
     })
   })
 
@@ -598,13 +764,14 @@ describe("Formatter", () => {
     it.effect("distinguishes present undefined from absent input in forbidden", () =>
       Effect.gen(function*() {
         const getter = SchemaGetter.forbidden<never, undefined>(() => "not allowed")
-        const present = yield* getter.run(Option.some(undefined), { reportInput: true }).pipe(Effect.flip)
+        assertTrue(getter._tag === "TransformOptionalEffect")
+        const present = yield* getter.transform(Option.some(undefined), { reportInput: true }).pipe(Effect.flip)
         assertTrue(present._tag === "Forbidden")
         assertTrue(SchemaIssue.hasInput(present))
         strictEqual(present.input, undefined)
         strictEqual(formatIssue(present), "not allowed")
 
-        const absent = yield* getter.run(Option.none(), { reportInput: true }).pipe(Effect.flip)
+        const absent = yield* getter.transform(Option.none(), { reportInput: true }).pipe(Effect.flip)
         assertTrue(absent._tag === "Forbidden")
         assertFalse(SchemaIssue.hasInput(absent))
       }))

@@ -1,9 +1,10 @@
+import type * as Response from "effect/ai/Response"
 import * as Predicate from "effect/Predicate"
-import type * as Response from "effect/unstable/ai/Response"
 
 const finishReasonMap: Record<string, Response.FinishReason> = {
   end_turn: "stop",
   max_tokens: "length",
+  model_context_window_exceeded: "length",
   pause_turn: "pause",
   refusal: "content-filter",
   stop_sequence: "stop",

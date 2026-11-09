@@ -14,6 +14,17 @@ import * as fc from "fast-check"
 const arb = fc.bigInt({ min: 0n, max: 10n ** 40n }).map(ByteSize.bytes)
 
 describe("ByteSize", () => {
+  it("decodes strict inputs and validates numeric values at runtime", () => {
+    deepStrictEqual(ByteSize.fromInputUnsafe("4MB"), ByteSize.megabytes(4))
+    assertSome(ByteSize.fromInput("100kB"), ByteSize.kilobytes(100))
+    assertSome(ByteSize.fromInput("2 mebibytes"), ByteSize.mebibytes(2))
+    assertSome(ByteSize.fromInput("0B"), ByteSize.zero)
+    for (const input of [-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, -1n]) {
+      assertNone(ByteSize.fromInput(input))
+      throws(() => ByteSize.fromInputUnsafe(input))
+    }
+  })
+
   it("constructs exact decimal and binary units", () => {
     const decimal = [
       ByteSize.kilobytes,
@@ -53,8 +64,14 @@ describe("ByteSize", () => {
     }
     throws(() => ByteSize.bytes(-1n))
     deepStrictEqual(ByteSize.kilobytes(1.5), ByteSize.bytes(1500))
+    deepStrictEqual(ByteSize.megabytes(2.01), ByteSize.bytes(2_010_000))
+    deepStrictEqual(ByteSize.quettabytes(4e-15), ByteSize.bytes(4_000_000_000_000_000))
+    deepStrictEqual(ByteSize.petabytes(8.00000000000001), ByteSize.bytes(8_000_000_000_000_010))
     deepStrictEqual(ByteSize.kibibytes(0.5), ByteSize.bytes(512))
     throws(() => ByteSize.kibibytes(0.1))
+    throws(() => ByteSize.kilobytes(1.0005))
+    throws(() => ByteSize.yottabytes(9.718626485371681e-10))
+    throws(() => ByteSize.petabytes(9.007199254740993))
   })
 
   it("parses strict SI and IEC strings exactly", () => {
@@ -70,7 +87,8 @@ describe("ByteSize", () => {
       ["  9007199254740993 B  ", 9_007_199_254_740_993n]
     ]
     for (const [input, expected] of cases) {
-      deepStrictEqual(ByteSize.fromInputUnsafe(input), ByteSize.bytes(expected))
+      deepStrictEqual(ByteSize.fromStringUnsafe(input), ByteSize.bytes(expected))
+      assertSome(ByteSize.fromString(input), ByteSize.bytes(expected))
     }
   })
 
@@ -91,7 +109,10 @@ describe("ByteSize", () => {
       "1 b",
       "1 MiB trailing"
     ]
-    for (const input of invalid) assertNone(ByteSize.fromInput(input))
+    for (const input of invalid) {
+      assertNone(ByteSize.fromString(input))
+      throws(() => ByteSize.fromStringUnsafe(input))
+    }
   })
 
   it("uses a branded bigint representation", () => {
@@ -148,7 +169,7 @@ describe("ByteSize", () => {
 
   it("roundtrips canonical strings", () => {
     fc.assert(fc.property(arb, (value) => {
-      deepStrictEqual(ByteSize.fromInputUnsafe(`${value} B`), value)
+      deepStrictEqual(ByteSize.fromStringUnsafe(`${value} B`), value)
     }))
   })
 
@@ -170,7 +191,7 @@ describe("ByteSize", () => {
 
   it("is total for arbitrary strings", () => {
     fc.assert(fc.property(fc.string(), (input) => {
-      ByteSize.fromInput(input)
+      ByteSize.fromString(input)
     }))
   })
 })

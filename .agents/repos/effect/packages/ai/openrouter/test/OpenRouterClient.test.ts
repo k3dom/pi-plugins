@@ -1,10 +1,41 @@
 import { OpenRouterClient } from "@effect/ai-openrouter"
 import * as Errors from "@effect/ai-openrouter/internal/errors"
 import { assert, describe, it } from "@effect/vitest"
-import { Context, Effect, Layer, Redacted, type Schema } from "effect"
-import { HttpClient, type HttpClientError, type HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { Cause, Context, Effect, Exit, Layer, Option, Redacted, type Schema } from "effect"
+import { HttpClient, type HttpClientError, type HttpClientRequest, HttpClientResponse } from "effect/http"
 
 describe("OpenRouterClient", () => {
+  it.effect("rejects unserializable bigint decision state with a typed error before making an HTTP call", () =>
+    Effect.gen(function*() {
+      const client = yield* OpenRouterClient.OpenRouterClient
+      const exit = yield* client.createDecisions({
+        model: "test-model",
+        state: { n: 1n },
+        questions: {
+          urgent: {
+            type: "noul",
+            instructions: "Is this urgent?",
+            criteria: { false: "Not urgent", true: "Urgent" }
+          }
+        }
+      }).pipe(Effect.exit)
+
+      assert.deepStrictEqual(yield* MockHttpClient.requests, [])
+      assert.isTrue(Exit.isFailure(exit))
+      if (!Exit.isFailure(exit)) {
+        return yield* Effect.die(new Error("Expected serialization to fail"))
+      }
+      assert.isFalse(Cause.hasDies(exit.cause))
+      const error = Option.getOrThrow(Cause.findErrorOption(exit.cause))
+      assert.strictEqual(error._tag, "AiError")
+      assert.strictEqual(error.module, "OpenRouterClient")
+      assert.strictEqual(error.method, "createDecisions")
+      assert.strictEqual(error.reason._tag, "InvalidRequestError")
+    }).pipe(Effect.provide(makeTestLayer({
+      _tag: "Json",
+      body: {}
+    }))))
+
   it.effect("redacts the API key in AI error context", () =>
     Effect.gen(function*() {
       const client = yield* OpenRouterClient.OpenRouterClient
@@ -15,12 +46,9 @@ describe("OpenRouterClient", () => {
       }).pipe(Effect.flip)
 
       assert.strictEqual(result.reason._tag, "InvalidRequestError")
-      if (result.reason._tag !== "InvalidRequestError" || result.reason.http === undefined) {
-        return yield* Effect.die(new Error("Expected InvalidRequestError with HTTP context"))
-      }
       const requests = yield* MockHttpClient.requests
       assert.include(requests[0]?.url, "/chat/completions")
-      assert.strictEqual(String(result.reason.http.request.headers["authorization"]), "<redacted>")
+      assert.notInclude(JSON.stringify(result), "sk-test-key")
     }).pipe(Effect.provide(makeTestLayer({
       _tag: "Json",
       status: 400,
@@ -66,11 +94,14 @@ describe("OpenRouterClient", () => {
   it("preserves and truncates a fallback HTTP response", () => {
     const body = `${"a".repeat(200)}b`
     const reason = Errors.mapStatusCodeToReason({
+      now: 0,
       status: 400,
       headers: {},
       message: undefined,
       metadata: { errorCode: null, errorType: null, requestId: null },
-      http: makeHttpContext("https://openrouter.ai/api/v1/chat/completions", body)
+      method: "POST",
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      http: { body }
     })
 
     assert.strictEqual(reason._tag, "InvalidRequestError")
@@ -190,14 +221,3 @@ const makeResponse = (
     })
   )
 }
-
-const makeHttpContext = (url: string, body: string) => ({
-  request: {
-    method: "POST" as const,
-    url,
-    urlParams: [],
-    hash: undefined,
-    headers: {}
-  },
-  body
-})
