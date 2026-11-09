@@ -3,12 +3,7 @@ import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { ToolNamespace } from "../src/core/extensions/types.ts";
 import { createCodemodeDescription } from "../src/extensions/codemode/tool.ts";
-import {
-	Bm25Ranker,
-	createToolSearchDescription,
-	createToolSearchDocument,
-	tokenize,
-} from "../src/extensions/tool-search/tool.ts";
+import { Bm25Ranker, createToolSearchDocument, tokenize } from "../src/extensions/tool-search/tool.ts";
 
 function tool(name: string, description: string, properties: Record<string, unknown> = {}): AgentTool {
 	return {
@@ -24,6 +19,40 @@ describe("tokenize", () => {
 	it("splits camelCase and snake_case, drops stop words, and folds plurals", () => {
 		expect(tokenize("listIssues for the GitHub_repo")).toEqual(["list", "issue", "git", "hub", "repo"]);
 		expect(tokenize("searches queries HTTPServer")).toEqual(["search", "query", "http", "server"]);
+		expect(tokenize("repo.issues/search:queries")).toEqual(["repo", "issue", "search", "query"]);
+	});
+
+	it.each([
+		["搜索仓库问题", ["搜索", "仓库", "问题"]],
+		["文書を検索", ["文書", "を", "検索"]],
+		["문서 검색", ["문서", "검색"]],
+		["ค้นหาเอกสาร", ["ค้นหา", "เอกสาร"]],
+		["Поиск документов", ["поиск", "документов"]],
+		["البحث عن الملفات", ["البحث", "عن", "الملفات"]],
+		["फ़ाइल खोजें", ["फ़ाइल", "खोजें"]],
+		["Éléments cafés", ["éléments", "cafés"]],
+	])("segments Unicode words in %s", (text, expected) => {
+		expect(tokenize(text)).toEqual(expected);
+	});
+
+	it("preserves non-ASCII words and splits mixed-language identifiers", () => {
+		expect(tokenize("搜索GitHub_repoIssues résumé cafés")).toEqual([
+			"搜索",
+			"git",
+			"hub",
+			"repo",
+			"issue",
+			"résumé",
+			"cafés",
+		]);
+	});
+
+	it("normalizes canonically equivalent Unicode text", () => {
+		expect(tokenize("CAFÉ cafe\u0301")).toEqual(["café", "café"]);
+	});
+
+	it("ignores whitespace, punctuation, and emoji", () => {
+		expect(tokenize(" \t，。!? 😀 ")).toEqual([]);
 	});
 });
 
@@ -50,12 +79,109 @@ describe("Bm25Ranker", () => {
 		expect(ranker.rank("closed", documents, 8).map((match) => match.name)).toEqual(["mcp__github__list_issues"]);
 	});
 
+	it.each([
+		["搜索仓库问题", "问题"],
+		["文書を検索", "検索"],
+		["문서 검색", "검색"],
+		["ค้นหาเอกสาร", "เอกสาร"],
+		["Поиск документов", "документов"],
+		["البحث عن الملفات", "الملفات"],
+		["फ़ाइल खोजें", "खोजें"],
+		["Rechercher un café", "cafe\u0301"],
+	])("matches Unicode queries against %s", (description, query) => {
+		const localized = createToolSearchDocument(tool("localized", description));
+		expect(new Bm25Ranker().rank(query, [...documents, localized], 8)).toEqual([
+			{ name: "localized", score: expect.any(Number) },
+		]);
+	});
+
 	it("returns nothing for unknown or empty queries", () => {
 		const ranker = new Bm25Ranker();
 		expect(ranker.rank("kubernetes", documents, 8)).toEqual([]);
 		expect(ranker.rank("the", documents, 8)).toEqual([]);
 		// Known v1 limit: no synonyms, so "tickets" does not find "issues".
 		expect(ranker.rank("tickets", documents, 8)).toEqual([]);
+	});
+
+	// https://github.com/earendil-works/pi/issues/11331
+	it("ranks a tool first when the query is its name", () => {
+		const named = [
+			tool("mcp__app__queue_read", "Read a queued message of this thread."),
+			tool(
+				"mcp__dev-app__thread_read",
+				"Read durable state and a paginated timeline from any thread. The default view returns user messages, assistant messages and plans. Continue with afterPosition until hasMore is false.",
+			),
+		].map((entry) => createToolSearchDocument(entry));
+		const ranker = new Bm25Ranker();
+		for (const query of [
+			"thread_read",
+			"dev_app__thread_read",
+			"mcp__dev-app__thread_read",
+			"Thread_Read",
+			"thread read",
+		]) {
+			expect(ranker.rank(query, named, 1).map((match) => match.name)).toEqual(["mcp__dev-app__thread_read"]);
+		}
+		// Partial names still rank by BM25.
+		expect(ranker.rank("read", named, 1).map((match) => match.name)).toEqual(["mcp__app__queue_read"]);
+	});
+
+	// https://github.com/earendil-works/pi/issues/11331
+	it("ranks a name match above mentions in descriptions", () => {
+		const documents = [
+			tool("mcp__ci__status", "Deploy status: last deploy, deploy log, deploy errors."),
+			tool(
+				"mcp__ci__deploy_release",
+				"Start a release of the current branch to an environment, run the migrations, switch traffic over, and wait until the new version is live and healthy.",
+			),
+		].map((entry) => createToolSearchDocument(entry));
+		expect(new Bm25Ranker().rank("deploy", documents, 1).map((match) => match.name)).toEqual([
+			"mcp__ci__deploy_release",
+		]);
+	});
+
+	// https://github.com/earendil-works/pi/issues/11331
+	it("ranks a tool first when the query contains its whole name", () => {
+		const peekaboo = { name: "mcp__peekaboo", instructions: "Peekaboo controls macOS apps by app name." };
+		const documents = [
+			tool("mcp__peekaboo__see", "Capture the app window of the peekaboo app and describe the app."),
+			tool("mcp__peekaboo__menu", "Click a menu item of an app."),
+			tool(
+				"mcp__peekaboo__app",
+				"Launch, quit, relaunch, focus, hide, or switch applications. Targets an application by name, bundle identifier, or process ID, and can wait until it is ready.",
+			),
+			tool("mcp__app__queue_read", "Read a queued message of this thread."),
+			tool(
+				"mcp__dev-app__thread_read",
+				"Read durable state and a paginated timeline from any thread. The default view returns user messages, assistant messages and plans.",
+			),
+		].map((entry) =>
+			createToolSearchDocument(entry, entry.name.startsWith("mcp__peekaboo__") ? peekaboo : undefined),
+		);
+		const ranker = new Bm25Ranker();
+		const first = (query: string) => ranker.rank(query, documents, 1).map((match) => match.name);
+		expect(first("peekaboo app")).toEqual(["mcp__peekaboo__app"]);
+		expect(first("open the peekaboo app tool")).toEqual(["mcp__peekaboo__app"]);
+		expect(first("read thread_read state")).toEqual(["mcp__dev-app__thread_read"]);
+		// Without the whole name, mentions in descriptions decide.
+		expect(first("describe window")).toEqual(["mcp__peekaboo__see"]);
+	});
+
+	// https://github.com/earendil-works/pi/issues/11331
+	it("ranks a tool matching more query terms first, whatever the scores", () => {
+		const documents = [
+			tool("mcp__peekaboo__app", "Launch, quit, focus, or switch applications by name or bundle identifier."),
+			tool("mcp__peekaboo__see", "Capture the app window and describe the UI elements of the app."),
+			tool("mcp__peekaboo__window", "Move, resize, or close a window of an app."),
+			tool("mcp__peekaboo__image", "Take a screenshot of the screen, an app, or a window."),
+		].map((entry) => createToolSearchDocument(entry));
+		const ranker = new Bm25Ranker();
+		const first = (query: string) => ranker.rank(query, documents, 1).map((match) => match.name);
+		// `window` and `app` are whole names, but each covers one of the two terms.
+		expect(first("screenshot window")).toEqual(["mcp__peekaboo__image"]);
+		expect(first("describe app")).toEqual(["mcp__peekaboo__see"]);
+		// An exact name still ranks first.
+		expect(first("window")).toEqual(["mcp__peekaboo__window"]);
 	});
 
 	it("includes the namespace in the search text", () => {
@@ -66,17 +192,6 @@ describe("Bm25Ranker", () => {
 		expect(new Bm25Ranker().rank("kubernetes", [document], 8)).toEqual([
 			{ name: "mcp__x__run", score: expect.any(Number) },
 		]);
-	});
-});
-
-describe("tool_search description", () => {
-	it("lists the sources", () => {
-		expect(
-			createToolSearchDescription([{ name: "mcp__docs", description: "Docs server\nmore" }, { name: "mcp__x" }]),
-		).toBe(
-			"# Tool discovery\n\nSearches over deferred tool metadata with BM25 and exposes matching tools for the next model call.\n\nYou have access to tools from the following sources:\n- mcp__docs: Docs server\n- mcp__x\n\nSome of the tools may not have been provided to you upfront, and you should use this tool (`tool_search`) to search for the required tools. For MCP tool discovery, always use `tool_search`.",
-		);
-		expect(createToolSearchDescription()).toContain("None currently enabled.");
 	});
 });
 
@@ -92,41 +207,51 @@ describe("codemode description catalog", () => {
 
 	it("lists everything without a budget", () => {
 		const description = createCodemodeDescription(all, { namespaces });
-		expect(description).toContain("Nested tools: COMPLETE list (6 tools).");
-		expect(description).toContain("## mcp__github (3 tools)\nGitHub server");
-		expect(description).toContain("## mcp__docs (2 tools)\n\n### `mcp__docs");
-		expect(description).not.toContain("Some deferred nested tools");
+		expect(description).toContain("Nested tools:");
+		expect(description).toContain("## mcp__github\nGitHub server");
+		expect(description).toContain("## mcp__docs\n\n### `mcp__docs");
+		// The search guidance is always there, so tools that appear later do not change it.
+		expect(description).toContain("find unlisted tools, such as MCP tools");
+		// #10555: the lookup helpers are async; without `await` scripts serialize the promise as {}.
+		expect(description).toContain("`await searchTools(query, { limit?, namespace? })`");
+		expect(description).toContain("`await describeTool(name)`");
+		expect(description).toContain("`await describeNamespace(name)`");
 	});
 
 	it("fills the budget round-robin, cheapest first, and says what is missing", () => {
 		// Each small section costs about 42 tokens: one tool per group, then one more.
 		const description = createCodemodeDescription(all, { namespaces, inlineBudget: 170 });
-		expect(description).toContain("Nested tools: PARTIAL - 4 of 6 shown.");
 		expect(description).toContain("### `read_notes`");
-		expect(description).toContain("## mcp__docs (2 tools, 1 shown)");
+		expect(description).toContain("## mcp__docs (some tools not listed)");
 		expect(description).toContain("### `mcp__docs__search`");
 		expect(description).not.toContain("### `mcp__docs__long`");
-		expect(description).toContain("## mcp__github (3 tools, 2 shown)");
-		expect(description).toContain("To find one, call `await searchTools(query)`");
+		expect(description).toContain("## mcp__github (some tools not listed)");
+		expect(description).toContain("find unlisted tools, such as MCP tools");
 		// Deterministic: the same input gives the same description.
 		expect(createCodemodeDescription(all, { namespaces, inlineBudget: 170 })).toBe(description);
 	});
 
-	it("never lists deferred tools and still counts them", () => {
-		const description = createCodemodeDescription(all, {
-			namespaces,
-			deferred: new Set(github.map((entry) => entry.name)),
+	it("leaves deferred tools and their namespaces out entirely", () => {
+		const deferred = new Set(github.map((entry) => entry.name));
+		const description = createCodemodeDescription(all, { namespaces, deferred });
+		expect(description).not.toContain("mcp__github");
+		// Deferred tools, such as those of a server that connects later, do not change the description.
+		expect(description).toBe(createCodemodeDescription([plain, ...docs], { namespaces }));
+	});
+
+	it("leaves namespace instructions out", () => {
+		const description = createCodemodeDescription(github, {
+			namespaces: new Map(
+				github.map((entry) => [entry.name, { name: "mcp__github", instructions: "Long usage guide." }] as const),
+			),
 		});
-		expect(description).toContain("Nested tools: PARTIAL - 3 of 6 shown.");
-		expect(description).toContain("## mcp__github (3 tools, none shown)\nGitHub server");
-		expect(description).not.toContain("### `mcp__github__a`");
-		expect(description).toContain("Some deferred nested tools may be omitted from this description.");
+		expect(description).toContain("## mcp__github\n\n### `mcp__github__a`");
+		expect(description).not.toContain("Long usage guide.");
 	});
 
 	it("lists only namespaces with a zero budget", () => {
 		const description = createCodemodeDescription(all, { namespaces, inlineBudget: 0 });
-		expect(description).toContain("Nested tools: PARTIAL - 0 of 6 shown.");
-		expect(description).toContain("## mcp__docs (2 tools, none shown)");
+		expect(description).toContain("## mcp__docs (tools not listed)");
 		expect(description).not.toContain("codemode tool declaration:");
 	});
 });
