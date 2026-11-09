@@ -74,6 +74,30 @@ pi --model claude-cli/claude-sonnet-5-5
 
 The provider offers the same Claude models as pi's built-in `anthropic` provider.
 
+To use a Claude model before pi's catalog has it, add it to the `claude-cli` provider
+in `~/.pi/agent/models.json`, with the fields of a similar model in pi's catalog:
+
+```json
+{
+  "providers": {
+    "claude-cli": {
+      "models": [
+        {
+          "id": "claude-fable-5-2",
+          "name": "Claude Fable 5.2",
+          "reasoning": true,
+          "thinkingLevelMap": { "off": null, "xhigh": "xhigh", "max": "max" },
+          "input": ["text", "image"],
+          "cost": { "input": 8, "output": 40, "cacheRead": 0.2, "cacheWrite": 10 },
+          "contextWindow": 1000000,
+          "maxTokens": 128000
+        }
+      ]
+    }
+  }
+}
+```
+
 ## Usage credits
 
 When Claude Code reports that a response was charged to

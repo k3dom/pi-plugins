@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  InMemoryCredentialStore,
   isRetryableAssistantError,
   normalizeContext,
   type Api,
@@ -14,6 +15,13 @@ import {
   type SimpleStreamOptions,
 } from '@earendil-works/pi-ai'
 import { getBuiltinModel } from '@earendil-works/pi-ai/providers/all'
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+} from '@earendil-works/pi-coding-agent'
 import * as NodeServices from '@effect/platform-node/NodeServices'
 import {
   afterAll,
@@ -28,6 +36,7 @@ import {
 import { deepStrictEqual } from '@effect/vitest/utils'
 import { Array, Effect, Layer, Number, Option, pipe, Stream, String } from 'effect'
 import * as ClaudeCli from '../src/claude-cli'
+import extension from '../src/index'
 
 type Reply = {
   lines: Array<unknown>
@@ -635,5 +644,73 @@ describe('stream', () => {
       assert.sameMembers(await pids('stopped'), await pids('started')),
     )
     assert.lengthOf(await pids('started'), 4)
+  })
+})
+
+describe('provider', () => {
+  it('offers a model that models.json adds and sends its requests through Claude Code', async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), 'claude-cli-agent-'))
+    await writeFile(
+      join(agentDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          'claude-cli': {
+            models: [
+              {
+                id: 'claude-next-1',
+                name: 'Claude Next 1',
+                reasoning: true,
+                input: ['text'],
+                cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+                contextWindow: 200_000,
+                maxTokens: 64_000,
+              },
+            ],
+          },
+        },
+      }),
+    )
+    try {
+      const modelRuntime = await ModelRuntime.create({
+        credentials: new InMemoryCredentialStore(),
+        modelsPath: join(agentDir, 'models.json'),
+        refreshOnCreate: false,
+      })
+      const settingsManager = SettingsManager.create(agentDir, agentDir)
+      const resourceLoader = new DefaultResourceLoader({
+        cwd: agentDir,
+        agentDir,
+        settingsManager,
+        extensionFactories: [extension],
+      })
+      await resourceLoader.reload()
+      await createAgentSession({
+        cwd: agentDir,
+        agentDir,
+        model,
+        settingsManager,
+        sessionManager: SessionManager.inMemory(),
+        modelRuntime,
+        resourceLoader,
+      })
+      const added = modelRuntime.getModel('claude-cli', 'claude-next-1')
+      process.env['FAKE_CLAUDE_REPLIES'] = JSON.stringify([reply('msg_1', 'Hi')])
+
+      assert.isDefined(added)
+      assert.isDefined(modelRuntime.getModel('claude-cli', 'claude-haiku-4-5'))
+      const message = await modelRuntime.completeSimple(added!, {
+        messages: [user('Hi')],
+      })
+      const received: { args: Array<string> } = JSON.parse(
+        await readFile(log, 'utf8'),
+      )
+      expect(message).toMatchObject({
+        stopReason: 'stop',
+        content: [{ type: 'text', text: 'Hi' }],
+      })
+      assert.include(received.args.join(' '), '--model claude-next-1')
+    } finally {
+      await rm(agentDir, { recursive: true, force: true })
+    }
   })
 })
