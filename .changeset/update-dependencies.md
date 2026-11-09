@@ -12,6 +12,4 @@
 '@pi-plugins/websearch': patch
 ---
 
-Bundle Effect 4.1.2, the first stable Effect 4 line, instead of 4.0.0-rc.115, and build
-against pi 1.5.0. `webfetch` now depends on defuddle 0.19.6, linkedom 0.18.15 and
-turndown 7.2.5.
+Bundle Effect 4.1.2 instead of 4.0.0-rc.115 and build against pi 1.5.0.
