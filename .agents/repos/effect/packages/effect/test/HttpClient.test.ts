@@ -1,6 +1,5 @@
 import { assert, expect, it } from "@effect/vitest"
 import { Context, Effect, Layer, Schema, Stream, Struct } from "effect"
-import { TestClock } from "effect/testing"
 import {
   FetchHttpClient,
   HttpClient,
@@ -10,7 +9,8 @@ import {
   HttpServer,
   HttpServerRequest,
   HttpServerResponse
-} from "effect/unstable/http"
+} from "effect/http"
+import { TestClock } from "effect/testing"
 
 const Todo = Schema.Struct({
   userId: Schema.Number,
@@ -126,6 +126,20 @@ const TestServerLayer = Layer.unwrap(Effect.promise(() =>
         assert.strictEqual(new URL(response.url).hash, "")
         expect(yield* response.text).toBe("test")
       }).pipe(Effect.provide(testLayer)))
+
+    it.effect("followRedirects with manual fetch redirects", () =>
+      Effect.gen(function*() {
+        const client = (yield* HttpClient.HttpClient).pipe(
+          HttpClient.followRedirects()
+        )
+        const response = yield* client.get("/redirect")
+        expect(new URL(response.request.url).pathname).toBe("/")
+        assert.strictEqual(new URL(response.url).search, "?value=a%23b")
+        expect(yield* response.text).toBe("test")
+      }).pipe(
+        Effect.provide(testLayer),
+        Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" })
+      ))
 
     it.effect("stream", () =>
       Effect.gen(function*() {

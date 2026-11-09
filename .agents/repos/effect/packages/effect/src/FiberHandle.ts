@@ -8,10 +8,10 @@
  * for setting, reading, clearing, and running fibers, and operations for joining
  * the current fiber or waiting until the handle is empty.
  *
+ * @stability stable
  * @since 2.0.0
  */
 import * as Cause from "./Cause.ts"
-import type { Context } from "./Context.ts"
 import * as Deferred from "./Deferred.ts"
 import * as Effect from "./Effect.ts"
 import * as Exit from "./Exit.ts"
@@ -20,6 +20,7 @@ import * as Filter from "./Filter.ts"
 import { dual } from "./Function.ts"
 import type * as Inspectable from "./Inspectable.ts"
 import { PipeInspectableProto } from "./internal/core.ts"
+import * as internalEffect from "./internal/effect.ts"
 import * as Option from "./Option.ts"
 import type { Pipeable } from "./Pipeable.ts"
 import * as Predicate from "./Predicate.ts"
@@ -51,6 +52,7 @@ const TypeId = "~effect/FiberHandle"
  * actual // => "hello"
  * ```
  *
+ * @stability stable
  * @category models
  * @since 2.0.0
  */
@@ -60,6 +62,8 @@ export interface FiberHandle<out A = unknown, out E = unknown> extends Pipeable,
   state: {
     readonly _tag: "Open"
     fiber: Fiber.Fiber<A, E> | undefined
+    /** Every fiber the handle still owns: the current one plus replaced fibers that are still interrupting. */
+    readonly fibers: Set<Fiber.Fiber<A, E>>
   } | {
     readonly _tag: "Closed"
   }
@@ -84,6 +88,7 @@ export interface FiberHandle<out A = unknown, out E = unknown> extends Pipeable,
  * actual // => [true, false]
  * ```
  *
+ * @stability stable
  * @category guards
  * @since 2.0.0
  */
@@ -102,7 +107,7 @@ const Proto = {
 
 const makeUnsafe = <A = unknown, E = unknown>(): FiberHandle<A, E> => {
   const self = Object.create(Proto)
-  self.state = { _tag: "Open", fiber: undefined }
+  self.state = { _tag: "Open", fiber: undefined, fibers: new Set() }
   self.deferred = Deferred.makeUnsafe()
   return self
 }
@@ -140,6 +145,7 @@ const makeUnsafe = <A = unknown, E = unknown>(): FiberHandle<A, E> => {
  * actual // => true
  * ```
  *
+ * @stability stable
  * @category constructors
  * @since 2.0.0
  */
@@ -150,12 +156,7 @@ export const make = <A = unknown, E = unknown>(): Effect.Effect<FiberHandle<A, E
       const state = handle.state
       if (state._tag === "Closed") return Effect.void
       handle.state = { _tag: "Closed" }
-      return state.fiber ?
-        Deferred.into(
-          Effect.asVoid(Fiber.interruptAs(state.fiber, internalFiberId)),
-          handle.deferred
-        ) :
-        Deferred.done(handle.deferred, Exit.void)
+      return Deferred.into(Fiber.interruptAllAs(state.fibers, internalFiberId), handle.deferred)
     }
   )
 
@@ -190,6 +191,7 @@ export const make = <A = unknown, E = unknown>(): Effect.Effect<FiberHandle<A, E
  * actual // => [Exit.failCause(Cause.interrupt(-1)), Exit.succeed("second")]
  * ```
  *
+ * @stability stable
  * @category constructors
  * @since 2.0.0
  */
@@ -245,6 +247,7 @@ export const makeRuntime = <R, E = unknown, A = unknown>(): Effect.Effect<
  * actual // => "hello"
  * ```
  *
+ * @stability stable
  * @category constructors
  * @since 3.13.0
  */
@@ -301,6 +304,7 @@ const isInternalInterruption = Filter.toPredicate(Filter.compose(
  * actual // => "hello"
  * ```
  *
+ * @stability stable
  * @category combinators
  * @since 4.0.0
  */
@@ -331,21 +335,28 @@ export const setUnsafe: {
   if (self.state._tag === "Closed") {
     fiber.interruptUnsafe(internalFiberId)
     return
-  } else if (self.state.fiber !== undefined) {
-    if (self.state.fiber === fiber) {
+  }
+
+  const previous = self.state.fiber
+  if (previous !== undefined) {
+    if (previous === fiber) {
       return
     } else if (options?.onlyIfMissing === true) {
       fiber.interruptUnsafe(internalFiberId)
       return
     }
-    self.state.fiber.interruptUnsafe(internalFiberId)
-    self.state.fiber = undefined
   }
 
+  // Install the replacement before interruption can re-enter the handle through a finalizer.
   self.state.fiber = fiber
+  self.state.fibers.add(fiber)
+  previous?.interruptUnsafe(internalFiberId)
   fiber.addObserver((exit) => {
-    if (self.state._tag === "Open" && fiber === self.state.fiber) {
-      self.state.fiber = undefined
+    if (self.state._tag === "Open") {
+      self.state.fibers.delete(fiber)
+      if (fiber === self.state.fiber) {
+        self.state.fiber = undefined
+      }
     }
     if (
       Exit.isFailure(exit) &&
@@ -389,6 +400,7 @@ export const setUnsafe: {
  * actual // => "hello"
  * ```
  *
+ * @stability stable
  * @category combinators
  * @since 2.0.0
  */
@@ -452,6 +464,7 @@ export const set: {
  * actual // => [Option.none(), Option.some(true)]
  * ```
  *
+ * @stability stable
  * @category combinators
  * @since 4.0.0
  */
@@ -482,6 +495,7 @@ export function getUnsafe<A, E>(self: FiberHandle<A, E>): Option.Option<Fiber.Fi
  * actual // => Option.some(true)
  * ```
  *
+ * @stability stable
  * @category combinators
  * @since 2.0.0
  */
@@ -515,6 +529,7 @@ export function get<A, E>(self: FiberHandle<A, E>): Effect.Effect<Option.Option<
  * actual // => Option.none()
  * ```
  *
+ * @stability stable
  * @category combinators
  * @since 2.0.0
  */
@@ -552,6 +567,8 @@ const constInterruptedFiber = (function() {
  * The handle manages only one fiber: running a new effect interrupts the
  * previous fiber unless `onlyIfMissing` is set. When the managed fiber
  * completes, it is removed from the handle.
+ * Set `startImmediately: false` to defer startup. By default, the effect starts
+ * immediately.
  *
  * **Example** (Running an effect in a fiber handle)
  *
@@ -575,6 +592,7 @@ const constInterruptedFiber = (function() {
  * actual // => ["hello", "world"]
  * ```
  *
+ * @stability stable
  * @category combinators
  * @since 2.0.0
  */
@@ -611,6 +629,7 @@ const runImpl = <A, E, R, XE extends E, XA extends A>(
   self: FiberHandle<A, E>,
   effect: Effect.Effect<XA, XE, R>,
   options?: {
+    readonly startImmediately?: boolean | undefined
     readonly onlyIfMissing?: boolean | undefined
   }
 ): Effect.Effect<Fiber.Fiber<XA, XE>, never, R> =>
@@ -620,7 +639,12 @@ const runImpl = <A, E, R, XE extends E, XA extends A>(
     } else if (self.state.fiber !== undefined && options?.onlyIfMissing === true) {
       return Effect.sync(constInterruptedFiber)
     }
-    const fiber = Effect.runForkWith(parent.context as Context<R>)(effect)
+    const fiber: Fiber.Fiber<XA, XE> = internalEffect.forkUnsafe(
+      parent,
+      effect,
+      options?.startImmediately ?? true,
+      true
+    )
     setUnsafe(self, fiber, options)
     return Effect.succeed(fiber)
   })
@@ -664,6 +688,7 @@ const runImpl = <A, E, R, XE extends E, XA extends A>(
  * actual // => 0
  * ```
  *
+ * @stability stable
  * @category combinators
  * @since 2.0.0
  */
@@ -739,6 +764,7 @@ export const runtime: <A, E>(
  * actual // => "hello"
  * ```
  *
+ * @stability stable
  * @category combinators
  * @since 3.13.0
  */
@@ -810,6 +836,7 @@ export const runtimePromise = <A, E>(self: FiberHandle<A, E>): <R = never>() => 
  * actual // => Exit.fail("error")
  * ```
  *
+ * @stability stable
  * @category combinators
  * @since 2.0.0
  */
@@ -839,6 +866,7 @@ export const join = <A, E>(self: FiberHandle<A, E>): Effect.Effect<void, E> =>
  * actual // => Option.none()
  * ```
  *
+ * @stability stable
  * @category combinators
  * @since 3.13.0
  */

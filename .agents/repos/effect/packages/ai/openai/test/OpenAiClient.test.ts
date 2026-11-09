@@ -4,13 +4,15 @@ import * as Errors from "@effect/ai-openai/internal/errors"
 import * as OpenAiClient from "@effect/ai-openai/OpenAiClient"
 import * as OpenAiClientGenerated from "@effect/ai-openai/OpenAiClientGenerated"
 import * as OpenAiConfig from "@effect/ai-openai/OpenAiConfig"
+import * as OpenAiLanguageModel from "@effect/ai-openai/OpenAiLanguageModel"
 import { assert, describe, it } from "@effect/vitest"
-import { Config, ConfigProvider, Context, Effect, Layer, Redacted, Schema, Stream } from "effect"
-import * as HttpClient from "effect/unstable/http/HttpClient"
-import * as HttpClientError from "effect/unstable/http/HttpClientError"
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
-import * as Socket from "effect/unstable/socket/Socket"
+import { Config, ConfigProvider, Context, Duration, Effect, Layer, Redacted, Schema, Stream } from "effect"
+import { Chat } from "effect/ai"
+import * as HttpClient from "effect/http/HttpClient"
+import * as HttpClientError from "effect/http/HttpClientError"
+import * as HttpClientRequest from "effect/http/HttpClientRequest"
+import * as HttpClientResponse from "effect/http/HttpClientResponse"
+import * as Socket from "effect/socket/Socket"
 import { WS } from "vitest-websocket-mock"
 
 describe("OpenAiClient", () => {
@@ -233,13 +235,10 @@ describe("OpenAiClient", () => {
         }).pipe(Effect.flip)
 
         assert.strictEqual(result.reason._tag, "InvalidRequestError")
-        if (result.reason._tag !== "InvalidRequestError" || result.reason.http === undefined) {
-          return yield* Effect.die(new Error("Expected InvalidRequestError with HTTP context"))
-        }
-        const headers = result.reason.http.request.headers
-        assert.strictEqual(String(headers["authorization"]), "<redacted>")
-        assert.strictEqual(String(headers["openai-organization"]), "<redacted>")
-        assert.strictEqual(String(headers["openai-project"]), "<redacted>")
+        const output = JSON.stringify(result)
+        assert.notInclude(output, "test-key")
+        assert.notInclude(output, "org-secret")
+        assert.notInclude(output, "proj-secret")
       }).pipe(Effect.provide(makeTestLayer({
         apiKey: Redacted.make("test-key"),
         organizationId: Redacted.make("org-secret"),
@@ -252,8 +251,9 @@ describe("OpenAiClient", () => {
   })
 
   describe("error mapping", () => {
-    it.effect("maps TransportError to NetworkError reason", () =>
-      Effect.gen(function*() {
+    it.effect("maps TransportError to NetworkError reason", () => {
+      const failures: Array<HttpClientError.HttpClientError> = []
+      return Effect.gen(function*() {
         const client = yield* OpenAiClient.make({
           apiKey: Redacted.make("test-key")
         })
@@ -265,7 +265,26 @@ describe("OpenAiClient", () => {
         assert.strictEqual(result.module, "OpenAiClient")
         assert.strictEqual(result.method, "createResponse")
         assert.strictEqual(result.reason._tag, "NetworkError")
-      }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient, makeTransportErrorHttpClient()))))
+        if (result.reason._tag !== "NetworkError") return
+        assert.strictEqual(result.reason.cause, failures[0])
+        assert.isUndefined(result.reason.description)
+      }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient, makeTransportErrorHttpClient(failures))))
+    })
+
+    it.effect("keeps the HttpClientError as the NetworkError cause when it has no cause", () => {
+      const failures: Array<HttpClientError.HttpClientError> = []
+      return Effect.gen(function*() {
+        const client = yield* OpenAiClient.make({
+          apiKey: Redacted.make("test-key")
+        })
+        const result = yield* client.createResponse({ model: "gpt-4o", input: "test" }).pipe(
+          Effect.flip
+        )
+
+        assert.isUndefined(failures[0].cause)
+        assert.strictEqual(result.reason._tag === "NetworkError" && result.reason.cause, failures[0])
+      }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient, makeTransportErrorHttpClient(failures, {}))))
+    })
 
     it.effect("maps 400 status to InvalidRequestError reason", () =>
       Effect.gen(function*() {
@@ -307,11 +326,14 @@ describe("OpenAiClient", () => {
     it("preserves and truncates a fallback HTTP response", () => {
       const body = `${"a".repeat(200)}b`
       const reason = Errors.mapStatusCodeToReason({
+        now: 0,
         status: 400,
         headers: {},
         message: undefined,
         metadata: { errorCode: null, errorType: null, requestId: null },
-        http: makeHttpContext("https://api.openai.com/v1/responses", body)
+        method: "POST",
+        url: "https://api.openai.com/v1/responses",
+        http: { body }
       })
 
       assert.strictEqual(reason._tag, "InvalidRequestError")
@@ -353,6 +375,28 @@ describe("OpenAiClient", () => {
       }).pipe(Effect.provide(makeTestLayer(undefined, {
         _tag: "Json",
         status: 429,
+        body: { error: { message: "Rate limit exceeded", type: "rate_limit_error", code: null } }
+      }))))
+
+    it.effect.each([
+      { name: "ignores a negative Retry-After", header: "-5", expected: undefined },
+      { name: "ignores a non-finite Retry-After", header: "Infinity", expected: undefined },
+      { name: "honors an HTTP-date Retry-After", header: "Thu, 01 Jan 1970 00:00:30 GMT", expected: 30_000 }
+    ])("$name", ({ expected, header }) =>
+      Effect.gen(function*() {
+        const client = yield* OpenAiClient.OpenAiClient
+        const result = yield* client.createResponse({ model: "gpt-4o", input: "test" }).pipe(Effect.flip)
+
+        assert.strictEqual(result.reason._tag, "RateLimitError")
+        if (result.reason._tag !== "RateLimitError") return
+        assert.strictEqual(
+          result.reason.retryAfter === undefined ? undefined : Duration.toMillis(result.reason.retryAfter),
+          expected
+        )
+      }).pipe(Effect.provide(makeTestLayer(undefined, {
+        _tag: "Json",
+        status: 429,
+        headers: { "retry-after": header },
         body: { error: { message: "Rate limit exceeded", type: "rate_limit_error", code: null } }
       }))))
 
@@ -405,17 +449,11 @@ describe("OpenAiClient", () => {
       }))))
 
     it("mapStatusCodeToReason detects insufficient_quota as QuotaExhaustedError", () => {
-      const http = {
-        request: {
-          method: "POST" as const,
-          url: "https://api.openai.com",
-          urlParams: [],
-          hash: undefined,
-          headers: {}
-        }
-      }
       const reason = Errors.mapStatusCodeToReason({
+        now: 0,
         status: 429,
+        method: "POST",
+        url: "https://api.openai.com",
         headers: {},
         message: "You exceeded your current quota",
         metadata: {
@@ -423,7 +461,7 @@ describe("OpenAiClient", () => {
           errorType: "insufficient_quota",
           requestId: null
         },
-        http
+        http: {}
       })
       assert.strictEqual(reason._tag, "QuotaExhaustedError")
     })
@@ -456,14 +494,15 @@ describe("OpenAiClient", () => {
         body: { error: { message: "Internal server error" } }
       }))))
 
-    it.effect("maps schema error to InvalidOutputError reason", () =>
+    it.effect("maps a malformed successful response envelope to a non-retryable InvalidResponseError reason", () =>
       Effect.gen(function*() {
         const client = yield* OpenAiClient.OpenAiClient
         const result = yield* client.createResponse({ model: "gpt-4o", input: "test" }).pipe(Effect.flip)
 
         assert.strictEqual(result._tag, "AiError")
         assert.strictEqual(result.method, "createResponse")
-        assert.strictEqual(result.reason._tag, "InvalidOutputError")
+        assert.strictEqual(result.reason._tag, "InvalidResponseError")
+        assert.isFalse(result.isRetryable)
       }).pipe(Effect.provide(makeTestLayer(undefined, {
         _tag: "Json",
         body: { invalid: "response" } as any
@@ -506,6 +545,23 @@ describe("OpenAiClient", () => {
   })
 
   describe("createResponseStream", () => {
+    it.effect("emits response.completed before [DONE] in the same SSE chunk", () =>
+      Effect.gen(function*() {
+        const client = yield* OpenAiClient.OpenAiClient
+        const [, stream] = yield* client.createResponseStream({ model: "gpt-4o", input: "test" })
+        const events = yield* Stream.runCollect(stream)
+
+        assert.deepStrictEqual(events.map((event) => event.type), ["response.completed"])
+      }).pipe(Effect.provide(makeTestLayer(undefined, {
+        _tag: "Sse",
+        events: [{
+          type: "response.completed",
+          sequence_number: 1,
+          response: makeResponseBody({ status: "completed" })
+        }],
+        trailer: "data: [DONE]\n\n"
+      }))))
+
     it.live("terminates an SSE stream at response.failed", () =>
       Effect.gen(function*() {
         const client = yield* OpenAiClient.OpenAiClient
@@ -527,11 +583,7 @@ describe("OpenAiClient", () => {
       Effect.gen(function*() {
         const server = yield* Effect.acquireRelease(
           Effect.sync(() => new WS("wss://api.openai.com/v1/responses", { jsonProtocol: true })),
-          (server) =>
-            Effect.sync(() => {
-              server.close()
-              WS.clean()
-            })
+          (server) => Effect.sync(() => server.close())
         )
         const event = {
           type: "response.failed",
@@ -557,6 +609,209 @@ describe("OpenAiClient", () => {
         )
 
         assert.strictEqual(result._tag, "Some")
+      }))
+
+    it.live("replaces the WebSocket after non-retryable error events", () =>
+      Effect.gen(function*() {
+        const server = yield* Effect.acquireRelease(
+          Effect.sync(() => new WS("wss://socket-errors.test/v1/responses", { jsonProtocol: true })),
+          (server) => Effect.sync(() => server.close())
+        )
+        let connections = 0
+
+        yield* OpenAiClient.withWebSocketMode(
+          Effect.gen(function*() {
+            const client = yield* OpenAiClient.OpenAiClient
+            const [, failedStream] = yield* client.createResponseStream({ model: "gpt-4o", input: "first" })
+            yield* Effect.all([
+              Stream.runDrain(failedStream).pipe(Effect.flip),
+              nextWebSocketCreate(server).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() =>
+                    server.send({
+                      type: "error",
+                      code: "invalid_request_error",
+                      message: "bad",
+                      param: null
+                    })
+                  )
+                )
+              )
+            ], { concurrency: "unbounded" })
+
+            const [, secondFailedStream] = yield* client.createResponseStream({ model: "gpt-4o", input: "second" })
+            yield* Effect.all([
+              Stream.runDrain(secondFailedStream).pipe(Effect.flip),
+              nextWebSocketCreate(server).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() =>
+                    server.send({
+                      error: {
+                        message: "gRPC error: permission denied",
+                        type: "api_error"
+                      }
+                    })
+                  )
+                )
+              )
+            ], { concurrency: "unbounded" })
+
+            const [, thirdFailedStream] = yield* client.createResponseStream({ model: "gpt-4o", input: "third" })
+            const [error] = yield* Effect.all([
+              Stream.runDrain(thirdFailedStream).pipe(Effect.flip),
+              nextWebSocketCreate(server).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() =>
+                    server.send({
+                      error: {
+                        message: "bad request",
+                        type: "invalid_request_error"
+                      }
+                    })
+                  )
+                )
+              )
+            ], { concurrency: "unbounded" })
+            assert.strictEqual(error.reason._tag, "InvalidRequestError")
+
+            const [, nextStream] = yield* client.createResponseStream({ model: "gpt-4o", input: "fourth" })
+            yield* Effect.all([
+              Stream.runDrain(nextStream),
+              nextWebSocketCreate(server).pipe(
+                Effect.tap(() => Effect.sync(() => sendWebSocketCompleted(server, "resp_4", "msg_4", "ok")))
+              )
+            ], { concurrency: "unbounded" })
+          })
+        ).pipe(
+          Effect.provide(OpenAiClient.layer({
+            apiKey: Redacted.make("sk-test"),
+            apiUrl: "https://socket-errors.test/v1"
+          })),
+          Effect.provideService(Socket.WebSocketConstructor, (url) => {
+            connections++
+            return new globalThis.WebSocket(url)
+          }),
+          Effect.provideService(HttpClient.HttpClient, HttpClient.make(() => Effect.die("unexpected http"))),
+          Effect.timeout("5 seconds")
+        )
+
+        assert.strictEqual(connections, 4)
+      }))
+
+    it.live("retries an untagged xAI response-not-found error with the full prompt", () =>
+      Effect.gen(function*() {
+        const server = yield* Effect.acquireRelease(
+          Effect.sync(() => new WS("wss://previous-response.test/v1/responses", { jsonProtocol: true })),
+          (server) => Effect.sync(() => server.close())
+        )
+
+        const drive = Effect.gen(function*() {
+          const chat = yield* Chat.empty
+          yield* chat.streamText({ prompt: "hello" }).pipe(Stream.runDrain)
+          yield* chat.streamText({ prompt: "again" }).pipe(Stream.runDrain)
+          yield* chat.streamText({ prompt: "later" }).pipe(Stream.runDrain)
+        }).pipe(
+          OpenAiClient.withWebSocketMode,
+          Effect.provide(OpenAiLanguageModel.model("gpt-4o-mini", { store: true })),
+          Effect.provide(OpenAiClient.layer({
+            apiKey: Redacted.make("sk-test"),
+            apiUrl: "https://previous-response.test/v1"
+          })),
+          Effect.provideService(Socket.WebSocketConstructor, (url) => new globalThis.WebSocket(url)),
+          Effect.provideService(HttpClient.HttpClient, HttpClient.make(() => Effect.die("unexpected http")))
+        )
+
+        const respond = Effect.gen(function*() {
+          const first = yield* nextWebSocketCreate(server)
+          assert.isUndefined(first.previous_response_id)
+          assert.deepStrictEqual(first.input, [webSocketUserInput("hello")])
+          sendWebSocketCompleted(server, "resp_1", "msg_1", "ok")
+
+          const incremental = yield* nextWebSocketCreate(server)
+          assert.strictEqual(incremental.previous_response_id, "resp_1")
+          assert.deepStrictEqual(incremental.input, [webSocketUserInput("again")])
+          server.send({
+            error: {
+              message: "gRPC error: Response with id=resp_1 not found",
+              type: "api_error"
+            }
+          })
+
+          const retried = yield* nextWebSocketCreate(server)
+          assert.isUndefined(retried.previous_response_id)
+          assert.deepStrictEqual(retried.input, [
+            webSocketUserInput("hello"),
+            webSocketAssistantInput("msg_1", "ok"),
+            webSocketUserInput("again")
+          ])
+          sendWebSocketCompleted(server, "resp_2", "msg_2", "retried")
+
+          const later = yield* nextWebSocketCreate(server)
+          assert.strictEqual(later.previous_response_id, "resp_2")
+          assert.deepStrictEqual(later.input, [webSocketUserInput("later")])
+          sendWebSocketCompleted(server, "resp_3", "msg_3", "later")
+        })
+
+        yield* Effect.all([drive, respond], { concurrency: "unbounded" }).pipe(
+          Effect.timeout("5 seconds")
+        )
+      }))
+
+    it.live("round-trips streamed encrypted reasoning in a full-prompt retry", () =>
+      Effect.gen(function*() {
+        const server = yield* Effect.acquireRelease(
+          Effect.sync(() => new WS("wss://reasoning-recovery.test/v1/responses", { jsonProtocol: true })),
+          (server) => Effect.sync(() => server.close())
+        )
+        const requests: Array<WebSocketResponseCreate> = []
+
+        const drive = Effect.gen(function*() {
+          const chat = yield* Chat.empty
+          yield* chat.streamText({ prompt: "think" }).pipe(Stream.runDrain)
+          yield* chat.streamText({ prompt: "continue" }).pipe(Stream.runDrain)
+        }).pipe(
+          OpenAiClient.withWebSocketMode,
+          Effect.provide(OpenAiLanguageModel.model("o3-mini", { store: true })),
+          Effect.provide(OpenAiClient.layer({
+            apiKey: Redacted.make("sk-test"),
+            apiUrl: "https://reasoning-recovery.test/v1"
+          })),
+          Effect.provideService(Socket.WebSocketConstructor, (url) => new globalThis.WebSocket(url)),
+          Effect.provideService(HttpClient.HttpClient, HttpClient.make(() => Effect.die("unexpected http")))
+        )
+
+        const respond = Effect.gen(function*() {
+          requests.push(yield* nextWebSocketCreate(server))
+          sendWebSocketReasoningCompleted(server, "resp_1", "rs_1", "thinking", "encrypted-reasoning")
+
+          requests.push(yield* nextWebSocketCreate(server))
+          server.send({
+            error: {
+              message: "gRPC error: Response with id=resp_1 not found",
+              type: "api_error"
+            }
+          })
+
+          requests.push(yield* nextWebSocketCreate(server))
+          sendWebSocketCompleted(server, "resp_2", "msg_2", "done")
+        })
+
+        yield* Effect.all([drive, respond], { concurrency: "unbounded" }).pipe(
+          Effect.timeout("5 seconds")
+        )
+
+        assert.deepStrictEqual({
+          include: requests[0]?.include,
+          reasoning: requests[2]?.input.find((item) => item.type === "reasoning")
+        }, {
+          include: ["reasoning.encrypted_content"],
+          reasoning: {
+            type: "reasoning",
+            id: "rs_1",
+            summary: [{ type: "summary_text", text: "thinking" }],
+            encrypted_content: "encrypted-reasoning"
+          }
+        })
       }))
 
     it.effect("accepts keepalive stream events", () =>
@@ -743,6 +998,52 @@ describe("OpenAiClient", () => {
         ]
       }))))
 
+    it.effect("maps a malformed stream event to a non-retryable InvalidResponseError", () =>
+      Effect.gen(function*() {
+        const client = yield* OpenAiClient.OpenAiClient
+        const result = yield* client.createResponseStream({
+          model: "gpt-4o",
+          input: "test"
+        }).pipe(
+          Effect.andThen(([_, stream]) => Stream.runDrain(stream)),
+          Effect.flip
+        )
+
+        assert.strictEqual(result.reason._tag, "InvalidResponseError")
+        assert.isFalse(result.isRetryable)
+      }).pipe(Effect.provide(makeTestLayer(undefined, {
+        _tag: "Sse",
+        events: [
+          {
+            type: "response.output_text.delta",
+            output_index: "zero",
+            item_id: "msg_123",
+            content_index: 0,
+            delta: "hello"
+          }
+        ]
+      }))))
+
+    it.effect("maps an oversized SSE event to a non-retryable InvalidResponseError", () =>
+      Effect.gen(function*() {
+        const client = yield* OpenAiClient.OpenAiClient
+        const result = yield* client.createResponseStream({
+          model: "gpt-4o",
+          input: "test"
+        }).pipe(
+          Effect.andThen(([_, stream]) => Stream.runDrain(stream)),
+          Effect.flip
+        )
+
+        assert.strictEqual(result.reason._tag, "InvalidResponseError")
+        assert.isFalse(result.isRetryable)
+      }).pipe(Effect.provide(makeTestLayer(undefined, {
+        _tag: "Sse",
+        events: [],
+        // Exceed the default 10 MiB SSE limit without completing an event.
+        trailer: `data: ${"x".repeat(10 * 1024 * 1024 + 1)}`
+      }))))
+
     it.effect("maps HTTP error before stream starts", () =>
       Effect.gen(function*() {
         const client = yield* OpenAiClient.OpenAiClient
@@ -764,6 +1065,150 @@ describe("OpenAiClient", () => {
   })
 })
 
+type WebSocketResponseCreate = {
+  readonly type: "response.create"
+  readonly previous_response_id?: string | undefined
+  readonly include?: ReadonlyArray<string> | undefined
+  readonly input: ReadonlyArray<Record<string, unknown>>
+}
+
+const nextWebSocketCreate = (server: WS) =>
+  Effect.promise(() => server.nextMessage).pipe(
+    Effect.map((message) => message as WebSocketResponseCreate)
+  )
+
+const webSocketUserInput = (text: string) => ({
+  role: "user",
+  content: [{ type: "input_text", text }]
+})
+
+const webSocketAssistantInput = (id: string, text: string) => ({
+  id,
+  type: "message",
+  role: "assistant",
+  status: "completed",
+  content: [{
+    type: "output_text",
+    text,
+    annotations: [],
+    logprobs: []
+  }]
+})
+
+const sendWebSocketCompleted = (server: WS, id: string, itemId: string, text: string) => {
+  const response = {
+    id,
+    object: "response",
+    model: "gpt-4o-mini",
+    created_at: 1,
+    output: [],
+    error: null,
+    incomplete_details: null
+  }
+  const events = [
+    { type: "response.created", response },
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: {
+        id: itemId,
+        type: "message",
+        role: "assistant",
+        status: "in_progress",
+        content: []
+      }
+    },
+    {
+      type: "response.output_text.delta",
+      item_id: itemId,
+      output_index: 0,
+      content_index: 0,
+      delta: text
+    },
+    {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        id: itemId,
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text, annotations: [] }]
+      }
+    },
+    { type: "response.completed", response }
+  ]
+  for (const event of events) {
+    server.send(event)
+  }
+}
+
+const sendWebSocketReasoningCompleted = (
+  server: WS,
+  id: string,
+  itemId: string,
+  summary: string,
+  encryptedContent: string
+) => {
+  const response = {
+    id,
+    object: "response",
+    model: "o3-mini",
+    created_at: 1,
+    output: [],
+    error: null,
+    incomplete_details: null
+  }
+  const events = [
+    { type: "response.created", sequence_number: 1, response },
+    {
+      type: "response.output_item.added",
+      sequence_number: 2,
+      output_index: 0,
+      item: { type: "reasoning", id: itemId, summary: [], encrypted_content: null }
+    },
+    {
+      type: "response.reasoning_summary_part.added",
+      sequence_number: 3,
+      output_index: 0,
+      item_id: itemId,
+      summary_index: 0,
+      part: { type: "summary_text", text: summary }
+    },
+    {
+      type: "response.reasoning_summary_text.delta",
+      sequence_number: 4,
+      output_index: 0,
+      item_id: itemId,
+      summary_index: 0,
+      delta: summary
+    },
+    {
+      type: "response.reasoning_summary_part.done",
+      sequence_number: 5,
+      output_index: 0,
+      item_id: itemId,
+      summary_index: 0,
+      part: { type: "summary_text", text: summary }
+    },
+    {
+      type: "response.output_item.done",
+      sequence_number: 6,
+      output_index: 0,
+      item: {
+        type: "reasoning",
+        id: itemId,
+        summary: [{ type: "summary_text", text: summary }],
+        encrypted_content: encryptedContent
+      }
+    },
+    { type: "response.completed", sequence_number: 7, response }
+  ]
+  for (const event of events) {
+    server.send(event)
+  }
+}
+
 type MockResponse =
   | {
     readonly _tag: "Json"
@@ -783,6 +1228,7 @@ type MockResponse =
   | {
     readonly _tag: "Sse"
     readonly events: ReadonlyArray<typeof OpenAiSchema.ResponseStreamEvent.Encoded>
+    readonly trailer?: string | undefined
     readonly keepOpen?: boolean | undefined
     readonly status?: number | undefined
     readonly headers?: Record<string, string> | undefined
@@ -855,18 +1301,19 @@ const makeConfigTestLayer = (configProvider: ConfigProvider.ConfigProvider) =>
     Layer.provide(ConfigProvider.layer(configProvider))
   )
 
-const makeTransportErrorHttpClient = (): HttpClient.HttpClient =>
+const makeTransportErrorHttpClient = (
+  failures: Array<HttpClientError.HttpClientError> = [],
+  reason: { readonly cause?: unknown } = { cause: new Error("Connection refused") }
+): HttpClient.HttpClient =>
   HttpClient.makeWith<HttpClientError.HttpClientError, never, HttpClientError.HttpClientError, never>(
     (requestEffect) =>
-      Effect.flatMap(requestEffect, (request) =>
-        Effect.fail(
-          new HttpClientError.HttpClientError({
-            reason: new HttpClientError.TransportError({
-              request,
-              cause: new Error("Connection refused")
-            })
-          })
-        )),
+      Effect.flatMap(requestEffect, (request) => {
+        const error = new HttpClientError.HttpClientError({
+          reason: new HttpClientError.TransportError({ request, ...reason })
+        })
+        failures.push(error)
+        return Effect.fail(error)
+      }),
     Effect.succeed
   )
 
@@ -902,7 +1349,7 @@ const makeResponse = (
     : "text/event-stream"
   const body = response._tag === "Json"
     ? JSON.stringify(response.body)
-    : response.events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")
+    : response.events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + (response.trailer ?? "")
 
   const httpResponse = HttpClientResponse.fromWeb(
     request,
@@ -929,14 +1376,3 @@ const makeResponse = (
     }
   })
 }
-
-const makeHttpContext = (url: string, body: string) => ({
-  request: {
-    method: "POST" as const,
-    url,
-    urlParams: [],
-    hash: undefined,
-    headers: {}
-  },
-  body
-})

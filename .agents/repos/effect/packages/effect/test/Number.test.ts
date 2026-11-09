@@ -374,16 +374,52 @@ describe("remainder", () => {
     assert.strictEqual(N.remainder(3, large), 3)
     assertNegativeZero(N.remainder(-large, 2))
   })
+
+  it("handles decimal coefficients beyond the safe integer range", () => {
+    assert.strictEqual(N.remainder(100000000000000.05, 0.03), 0)
+    assert.strictEqual(N.remainder(100000000000000.1, 0.03), 0.02)
+  })
+
+  it("preserves exact integer remainders beyond the safe integer range", () => {
+    const large = 2 ** 60
+
+    assert.strictEqual(N.remainder(large, 5), 1)
+    assert.strictEqual(N.remainder(-large, 5), -1)
+    assert.strictEqual(N.remainder(large, -5), 1)
+    assert.strictEqual(N.remainder(large + 256, large), 256)
+    assertNegativeZero(N.remainder(-large, 2))
+  })
+
+  it("preserves exact integer dividends with fractional divisors", () => {
+    const large = 2 ** 60
+
+    assert.strictEqual(N.remainder(large, 2.5), 1)
+    assert.strictEqual(N.remainder(large, 1.25), 1)
+    assert.strictEqual(N.remainder(large, 3.5), 1)
+    assert.strictEqual(N.remainder(-large, 2.5), -1)
+    assert.strictEqual(N.remainder(large, -2.5), 1)
+    assertNegativeZero(N.remainder(-large, 0.5))
+  })
+
+  it("preserves exact integers formatted in scientific notation", () => {
+    const large = 2 ** 70
+
+    assert.strictEqual(N.remainder(large, 3), 1)
+    assert.strictEqual(N.remainder(large, 2.5), 1.5)
+  })
 })
 
 describe("nextPow2", () => {
   it("rounds non-powers of two up to the next power of two", () => {
     assert.strictEqual(N.nextPow2(5), 8)
     assert.strictEqual(N.nextPow2(17), 32)
+    assert.strictEqual(N.nextPow2(2 ** 52 + 1), 2 ** 53)
   })
 
   it("returns the same value for powers of two and a minimum of two otherwise", () => {
     assert.strictEqual(N.nextPow2(8), 8)
+    assert.strictEqual(N.nextPow2(2 ** 29), 2 ** 29)
+    assert.strictEqual(N.nextPow2(2 ** 1023), 2 ** 1023)
     assert.strictEqual(N.nextPow2(1), 2)
     assert.strictEqual(N.nextPow2(0), 2)
     assert.strictEqual(N.nextPow2(1.5), 2)

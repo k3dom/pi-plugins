@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Schema, SchemaRepresentation } from "effect"
+import { Brand, Schema, SchemaRepresentation } from "effect"
 import { throws } from "../../utils/assert.ts"
 
 const filterId = "acme/schema/minLength"
@@ -81,6 +81,13 @@ describe("SchemaRepresentation.fromRepresentation", () => {
 
   it("revives String", () => {
     assertRepresentationRoundtrip(Schema.String)
+  })
+
+  it("revives a string with content without parsing its value", () => {
+    const schema = revive(Schema.fromJsonString(Schema.Boolean)) as Schema.Codec<unknown>
+
+    assert.strictEqual(Schema.decodeUnknownSync(schema)("not JSON"), "not JSON")
+    assert.isFalse(Schema.is(schema)(true))
   })
 
   it("revives Number", () => {
@@ -326,8 +333,23 @@ describe("SchemaRepresentation.fromRepresentation", () => {
     }
   })
 
-  it("restores brands", () => {
-    assertRepresentationRoundtrip(Schema.String.pipe(Schema.brand("A"), Schema.brand("B")))
+  it("restores checks added by fromBrand", () => {
+    type Int = number & Brand.Brand<"Int">
+    const Int = Brand.check<Int>(Schema.isInt())
+    type Positive = number & Brand.Brand<"Positive">
+    const Positive = Brand.check<Positive>(Schema.isGreaterThan(0))
+    const schema = Schema.Number.pipe(
+      Schema.fromBrand("Int", Int),
+      Schema.fromBrand("Positive", Positive)
+    )
+
+    const restored = assertRepresentationRoundtrip(schema, [
+      SchemaRepresentation.isIntReviver,
+      SchemaRepresentation.isGreaterThanReviver
+    ])
+    assert.isTrue(Schema.is(restored)(1))
+    assert.isFalse(Schema.is(restored)(1.2))
+    assert.isFalse(Schema.is(restored)(-1))
   })
 
   it("restores a node representation annotation without schema dependencies", () => {

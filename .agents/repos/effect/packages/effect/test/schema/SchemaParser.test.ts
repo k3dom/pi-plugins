@@ -25,6 +25,56 @@ import {
 } from "../utils/assert.ts"
 
 describe("SchemaParser", () => {
+  describe("synchronous root callback defects", () => {
+    const defect = new Error("callback defect")
+    const fail = (): never => {
+      throw defect
+    }
+    const getter = SchemaGetter.transform<string, string>(fail)
+    const middleware = (): Effect.Effect<never> => fail()
+    const declaration = Schema.declareConstructor<unknown>()([], () => fail)
+    const schemas = {
+      transformation: Schema.String.pipe(Schema.decodeTo(Schema.String, { decode: getter, encode: getter })),
+      filter: Schema.String.check(Schema.makeFilter(fail)),
+      "declaration filter": Schema.declareConstructor<unknown>()([], () => (input) => Effect.succeed(input))
+        .check(Schema.makeFilter(fail)),
+      middleware: Schema.String.pipe(Schema.middlewareDecoding(middleware), Schema.middlewareEncoding(middleware)),
+      declaration,
+      "wrapped declaration": Schema.NullOr(Schema.suspend(() => declaration))
+    }
+
+    for (const [name, schema] of Object.entries(schemas)) {
+      it(`preserves ${name} defects when decoding and encoding`, () => {
+        deepStrictEqual(SchemaParser.decodeUnknownExit(schema)("value"), Exit.die(defect))
+        deepStrictEqual(SchemaParser.encodeUnknownExit(schema)("value"), Exit.die(defect))
+      })
+    }
+
+    it.effect("Effect adapters return defects instead of throwing", () => {
+      const decoding = SchemaParser.decodeUnknownEffect(declaration)("value")
+      const encoding = SchemaParser.encodeUnknownEffect(declaration)("value")
+
+      return Effect.gen(function*() {
+        deepStrictEqual(yield* Effect.exit(decoding), Exit.die(defect))
+        deepStrictEqual(yield* Effect.exit(encoding), Exit.die(defect))
+      })
+    })
+
+    it("Promise adapters reject with defects instead of throwing", async () => {
+      for (
+        const parse of [
+          SchemaParser.decodeUnknownPromise(declaration),
+          SchemaParser.encodeUnknownPromise(declaration)
+        ]
+      ) {
+        const result = await parse("value").then(Result.succeed, Result.fail)
+        assertTrue(Result.isFailure(result))
+        assertTrue(result.failure instanceof Error)
+        deepStrictEqual(result.failure.cause, Cause.die(defect))
+      }
+    })
+  })
+
   describe("sequential parsing", () => {
     const cases = [
       {
@@ -370,6 +420,24 @@ describe("SchemaParser", () => {
       Cause.die(new Error("defect"))
     )
   describe("make", () => {
+    it("rejects valid fields when a class-level check fails", () => {
+      class CheckedError extends Schema.TaggedError<CheckedError>()("CheckedError", {
+        code: Schema.Number
+      }) {}
+      const schema = CheckedError.check(
+        Schema.makeFilter(({ code }) => code > 0, { expected: "positive code" })
+      )
+      const make = SchemaParser.make(schema)
+      const valid = new CheckedError({ code: 1 })
+      const invalid = new CheckedError({ code: 0 })
+
+      strictEqual(make(valid), valid)
+
+      throws(() => make(invalid), (error) => {
+        assertSchemaIssueError(error, "Expected positive code")
+      })
+    })
+
     it("should throw an error when the input is invalid", () => {
       const schema = Schema.String
       throws(() => SchemaParser.make(schema)(null as any), (e) => {
@@ -530,12 +598,12 @@ describe("SchemaParser", () => {
 
     it("should throw an error when the cause contains both an Issue and a defect", () => {
       const decodeSchema = Schema.String.pipe(Schema.decode({
-        decode: new SchemaGetter.Getter(() => Effect.failCause(makeMixedCause())),
+        decode: SchemaGetter.transformOptionalEffect(() => Effect.failCause(makeMixedCause())),
         encode: SchemaGetter.passthrough()
       }))
       const encodeSchema = Schema.String.pipe(Schema.encode({
         decode: SchemaGetter.passthrough(),
-        encode: new SchemaGetter.Getter(() => Effect.failCause(makeMixedCause()))
+        encode: SchemaGetter.transformOptionalEffect(() => Effect.failCause(makeMixedCause()))
       }))
 
       throws(() => SchemaParser.decodeUnknownSync(decodeSchema)("a"), (e) => {
@@ -564,12 +632,12 @@ describe("SchemaParser", () => {
 
     it("should reject with an error when the cause contains both an Issue and a defect", async () => {
       const decodeSchema = Schema.String.pipe(Schema.decode({
-        decode: new SchemaGetter.Getter(() => Effect.failCause(makeMixedCause())),
+        decode: SchemaGetter.transformOptionalEffect(() => Effect.failCause(makeMixedCause())),
         encode: SchemaGetter.passthrough()
       }))
       const encodeSchema = Schema.String.pipe(Schema.encode({
         decode: SchemaGetter.passthrough(),
-        encode: new SchemaGetter.Getter(() => Effect.failCause(makeMixedCause()))
+        encode: SchemaGetter.transformOptionalEffect(() => Effect.failCause(makeMixedCause()))
       }))
 
       const r1 = await SchemaParser.decodeUnknownPromise(decodeSchema)("a").then(Result.succeed, Result.fail)
@@ -597,12 +665,12 @@ describe("SchemaParser", () => {
 
     it("should throw an error when the cause is not an Issue", () => {
       const decodeSchema = Schema.String.pipe(Schema.decode({
-        decode: new SchemaGetter.Getter(() => Effect.die(new Error("decode defect"))),
+        decode: SchemaGetter.transformOptionalEffect(() => Effect.die(new Error("decode defect"))),
         encode: SchemaGetter.passthrough()
       }))
       const encodeSchema = Schema.String.pipe(Schema.encode({
         decode: SchemaGetter.passthrough(),
-        encode: new SchemaGetter.Getter(() => Effect.die(new Error("encode defect")))
+        encode: SchemaGetter.transformOptionalEffect(() => Effect.die(new Error("encode defect")))
       }))
 
       throws(() => SchemaParser.decodeUnknownOption(decodeSchema)("a"), (e) => {
@@ -619,12 +687,12 @@ describe("SchemaParser", () => {
 
     it("should throw an error when the cause contains both an Issue and a defect", () => {
       const decodeSchema = Schema.String.pipe(Schema.decode({
-        decode: new SchemaGetter.Getter(() => Effect.failCause(makeMixedCause())),
+        decode: SchemaGetter.transformOptionalEffect(() => Effect.failCause(makeMixedCause())),
         encode: SchemaGetter.passthrough()
       }))
       const encodeSchema = Schema.String.pipe(Schema.encode({
         decode: SchemaGetter.passthrough(),
-        encode: new SchemaGetter.Getter(() => Effect.failCause(makeMixedCause()))
+        encode: SchemaGetter.transformOptionalEffect(() => Effect.failCause(makeMixedCause()))
       }))
 
       throws(() => SchemaParser.decodeUnknownOption(decodeSchema)("a"), (e) => {
@@ -675,6 +743,28 @@ describe("SchemaParser", () => {
   })
 
   describe("asserts", () => {
+    it("should use the default parse options", () => {
+      const schema = Schema.Struct({ a: Schema.String, b: Schema.String })
+
+      // `errors: "all"` would report both keys
+      throws(() => SchemaParser.asserts(schema, { a: 1, b: 2 }), (e) => {
+        assertSchemaIssueError(e, `Expected string\n  at ["a"]`)
+      })
+
+      // `onExcessProperty: "error"` would reject the excess key
+      SchemaParser.asserts(schema, { a: "a", b: "b", c: 1 })
+    })
+
+    it("should assert the type side of the schema", () => {
+      const schema = Schema.Struct({ a: Schema.FiniteFromString })
+
+      SchemaParser.asserts(schema, { a: 1 })
+
+      throws(() => SchemaParser.asserts(schema, { a: "1" }), (e) => {
+        assertSchemaIssueError(e, `Expected number\n  at ["a"]`)
+      })
+    })
+
     it("should throw an error when the cause is not an Issue", () => {
       const schema = Schema.declareConstructor<string>()(
         [],
@@ -705,12 +795,12 @@ describe("SchemaParser", () => {
   describe("decodeUnknownResult / encodeUnknownResult", () => {
     it("should throw an error when the cause is not an Issue", () => {
       const decodeSchema = Schema.String.pipe(Schema.decode({
-        decode: new SchemaGetter.Getter(() => Effect.die(new Error("decode defect"))),
+        decode: SchemaGetter.transformOptionalEffect(() => Effect.die(new Error("decode defect"))),
         encode: SchemaGetter.passthrough()
       }))
       const encodeSchema = Schema.String.pipe(Schema.encode({
         decode: SchemaGetter.passthrough(),
-        encode: new SchemaGetter.Getter(() => Effect.die(new Error("encode defect")))
+        encode: SchemaGetter.transformOptionalEffect(() => Effect.die(new Error("encode defect")))
       }))
 
       throws(() => SchemaParser.decodeUnknownResult(decodeSchema)("a"), (e) => {
@@ -727,12 +817,12 @@ describe("SchemaParser", () => {
 
     it("should throw an error when the cause contains both an Issue and a defect", () => {
       const decodeSchema = Schema.String.pipe(Schema.decode({
-        decode: new SchemaGetter.Getter(() => Effect.failCause(makeMixedCause())),
+        decode: SchemaGetter.transformOptionalEffect(() => Effect.failCause(makeMixedCause())),
         encode: SchemaGetter.passthrough()
       }))
       const encodeSchema = Schema.String.pipe(Schema.encode({
         decode: SchemaGetter.passthrough(),
-        encode: new SchemaGetter.Getter(() => Effect.failCause(makeMixedCause()))
+        encode: SchemaGetter.transformOptionalEffect(() => Effect.failCause(makeMixedCause()))
       }))
 
       throws(() => SchemaParser.decodeUnknownResult(decodeSchema)("a"), (e) => {
@@ -833,7 +923,7 @@ describe("SchemaParser", () => {
 
       let rejectedReads = 0
       const rejectedKey = Schema.String.pipe(Schema.decode({
-        decode: new SchemaGetter.Getter(() => Effect.fail(new SchemaIssue.InvalidValue())),
+        decode: SchemaGetter.transformOptionalEffect(() => Effect.fail(new SchemaIssue.InvalidValue())),
         encode: SchemaGetter.passthrough()
       }))
       const rejectedInput = {
@@ -856,7 +946,7 @@ describe("SchemaParser", () => {
 
     it("rejects a missing root output", () => {
       const schema = Schema.String.pipe(Schema.decode({
-        decode: new SchemaGetter.Getter(() => Effect.succeedNone),
+        decode: SchemaGetter.transformOptionalEffect(() => Effect.succeedNone),
         encode: SchemaGetter.passthrough()
       }))
       const result = SchemaParser.decodeUnknownExit(schema)("value")
@@ -865,7 +955,7 @@ describe("SchemaParser", () => {
     })
 
     it("rejects a missing root output after parsing structural schemas", () => {
-      const missing = new SchemaGetter.Getter<never, unknown>(() => Effect.succeedNone)
+      const missing = SchemaGetter.transformOptionalEffect<never, unknown>(() => Effect.succeedNone)
       const array = Schema.Array(Schema.String).pipe(Schema.decode({
         decode: missing,
         encode: missing
@@ -929,7 +1019,7 @@ describe("SchemaParser", () => {
     it.effect("wraps an asynchronous failure from a uniquely selected union member", () =>
       Effect.gen(function*() {
         const failing = Schema.String.pipe(Schema.decode({
-          decode: new SchemaGetter.Getter(() =>
+          decode: SchemaGetter.transformOptionalEffect(() =>
             Effect.yieldNow.pipe(
               Effect.andThen(Effect.fail(new SchemaIssue.InvalidValue()))
             )
@@ -953,7 +1043,7 @@ describe("SchemaParser", () => {
     it.effect("resolves an unchanged union candidate after an asynchronous failure", () =>
       Effect.gen(function*() {
         const delayedFailure = Schema.String.pipe(Schema.decode({
-          decode: new SchemaGetter.Getter(() =>
+          decode: SchemaGetter.transformOptionalEffect(() =>
             Effect.yieldNow.pipe(
               Effect.andThen(Effect.fail(new SchemaIssue.InvalidValue()))
             )
@@ -972,7 +1062,7 @@ describe("SchemaParser", () => {
       const calls: Array<string> = []
       const field = (name: string, suspended = false) =>
         Schema.String.pipe(Schema.decode({
-          decode: new SchemaGetter.Getter((input) => {
+          decode: SchemaGetter.transformOptionalEffect((input) => {
             calls.push(name)
             return suspended ? Effect.suspend(() => Effect.succeed(input)) : Effect.succeed(input)
           }),
@@ -989,6 +1079,35 @@ describe("SchemaParser", () => {
       assertTrue(Exit.isSuccess(exit))
       strictEqual(calls.join(","), "a,b,c")
     })
+
+    it.effect("keeps earlier results intact when a suspended Struct decoder is run again", () =>
+      Effect.gen(function*() {
+        let ids = 0
+        let names = 0
+        const id = Schema.Number.pipe(Schema.decode({
+          decode: SchemaGetter.transformEffect(() => Effect.sync(() => ++ids)),
+          encode: SchemaGetter.passthrough()
+        }))
+        const schema = Schema.Struct({
+          name: Schema.String.pipe(Schema.decode({
+            decode: SchemaGetter.transform((name) => {
+              names++
+              return name.toUpperCase()
+            }),
+            encode: SchemaGetter.passthrough()
+          })),
+          id,
+          nextId: id
+        })
+        const program = SchemaParser.decodeUnknownEffect(schema)({ name: "a", id: 0, nextId: 0 })
+        const first = yield* program
+        const second = yield* program
+        deepStrictEqual([first, second], [
+          { name: "A", id: 1, nextId: 2 },
+          { name: "A", id: 3, nextId: 4 }
+        ])
+        strictEqual(names, 1)
+      }))
 
     it("converts synchronous property parser throws into defects", () => {
       const field = Schema.declareConstructor<string>()([], () => () => {
@@ -1113,24 +1232,64 @@ describe("SchemaParser", () => {
       strictEqual(suspendEvaluations, 1)
     })
 
-    it("retries lazy parser compilation after a synchronous factory failure", () => {
-      let evaluations = 0
-      const schema = Schema.declareConstructor<unknown>()([], () => {
-        if (++evaluations === 1) {
-          throw new Error("factory failure")
-        }
-        return (input) => Effect.succeed(input)
-      })
-      const decode = SchemaParser.decodeUnknownExit(schema)
+    for (const operation of ["decode", "encode"] as const) {
+      it(`${operation} retries failed factories and reuses eager parsers after defects`, () => {
+        const factoryDefect = new Error("factory defect")
+        const parserDefect = new Error("parser defect")
+        let factories = 0
+        const calls: Array<unknown> = []
+        const schema = Schema.declareConstructor<unknown>()([], () => {
+          if (++factories === 1) throw factoryDefect
+          return (input) => {
+            calls.push(input)
+            if (input === "bad") throw parserDefect
+            return Effect.succeed(input)
+          }
+        }).check(Schema.makeFilter(() => true))
+        const parse = operation === "decode"
+          ? SchemaParser.decodeUnknownEffect(schema)
+          : SchemaParser.encodeUnknownEffect(schema)
 
-      throws(() => decode("a"), (error) => {
-        assertTrue(error instanceof Error)
-        strictEqual(error.message, "factory failure")
+        strictEqual(factories, 0)
+        throws(() => parse("value"), (error) => {
+          strictEqual(error, factoryDefect)
+        })
+        deepStrictEqual(parse("bad"), Exit.die(parserDefect))
+        deepStrictEqual(parse("good"), Exit.succeed("good"))
+        deepStrictEqual(calls, ["bad", "good"])
+        strictEqual(factories, 2)
       })
-      strictEqual(decode("b")._tag, "Success")
-      strictEqual(decode("c")._tag, "Success")
-      strictEqual(evaluations, 2)
-    })
+
+      for (const kind of ["Declaration", "Suspend"] as const) {
+        it(`${operation} retries failed child ${kind} factories inside Option callbacks`, () => {
+          const factoryDefect = new Error("factory defect")
+          let factories = 0
+          const child = kind === "Declaration"
+            ? Schema.declareConstructor<unknown>()([], () => {
+              if (++factories === 1) throw factoryDefect
+              return (input) => Effect.succeed(input)
+            })
+            : Schema.suspend(() => {
+              if (++factories === 1) throw factoryDefect
+              return Schema.String
+            })
+          const schema = Schema.Option(child)
+          const parse = operation === "decode"
+            ? SchemaParser.decodeUnknownExit(schema)
+            : SchemaParser.encodeUnknownExit(schema)
+
+          strictEqual(factories, 0)
+          const failure = parse(Option.some("value"))
+          assertTrue(Exit.isFailure(failure))
+          const defect = Cause.findDefect(failure.cause)
+          assertTrue(Result.isSuccess(defect))
+          strictEqual(defect.success, factoryDefect)
+          strictEqual(factories, 1)
+          deepStrictEqual(parse(Option.some("value")), Exit.succeed(Option.some("value")))
+          strictEqual(factories, 2)
+        })
+      }
+    }
 
     it("retries lazy Suspend parser compilation after a synchronous thunk failure", () => {
       let evaluations = 0
@@ -1153,7 +1312,7 @@ describe("SchemaParser", () => {
 
     it("should preserve mixed causes in union candidates instead of trying later candidates", () => {
       const failure = Schema.String.pipe(Schema.decode({
-        decode: new SchemaGetter.Getter(() => Effect.failCause(makeMixedCause())),
+        decode: SchemaGetter.transformOptionalEffect(() => Effect.failCause(makeMixedCause())),
         encode: SchemaGetter.passthrough()
       }))
       const schema = Schema.Union([

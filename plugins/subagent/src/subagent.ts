@@ -19,7 +19,7 @@ import {
   Stream,
   String,
 } from 'effect'
-import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+import { ChildProcess, ChildProcessSpawner } from 'effect/process'
 
 const STDERR_CAP = 50 * 1024
 

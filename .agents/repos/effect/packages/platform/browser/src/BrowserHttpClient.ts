@@ -8,28 +8,33 @@
  * XHR response type, an overridable `XMLHttpRequest` constructor service, and
  * the `layerXMLHttpRequest` layer.
  *
+ * Requests with an `Upgrade` header fail with `TransportError` before anything
+ * is sent because neither fetch nor XMLHttpRequest can hand over the connection.
+ *
+ * @stability unstable
  * @since 4.0.0
  */
 import * as Cause from "effect/Cause"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import type { LazyArg } from "effect/Function"
+import * as Cookies from "effect/http/Cookies"
+import * as Headers from "effect/http/Headers"
+import * as HttpClient from "effect/http/HttpClient"
+import * as HttpClientError from "effect/http/HttpClientError"
+import type * as HttpClientRequest from "effect/http/HttpClientRequest"
+import * as HttpClientResponse from "effect/http/HttpClientResponse"
+import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage"
+import * as HeaderParser from "effect/http/MultipartParser/HeadersParser"
+import * as UrlParams from "effect/http/UrlParams"
 import * as Inspectable from "effect/Inspectable"
 import type * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import { type Pipeable, pipeArguments } from "effect/Pipeable"
 import * as Queue from "effect/Queue"
 import type * as Schema from "effect/Schema"
+import type * as Socket from "effect/socket/Socket"
 import * as Stream from "effect/Stream"
-import * as Cookies from "effect/unstable/http/Cookies"
-import * as Headers from "effect/unstable/http/Headers"
-import * as HttpClient from "effect/unstable/http/HttpClient"
-import * as HttpClientError from "effect/unstable/http/HttpClientError"
-import type * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
-import * as HttpIncomingMessage from "effect/unstable/http/HttpIncomingMessage"
-import * as HeaderParser from "effect/unstable/http/MultipartParser/HeadersParser"
-import * as UrlParams from "effect/unstable/http/UrlParams"
 
 // =============================================================================
 // Fetch
@@ -39,6 +44,7 @@ export {
   /**
    * Context reference for the `fetch` implementation used by the fetch-based HTTP client.
    *
+   * @stability unstable
    * @category services
    * @since 4.0.0
    */
@@ -46,6 +52,7 @@ export {
   /**
    * Layer that provides an `HttpClient` implementation backed by the configured `Fetch` function.
    *
+   * @stability unstable
    * @category layers
    * @since 4.0.0
    */
@@ -58,11 +65,12 @@ export {
    * Use to provide default credentials, cache, redirect, integrity, or other
    * fetch options for browser HTTP requests.
    *
+   * @stability unstable
    * @category services
    * @since 4.0.0
    */
   RequestInit
-} from "effect/unstable/http/FetchHttpClient"
+} from "effect/http/FetchHttpClient"
 
 // =============================================================================
 // XML Http Request
@@ -71,6 +79,7 @@ export {
 /**
  * Allowed response body modes for the browser XHR HTTP client.
  *
+ * @stability unstable
  * @category models
  * @since 4.0.0
  */
@@ -87,6 +96,7 @@ export type XHRResponseType = "arraybuffer" | "text"
  * @see {@link XHRResponseType} for the allowed response body modes
  * @see {@link withXHRArrayBuffer} for scoping XHR response handling to `ArrayBuffer`
  *
+ * @stability unstable
  * @category services
  * @since 4.0.0
  */
@@ -98,6 +108,7 @@ export const CurrentXHRResponseType: Context.Reference<XHRResponseType> = Contex
 /**
  * Runs an effect with `CurrentXHRResponseType` set to `"arraybuffer"` so the XHR HTTP client receives response bodies as `ArrayBuffer` values.
  *
+ * @stability unstable
  * @category providing services
  * @since 4.0.0
  */
@@ -113,6 +124,7 @@ export const withXHRArrayBuffer = <A, E, R>(
 /**
  * Service tag for the `XMLHttpRequest` constructor used by the browser XHR HTTP client.
  *
+ * @stability unstable
  * @category services
  * @since 4.0.0
  */
@@ -126,6 +138,16 @@ const makeXhrRequest = () => new globalThis.XMLHttpRequest()
 const makeXmlHttpRequest = HttpClient.make(
   (request, url, signal, fiber) =>
     Effect.suspend(() => {
+      if (request.headers.upgrade !== undefined) {
+        return Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({
+              request,
+              description: "XMLHttpRequest cannot send an HTTP upgrade request"
+            })
+          })
+        )
+      }
       const xhr = Context.getOrElse(
         fiber.context,
         XMLHttpRequest,
@@ -184,12 +206,7 @@ const sendBody = (
       return Effect.sync(() => xhr.send(body.formData))
     case "Stream":
       return Effect.matchEffect(
-        Stream.runFold(body.stream, () => new Uint8Array(0), (acc, chunk) => {
-          const next = new Uint8Array(acc.length + chunk.length)
-          next.set(acc, 0)
-          next.set(chunk, acc.length)
-          return next
-        }),
+        Stream.mkUint8Array(body.stream),
         {
           onFailure: (cause) =>
             Effect.fail(
@@ -207,6 +224,8 @@ const sendBody = (
 }
 
 const encoder = new TextEncoder()
+
+const formDecoder = new TextDecoder("utf-8", { ignoreBOM: true })
 
 abstract class IncomingMessageImpl<E> extends Inspectable.Class implements HttpIncomingMessage.HttpIncomingMessage<E> {
   readonly [HttpIncomingMessage.TypeId]: typeof HttpIncomingMessage.TypeId
@@ -302,9 +321,13 @@ abstract class IncomingMessageImpl<E> extends Inspectable.Class implements HttpI
   }
 
   get urlParamsBody(): Effect.Effect<UrlParams.UrlParams, E> {
-    return Effect.flatMap(this.text, (text) =>
+    const text = this.source.responseType === "arraybuffer"
+      ? Effect.map(this.arrayBuffer, (buffer) => formDecoder.decode(buffer))
+      : this.text
+    return Effect.flatMap(text, (text) =>
       Effect.try({
-        try: () => UrlParams.fromInput(new URLSearchParams(text)),
+        // A leading "?" is form data; URLSearchParams would drop it as a query prefix.
+        try: () => UrlParams.fromInput(new URLSearchParams(text.replace(/^\?/, "%3F"))),
         catch: this.onError
       }))
   }
@@ -334,10 +357,12 @@ abstract class IncomingMessageImpl<E> extends Inspectable.Class implements HttpI
       this.source.addEventListener("readystatechange", onReadyStateChange)
       this.source.addEventListener("error", onError)
       onReadyStateChange()
-      return Effect.sync(() => {
-        this.source.removeEventListener("readystatechange", onReadyStateChange)
-        this.source.removeEventListener("error", onError)
-      })
+      return Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          this.source.removeEventListener("readystatechange", onReadyStateChange)
+          this.source.removeEventListener("error", onError)
+        })
+      )
     })
   }
 
@@ -423,6 +448,18 @@ class ClientResponseImpl extends IncomingMessageImpl<HttpClientError.HttpClientE
       }))
   }
 
+  get upgrade(): Effect.Effect<Socket.Socket, HttpClientError.HttpClientError> {
+    return Effect.fail(
+      new HttpClientError.HttpClientError({
+        reason: new HttpClientError.StatusCodeError({
+          request: this.request,
+          response: this,
+          description: "XMLHttpRequest cannot hand over the connection of an HTTP upgrade"
+        })
+      })
+    )
+  }
+
   override toString(): string {
     return `ClientResponse(${this.status})`
   }
@@ -443,6 +480,7 @@ class ClientResponseImpl extends IncomingMessageImpl<HttpClientError.HttpClientE
 /**
  * Layer that provides an `HttpClient` implementation backed by the browser `XMLHttpRequest` API.
  *
+ * @stability unstable
  * @category layers
  * @since 4.0.0
  */

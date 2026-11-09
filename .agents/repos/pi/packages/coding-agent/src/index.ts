@@ -64,8 +64,10 @@ export type {
 	AppKeybinding,
 	AutocompleteProviderFactory,
 	BashToolCallEvent,
+	BeforeAgentStartCustomEvent,
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
+	BeforeAgentStartUserEvent,
 	BeforeProviderHeadersEvent,
 	BeforeProviderRequestEvent,
 	BeforeProviderRequestEventResult,
@@ -116,6 +118,7 @@ export type {
 	InputEvent,
 	InputEventResult,
 	InputSource,
+	KeybindingHints,
 	KeybindingsManager,
 	LoadExtensionsResult,
 	LsToolCallEvent,
@@ -179,6 +182,8 @@ export type {
 	ToolLoadout,
 	ToolLoadoutChanges,
 	ToolNamespace,
+	ToolRendererResolver,
+	ToolRenderers,
 	ToolRenderResultOptions,
 	ToolResultEvent,
 	ToolResultEventResult,
@@ -232,6 +237,7 @@ export {
 	type ModelRuntimeAuthOverrides,
 } from "./core/model-runtime.ts";
 export type {
+	PackageInstallFailure,
 	PackageManager,
 	PathMetadata,
 	ProgressCallback,
@@ -310,6 +316,7 @@ export {
 	type FullscreenExitOutput,
 	type ImageSettings,
 	type PackageSource,
+	type QuietStartup,
 	type RetrySettings,
 	SettingsManager,
 	type SettingsManagerCreateOptions,
@@ -385,6 +392,7 @@ export {
 	type WriteToolOptions,
 	withFileMutationQueue,
 } from "./core/tools/index.ts";
+export { formatReadLineRange } from "./core/tools/render-utils.ts";
 export {
 	hasTrustRequiringProjectResources,
 	type ProjectTrustDecision,

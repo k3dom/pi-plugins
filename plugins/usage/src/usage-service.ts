@@ -20,8 +20,8 @@ import {
   Schema,
   String,
 } from 'effect'
-import { FetchHttpClient, HttpClient, HttpClientRequest } from 'effect/unstable/http'
-import { HttpApiClient } from 'effect/unstable/httpapi'
+import { FetchHttpClient, HttpClient, HttpClientRequest } from 'effect/http'
+import { HttpApiClient } from 'effect/http-api'
 import * as Anthropic from './provider/anthropic'
 import * as OpenAI from './provider/openai'
 import * as Zai from './provider/zai'

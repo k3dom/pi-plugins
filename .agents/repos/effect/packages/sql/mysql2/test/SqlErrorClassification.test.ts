@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect } from "effect"
-import * as Reactivity from "effect/unstable/reactivity/Reactivity"
-import type * as SqlError from "effect/unstable/sql/SqlError"
+import * as Reactivity from "effect/reactivity/Reactivity"
+import type * as SqlError from "effect/sql/SqlError"
 import { vi } from "vitest"
 
 const state: {
@@ -18,16 +18,16 @@ vi.mock("mysql2", () => ({
   })
 }))
 
-const connectFailureReason = (cause: unknown) =>
-  Effect.gen(function*() {
+const connectFailureReason = Effect.fnUntraced(
+  function*(cause: unknown) {
     state.connectCause = cause
     const { MysqlClient } = yield* Effect.promise(() => import("@effect/sql-mysql2"))
     const error = yield* Effect.flip(MysqlClient.make({}))
     return error.reason
-  }).pipe(
-    Effect.scoped,
-    Effect.provide(Reactivity.layer)
-  )
+  },
+  (_) => Effect.scoped(_),
+  Effect.provide(Reactivity.layer)
+)
 
 const connectFailureReasonTag = (errno: number) => Effect.map(connectFailureReason({ errno }), (reason) => reason._tag)
 

@@ -1,5 +1,5 @@
 import { DateTime, Option, Predicate, Schema, SchemaTransformation } from 'effect'
-import { HttpApi, HttpApiEndpoint, HttpApiGroup } from 'effect/unstable/httpapi'
+import { HttpApi, HttpApiEndpoint, HttpApiGroup } from 'effect/http-api'
 
 export const BASE_URL = 'https://api.anthropic.com'
 export const OAUTH_BETA = 'oauth-2025-04-20'

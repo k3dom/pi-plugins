@@ -1,17 +1,17 @@
 import { PgliteClient } from "@effect/sql-pglite"
 import { assert, describe, layer } from "@effect/vitest"
 import { Deferred, Effect } from "effect"
+import { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
 
 const ClientLayer = PgliteClient.layer({})
 
-const setup = (table: string) =>
-  Effect.gen(function*() {
-    const sql = yield* PgliteClient.PgliteClient
-    yield* sql.unsafe(`CREATE TABLE IF NOT EXISTS ${table} (id SERIAL PRIMARY KEY, name TEXT)`)
-    yield* sql.unsafe(`TRUNCATE TABLE ${table} RESTART IDENTITY`)
-    return sql
-  })
+const setup = Effect.fnUntraced(function*(table: string) {
+  const sql = yield* PgliteClient.PgliteClient
+  yield* sql.unsafe(`CREATE TABLE IF NOT EXISTS ${table} (id SERIAL PRIMARY KEY, name TEXT)`)
+  yield* sql.unsafe(`TRUNCATE TABLE ${table} RESTART IDENTITY`)
+  return sql
+})
 
 describe("PgliteClient transactions", () => {
   layer(ClientLayer, { timeout: "30 seconds" })((it) => {
@@ -33,6 +33,19 @@ describe("PgliteClient transactions", () => {
         )
         const rows = yield* sql.unsafe(`SELECT * FROM tx_rollback`)
         assert.deepStrictEqual(rows, [])
+      }))
+
+    it.effect("withTransaction with BeginTransaction sets the isolation level", () =>
+      Effect.gen(function*() {
+        const sql = yield* PgliteClient.PgliteClient
+        const level = sql`SHOW transaction_isolation`
+        assert.deepStrictEqual(
+          yield* sql.withTransaction(level).pipe(
+            Effect.provideService(SqlClient.BeginTransaction, "BEGIN ISOLATION LEVEL SERIALIZABLE")
+          ),
+          [{ transaction_isolation: "serializable" }]
+        )
+        assert.deepStrictEqual(yield* sql.withTransaction(level), [{ transaction_isolation: "read committed" }])
       }))
 
     it.effect("nested transaction commits both", () =>
@@ -58,6 +71,27 @@ describe("PgliteClient transactions", () => {
           `SELECT count(*)::int AS total FROM tx_nested_rollback`
         )
         assert.strictEqual(rows.at(0)?.total, 1)
+      }))
+
+    it.effect("releases completed nested transaction locks", () =>
+      Effect.gen(function*() {
+        const sql = yield* PgliteClient.PgliteClient
+        const locks = sql`SELECT count(*)::integer AS count FROM pg_locks
+          WHERE pid = pg_backend_pid() AND locktype = 'transactionid'`
+        yield* sql.withTransaction(Effect.gen(function*() {
+          yield* sql`CREATE TEMP TABLE savepoint_locks (value INTEGER) ON COMMIT DROP`
+
+          yield* sql.withTransaction(sql`INSERT INTO savepoint_locks VALUES (1)`)
+          assert.deepStrictEqual(yield* locks, [{ count: 1 }])
+
+          const error = yield* sql.withTransaction(
+            sql`INSERT INTO savepoint_locks VALUES (2)`.pipe(Effect.andThen(Effect.fail("rollback")))
+          ).pipe(Effect.flip)
+          assert.strictEqual(error, "rollback")
+          assert.deepStrictEqual(yield* locks, [{ count: 1 }])
+
+          assert.deepStrictEqual(yield* sql`SELECT value FROM savepoint_locks`, [{ value: 1 }])
+        }))
       }))
 
     it.effect("preserves successful concurrent nested transactions", () =>

@@ -55,8 +55,8 @@ export const imports = (
 ): string =>
   [
     `import * as ${importName} from "effect/Schema"`,
-    ...(options?.multipart === true ? [`import { Multipart } from "effect/unstable/http"`] : []),
-    `import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, HttpApiSecurity, OpenApi } from "effect/unstable/httpapi"`
+    ...(options?.multipart === true ? [`import { Multipart } from "effect/http"`] : []),
+    `import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, HttpApiSecurity, OpenApi } from "effect/http-api"`
   ].join("\n")
 
 /**
@@ -306,6 +306,13 @@ const renderMediaSchema = (media: ParsedOperationMediaTypeSchema): string => {
       return "HttpApiSchema.StreamUint8Array()"
     }
     return `HttpApiSchema.StreamUint8Array({ contentType: ${JSON.stringify(media.contentType)} })`
+  }
+
+  if (media.effectStream === "ndjson") {
+    if (media.contentType === "application/x-ndjson") {
+      return `HttpApiSchema.StreamNdjson({ schema: ${media.schema} })`
+    }
+    return `HttpApiSchema.StreamNdjson({ schema: ${media.schema}, contentType: ${JSON.stringify(media.contentType)} })`
   }
 
   switch (media.encoding) {

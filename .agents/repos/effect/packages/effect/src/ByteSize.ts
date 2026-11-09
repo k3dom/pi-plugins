@@ -3,6 +3,7 @@
  *
  * Decimal units use powers of 1,000 and binary units use powers of 1,024.
  *
+ * @stability unstable
  * @since 4.0.0
  */
 import * as BI from "./BigInt.ts"
@@ -24,6 +25,7 @@ const binaryBase = BigInt(1024)
 /**
  * Represents an exact, non-negative number of bytes.
  *
+ * @stability unstable
  * @category models
  * @since 4.0.0
  */
@@ -32,14 +34,51 @@ export type ByteSize = Brand.Branded<bigint, typeof TypeId>
 /**
  * Values accepted by byte-size decoding operations.
  *
+ * **Details**
+ *
+ * String inputs require a non-negative decimal integer without leading zeros,
+ * followed by a canonical unit symbol or lowercase unit name, optionally
+ * separated by one space. Numeric inputs are validated at runtime.
+ *
+ * @see {@link fromString} for external strings and fractional quantities
+ * @see {@link fromStringUnsafe} for throwing string validation
+ * @stability unstable
  * @category models
  * @since 4.0.0
  */
-export type Input = ByteSize | bigint | number | string
+export type Input = ByteSize | bigint | number | `${IntegerQuantity}${"" | " "}${InputUnit}`
+
+// Combining these constraints excludes signs, radix prefixes, leading zeros,
+// fractions, and exponent notation without limiting the number of digits.
+type IntegerQuantity = "0" | (`${bigint}` & `${"1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"}${string}`)
+
+type InputUnit =
+  | Unit
+  | `${
+    | ""
+    | "kilo"
+    | "mega"
+    | "giga"
+    | "tera"
+    | "peta"
+    | "exa"
+    | "zetta"
+    | "yotta"
+    | "ronna"
+    | "quetta"
+    | "kibi"
+    | "mebi"
+    | "gibi"
+    | "tebi"
+    | "pebi"
+    | "exbi"
+    | "zebi"
+    | "yobi"}byte${"" | "s"}`
 
 /**
  * Canonical decimal byte unit symbols.
  *
+ * @stability unstable
  * @category models
  * @since 4.0.0
  */
@@ -59,6 +98,7 @@ export type DecimalUnit =
 /**
  * Canonical binary byte unit symbols.
  *
+ * @stability unstable
  * @category models
  * @since 4.0.0
  */
@@ -76,6 +116,7 @@ export type BinaryUnit =
 /**
  * Canonical decimal and binary byte unit symbols.
  *
+ * @stability unstable
  * @category models
  * @since 4.0.0
  */
@@ -84,6 +125,7 @@ export type Unit = DecimalUnit | BinaryUnit
 /**
  * Options controlling compact byte-size formatting.
  *
+ * @stability unstable
  * @category models
  * @since 4.0.0
  */
@@ -144,6 +186,7 @@ const make = (value: bigint): ByteSize => value as ByteSize
 /**
  * The byte size containing zero bytes.
  *
+ * @stability unstable
  * @category constants
  * @since 4.0.0
  */
@@ -160,35 +203,82 @@ const fromNumber = (input: number): ByteSize => {
   return make(BigInt(input))
 }
 
+const maxSafeInteger = BigInt(Number.MAX_SAFE_INTEGER)
+
+// Exactly multiplies a decimal such as "2.01" or "4e-15" by `factor`, or `undefined` for a fractional byte result
+const scaleDecimal = (quantity: string, factor: bigint): bigint | undefined => {
+  const match = /^(\d+)(?:\.(\d+))?(?:e([+-]\d+))?$/.exec(quantity)
+  if (match === null) return undefined
+  const fraction = match[2] ?? ""
+  const numerator = BigInt(match[1] + fraction) * factor
+  const shift = Number(match[3] ?? 0) - fraction.length
+  if (shift >= 0) return numerator * BigInt(10) ** BigInt(shift)
+  const scale = BigInt(10) ** BigInt(-shift)
+  return numerator % scale === bigint0 ? numerator / scale : undefined
+}
+
 const fromQuantity = (quantity: number | bigint, unit: UnitInfo): ByteSize => {
   if (typeof quantity === "bigint") {
     if (quantity < bigint0) return invalid(`expected a non-negative quantity, received ${quantity}`)
     return make(quantity * unit.factor)
   }
-  const value = quantity * Number(unit.factor)
-  if (!Number.isSafeInteger(value) || value < 0) {
-    return invalid(`expected an exact non-negative safe-integer byte result, received ${quantity} ${unit.symbol}`)
+  if (binaryUnits.includes(unit)) {
+    // Binary factors are powers of 2, so the float product is exact
+    const value = quantity * Number(unit.factor)
+    if (Number.isSafeInteger(value) && value >= 0) return make(BigInt(value))
+  } else {
+    // Scale the shortest decimal form to avoid floating-point rounding
+    const value = scaleDecimal(String(quantity), unit.factor)
+    if (value !== undefined && value <= maxSafeInteger) return make(value)
   }
-  return make(BigInt(value))
+  return invalid(`expected an exact non-negative safe-integer byte result, received ${quantity} ${unit.symbol}`)
 }
 
-const parse = (input: string): ByteSize => {
-  const match = /^\s*(\d+)(?:\.(\d+))?\s*([A-Za-z]+)\s*$/.exec(input)
+/**
+ * Parses a byte-size string and throws for invalid syntax, unsupported units,
+ * or quantities that do not represent non-negative integral bytes.
+ *
+ * **Details**
+ *
+ * Accepts decimal fractions, canonical SI and IEC symbols, lowercase unit
+ * names, and whitespace around the quantity and unit. Parsing uses exact
+ * bigint arithmetic, including above the safe integer range.
+ *
+ * @see {@link fromString} for non-throwing validation
+ * @stability unstable
+ * @category constructors
+ * @since 4.0.0
+ */
+export const fromStringUnsafe = (input: string): ByteSize => {
+  const match = /^\s*(\d+(?:\.\d+)?)\s*([A-Za-z]+)\s*$/.exec(input)
   if (match === null) return invalid(`unsupported syntax ${JSON.stringify(input)}`)
-  const unit = unitsByName.get(match[3])
-  if (unit === undefined) return invalid(`unsupported unit ${JSON.stringify(match[3])}`)
-  const fraction = match[2] ?? ""
-  const scale = BigInt(10) ** BigInt(fraction.length)
-  const numerator = BigInt(match[1] + fraction) * unit.factor
-  if (numerator % scale !== bigint0) {
-    return invalid(`${JSON.stringify(input)} does not represent an integral number of bytes`)
-  }
-  return make(numerator / scale)
+  const unit = unitsByName.get(match[2])
+  if (unit === undefined) return invalid(`unsupported unit ${JSON.stringify(match[2])}`)
+  const value = scaleDecimal(match[1], unit.factor)
+  if (value === undefined) return invalid(`${JSON.stringify(input)} does not represent an integral number of bytes`)
+  return make(value)
 }
+
+/**
+ * Parses a byte-size string, returning `None` for invalid syntax, unsupported
+ * units, or quantities that do not represent non-negative integral bytes.
+ *
+ * **Details**
+ *
+ * Accepts external strings and fractional quantities using the same syntax
+ * as `fromStringUnsafe`.
+ *
+ * @see {@link fromStringUnsafe} for throwing validation
+ * @stability unstable
+ * @category constructors
+ * @since 4.0.0
+ */
+export const fromString: (input: string) => Option.Option<ByteSize> = Option.liftThrowable(fromStringUnsafe)
 
 /**
  * Decodes a trusted input into a byte size and throws for invalid input.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -200,7 +290,7 @@ export const fromInputUnsafe = (input: Input): ByteSize => {
     case "number":
       return fromNumber(input)
     case "string":
-      return parse(input)
+      return fromStringUnsafe(input)
   }
   return invalid(`unsupported input ${input}`)
 }
@@ -208,6 +298,7 @@ export const fromInputUnsafe = (input: Input): ByteSize => {
 /**
  * Decodes an input into a byte size, returning `None` for invalid input.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -216,6 +307,7 @@ export const fromInput: (input: Input) => Option.Option<ByteSize> = Option.liftT
 /**
  * Creates a byte size from a non-negative byte count.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -228,6 +320,7 @@ const unitConstructor = (symbol: Unit) => (value: number | bigint): ByteSize =>
 /**
  * Creates a decimal kilobyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -235,6 +328,7 @@ export const kilobytes: (value: number | bigint) => ByteSize = unitConstructor("
 /**
  * Creates a decimal megabyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -242,6 +336,7 @@ export const megabytes: (value: number | bigint) => ByteSize = unitConstructor("
 /**
  * Creates a decimal gigabyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -249,6 +344,7 @@ export const gigabytes: (value: number | bigint) => ByteSize = unitConstructor("
 /**
  * Creates a decimal terabyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -256,6 +352,7 @@ export const terabytes: (value: number | bigint) => ByteSize = unitConstructor("
 /**
  * Creates a decimal petabyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -263,6 +360,7 @@ export const petabytes: (value: number | bigint) => ByteSize = unitConstructor("
 /**
  * Creates a decimal exabyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -270,6 +368,7 @@ export const exabytes: (value: number | bigint) => ByteSize = unitConstructor("E
 /**
  * Creates a decimal zettabyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -277,6 +376,7 @@ export const zettabytes: (value: number | bigint) => ByteSize = unitConstructor(
 /**
  * Creates a decimal yottabyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -284,6 +384,7 @@ export const yottabytes: (value: number | bigint) => ByteSize = unitConstructor(
 /**
  * Creates a decimal ronnabyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -291,6 +392,7 @@ export const ronnabytes: (value: number | bigint) => ByteSize = unitConstructor(
 /**
  * Creates a decimal quettabyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -298,6 +400,7 @@ export const quettabytes: (value: number | bigint) => ByteSize = unitConstructor
 /**
  * Creates a binary kibibyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -305,6 +408,7 @@ export const kibibytes: (value: number | bigint) => ByteSize = unitConstructor("
 /**
  * Creates a binary mebibyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -312,6 +416,7 @@ export const mebibytes: (value: number | bigint) => ByteSize = unitConstructor("
 /**
  * Creates a binary gibibyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -319,6 +424,7 @@ export const gibibytes: (value: number | bigint) => ByteSize = unitConstructor("
 /**
  * Creates a binary tebibyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -326,6 +432,7 @@ export const tebibytes: (value: number | bigint) => ByteSize = unitConstructor("
 /**
  * Creates a binary pebibyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -333,6 +440,7 @@ export const pebibytes: (value: number | bigint) => ByteSize = unitConstructor("
 /**
  * Creates a binary exbibyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -340,6 +448,7 @@ export const exbibytes: (value: number | bigint) => ByteSize = unitConstructor("
 /**
  * Creates a binary zebibyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -347,6 +456,7 @@ export const zebibytes: (value: number | bigint) => ByteSize = unitConstructor("
 /**
  * Creates a binary yobibyte value.
  *
+ * @stability unstable
  * @category constructors
  * @since 4.0.0
  */
@@ -355,6 +465,7 @@ export const yobibytes: (value: number | bigint) => ByteSize = unitConstructor("
 /**
  * Checks whether a value is a byte size.
  *
+ * @stability unstable
  * @category guards
  * @since 4.0.0
  */
@@ -363,6 +474,7 @@ export const isByteSize = (input: unknown): input is ByteSize => typeof input ==
 /**
  * Checks whether a byte size is zero.
  *
+ * @stability unstable
  * @category predicates
  * @since 4.0.0
  */
@@ -371,6 +483,7 @@ export const isZero = (self: ByteSize): boolean => self === bigint0
 /**
  * Returns the exact byte count as a bigint.
  *
+ * @stability unstable
  * @category getters
  * @since 4.0.0
  */
@@ -379,6 +492,7 @@ export const toBigInt = (self: ByteSize): bigint => self
 /**
  * Converts a byte size to a safe integer, returning `None` when it is too large.
  *
+ * @stability unstable
  * @category converting
  * @since 4.0.0
  */
@@ -387,6 +501,7 @@ export const toNumber: (self: ByteSize) => Option.Option<number> = BI.toNumber
 /**
  * Converts a byte size to a safe integer and throws when it is too large.
  *
+ * @stability unstable
  * @category unsafe
  * @since 4.0.0
  */
@@ -396,6 +511,7 @@ export const toNumberUnsafe = (self: ByteSize): number =>
 /**
  * Converts a byte size to an approximate number of the specified unit.
  *
+ * @stability unstable
  * @category converting
  * @since 4.0.0
  */
@@ -407,6 +523,7 @@ export const toUnit: {
 /**
  * Provides an order for byte sizes.
  *
+ * @stability unstable
  * @category instances
  * @since 4.0.0
  */
@@ -415,6 +532,7 @@ export const Order: order.Order<ByteSize> = BI.Order
 /**
  * Provides an equivalence for byte sizes.
  *
+ * @stability unstable
  * @category instances
  * @since 4.0.0
  */
@@ -423,6 +541,7 @@ export const Equivalence: Equ.Equivalence<ByteSize> = BI.Equivalence
 /**
  * Returns whether a byte size is in an inclusive range.
  *
+ * @stability unstable
  * @category predicates
  * @since 4.0.0
  */
@@ -434,6 +553,7 @@ export const between: {
 /**
  * Returns the smaller byte size.
  *
+ * @stability unstable
  * @category ordering
  * @since 4.0.0
  */
@@ -445,6 +565,7 @@ export const min: {
 /**
  * Returns the larger byte size.
  *
+ * @stability unstable
  * @category ordering
  * @since 4.0.0
  */
@@ -456,6 +577,7 @@ export const max: {
 /**
  * Constrains a byte size to an inclusive range.
  *
+ * @stability unstable
  * @category ordering
  * @since 4.0.0
  */
@@ -467,6 +589,7 @@ export const clamp: {
 /**
  * Checks whether the first byte size is less than the second.
  *
+ * @stability unstable
  * @category predicates
  * @since 4.0.0
  */
@@ -478,6 +601,7 @@ export const isLessThan: {
 /**
  * Checks whether the first byte size is at most the second.
  *
+ * @stability unstable
  * @category predicates
  * @since 4.0.0
  */
@@ -489,6 +613,7 @@ export const isLessThanOrEqualTo: {
 /**
  * Checks whether the first byte size is greater than the second.
  *
+ * @stability unstable
  * @category predicates
  * @since 4.0.0
  */
@@ -500,6 +625,7 @@ export const isGreaterThan: {
 /**
  * Checks whether the first byte size is at least the second.
  *
+ * @stability unstable
  * @category predicates
  * @since 4.0.0
  */
@@ -511,6 +637,7 @@ export const isGreaterThanOrEqualTo: {
 /**
  * Checks whether two byte sizes contain the same count.
  *
+ * @stability unstable
  * @category predicates
  * @since 4.0.0
  */
@@ -522,6 +649,7 @@ export const equals: {
 /**
  * Adds two byte sizes exactly.
  *
+ * @stability unstable
  * @category math
  * @since 4.0.0
  */
@@ -533,6 +661,7 @@ export const sum: {
 /**
  * Subtracts byte sizes, returning `None` on underflow.
  *
+ * @stability unstable
  * @category math
  * @since 4.0.0
  */
@@ -547,6 +676,7 @@ export const subtract: {
 /**
  * Subtracts byte sizes and throws on underflow.
  *
+ * @stability unstable
  * @category unsafe
  * @since 4.0.0
  */
@@ -566,6 +696,7 @@ const scalar = (input: number | bigint, positive: boolean): bigint | undefined =
 /**
  * Multiplies a byte size by a non-negative integer scalar.
  *
+ * @stability unstable
  * @category math
  * @since 4.0.0
  */
@@ -580,6 +711,7 @@ export const times: {
 /**
  * Divides a byte size by a positive integer, discarding any remainder.
  *
+ * @stability unstable
  * @category math
  * @since 4.0.0
  */
@@ -611,6 +743,7 @@ const formatWithUnit = (value: bigint, unit: UnitInfo, precision: number, traili
 /**
  * Formats a byte size with canonical decimal or binary unit symbols.
  *
+ * @stability unstable
  * @category converting
  * @since 4.0.0
  */
@@ -636,6 +769,7 @@ export const format = (self: ByteSize, options: FormatOptions = {}): string => {
 /**
  * Reducer that sums byte sizes from zero.
  *
+ * @stability unstable
  * @category math
  * @since 4.0.0
  */
@@ -644,6 +778,7 @@ export const ReducerSum: Reducer.Reducer<ByteSize> = BI.ReducerSum as any
 /**
  * Combiner that keeps the largest byte size.
  *
+ * @stability unstable
  * @category math
  * @since 4.0.0
  */
@@ -652,6 +787,7 @@ export const CombinerMax: Combiner.Combiner<ByteSize> = BI.CombinerMax as any
 /**
  * Combiner that keeps the smallest byte size.
  *
+ * @stability unstable
  * @category math
  * @since 4.0.0
  */

@@ -5,8 +5,10 @@
  * both the portable `Redis` service and the Deno-specific {@link DenoRedis}
  * service for direct access to the raw client. Unlike Bun's built-in client,
  * `@db/redis` connects eagerly using RESP2, so layer construction can fail
- * with a `RedisError`.
+ * with a `RedisError`. The layers also accept `Redis.PoolOptions` for the
+ * connections behind `Redis.reserve`.
  *
+ * @stability unstable
  * @since 4.0.0
  */
 import { connect, parseURL, type Redis as RedisClient, type RedisConnectOptions } from "@db/redis"
@@ -15,14 +17,15 @@ import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Fn from "effect/Function"
 import * as Layer from "effect/Layer"
+import * as Redis from "effect/persistence/Redis"
 import * as Predicate from "effect/Predicate"
 import * as Record from "effect/Record"
-import * as Redis from "effect/unstable/persistence/Redis"
 
 /**
  * Options for connecting to Redis, including a Redis URL or individual
  * connection settings. Explicit settings override values from the URL.
  *
+ * @stability unstable
  * @category models
  * @since 4.0.0
  */
@@ -35,6 +38,7 @@ export type RedisOptions = Omit<RedisConnectOptions, "hostname"> & {
  * Service tag for Deno Redis integration, exposing the raw `@db/redis` client
  * and a `use` helper that maps client promise failures to `RedisError`.
  *
+ * @stability unstable
  * @category services
  * @since 4.0.0
  */
@@ -43,8 +47,10 @@ export class DenoRedis extends Context.Service<DenoRedis, {
   readonly use: <A>(f: (client: RedisClient) => Promise<A>) => Effect.Effect<A, Redis.RedisError>
 }>()("@effect/platform-deno/DenoRedis") {}
 
-const make = Effect.fnUntraced(function*(options: RedisOptions = {}) {
-  const connectClient = () => {
+const make = Effect.fnUntraced(function*(
+  { acquireTimeout, idleTimeout, maxConnections, minConnections, ...options }: RedisOptions & Redis.PoolOptions = {}
+) {
+  const connectClient = (overrides?: Partial<RedisConnectOptions>) => {
     const { url, ...connectOptions } = options
     const parsedUrl = url === undefined ? undefined : new URL(url)
     const { name, ...parsed } = url === undefined ? { hostname: "localhost" } : parseURL(url)
@@ -53,13 +59,14 @@ const make = Effect.fnUntraced(function*(options: RedisOptions = {}) {
       ...(name === undefined ? {} : { username: name }),
       ...(parsedUrl?.username ? { username: decodeURIComponent(parsedUrl.username) } : {}),
       ...(parsedUrl?.password ? { password: decodeURIComponent(parsedUrl.password) } : {}),
-      ...Record.filter(connectOptions, Predicate.isNotUndefined)
+      ...Record.filter(connectOptions, Predicate.isNotUndefined),
+      ...overrides
     })
   }
 
   const client = yield* Effect.acquireRelease(
     Effect.tryPromise({
-      try: connectClient,
+      try: () => connectClient(),
       catch: (cause) => new Redis.RedisError({ cause })
     }),
     (client) => Effect.sync(() => client.close())
@@ -71,12 +78,28 @@ const make = Effect.fnUntraced(function*(options: RedisOptions = {}) {
       catch: (cause) => new Redis.RedisError({ cause })
     })
 
-  const redis = yield* Redis.make({
-    send: <A = unknown>(command: string, ...args: ReadonlyArray<string>) =>
+  const sendWith =
+    (client: RedisClient) =>
+    <A = unknown>(command: string, ...args: ReadonlyArray<string>): Effect.Effect<A, Redis.RedisError> =>
       Effect.tryPromise({
         try: () => client.sendCommand(command, args as Array<string>) as Promise<A>,
         catch: (cause) => new Redis.RedisError({ cause })
-      }),
+      })
+
+  const redis = yield* Redis.make({
+    send: sendWith(client),
+    connect: Effect.tryPromise({
+      // @db/redis re-executes commands after a reconnect, which could repeat
+      // a destructive blocking command whose reply was lost.
+      try: () => connectClient({ maxRetryCount: 0 }),
+      catch: (cause) => new Redis.RedisError({ cause })
+    }).pipe(
+      Effect.map((connection) => ({
+        send: sendWith(connection),
+        close: Effect.sync(() => connection.close())
+      }))
+    ),
+    pool: { acquireTimeout, idleTimeout, maxConnections, minConnections },
     subscribe: (channel, onMessage) =>
       Effect.acquireRelease(
         Effect.tryPromise({
@@ -126,22 +149,24 @@ const make = Effect.fnUntraced(function*(options: RedisOptions = {}) {
  * closing the client when the layer scope ends. URL-derived options can be
  * overridden by other supplied options.
  *
+ * @stability unstable
  * @category layers
  * @since 4.0.0
  */
 export const layer = (
-  options?: RedisOptions | undefined
+  options?: (RedisOptions & Redis.PoolOptions) | undefined
 ): Layer.Layer<Redis.Redis | DenoRedis, Redis.RedisError> => Layer.effectContext(make(options))
 
 /**
  * Provides `Redis` and `DenoRedis` services from `Config`-backed options,
  * closing the client when the layer scope ends.
  *
+ * @stability unstable
  * @category layers
  * @since 4.0.0
  */
 export const layerConfig = (
-  options: Config.Wrap<RedisOptions>
+  options: Config.Wrap<RedisOptions & Redis.PoolOptions>
 ): Layer.Layer<Redis.Redis | DenoRedis, Redis.RedisError | Config.ConfigError> =>
   Layer.effectContext(
     Config.unwrap(options).pipe(

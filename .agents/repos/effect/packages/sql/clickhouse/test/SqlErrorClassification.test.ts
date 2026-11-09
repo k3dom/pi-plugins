@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect } from "effect"
-import * as Reactivity from "effect/unstable/reactivity/Reactivity"
-import { SqlError } from "effect/unstable/sql/SqlError"
+import * as Reactivity from "effect/reactivity/Reactivity"
+import { SqlError } from "effect/sql/SqlError"
 import { vi } from "vitest"
 
 const state: {
@@ -16,7 +16,10 @@ const state: {
 
 vi.mock("@clickhouse/client", () => ({
   createClient: () => ({
-    exec: () => state.connectCause ? Promise.reject(state.connectCause) : Promise.resolve({}),
+    ping: () =>
+      state.connectCause
+        ? Promise.resolve({ success: false, error: state.connectCause })
+        : Promise.resolve({ success: true }),
     close: () => Promise.resolve(),
     query: () =>
       state.queryCause
@@ -29,21 +32,21 @@ vi.mock("@clickhouse/client", () => ({
   })
 }))
 
-const connectFailureReasonTag = (code: number) =>
-  Effect.gen(function*() {
+const connectFailureReasonTag = Effect.fnUntraced(
+  function*(code: number) {
     state.connectCause = { code }
     state.queryCause = null
     state.resultJsonCause = null
     const { ClickhouseClient } = yield* Effect.promise(() => import("@effect/sql-clickhouse"))
     const error = yield* Effect.flip(ClickhouseClient.make({ url: "http://localhost:8123" }))
     return error.reason._tag
-  }).pipe(
-    Effect.scoped,
-    Effect.provide(Reactivity.layer)
-  )
+  },
+  (_) => Effect.scoped(_),
+  Effect.provide(Reactivity.layer)
+)
 
-const queryFailureReasonTag = (code: number) =>
-  Effect.gen(function*() {
+const queryFailureReasonTag = Effect.fnUntraced(
+  function*(code: number) {
     state.connectCause = null
     state.queryCause = { code }
     state.resultJsonCause = null
@@ -51,10 +54,10 @@ const queryFailureReasonTag = (code: number) =>
     const client = yield* ClickhouseClient.make({ url: "http://localhost:8123" })
     const error = yield* Effect.flip(client`SELECT 1`)
     return error.reason._tag
-  }).pipe(
-    Effect.scoped,
-    Effect.provide(Reactivity.layer)
-  )
+  },
+  (_) => Effect.scoped(_),
+  Effect.provide(Reactivity.layer)
+)
 
 describe("ClickhouseClient SqlError classification", { concurrent: false }, () => {
   it.effect("maps representative native codes to reasons", () =>

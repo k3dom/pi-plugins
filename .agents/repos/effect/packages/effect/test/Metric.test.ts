@@ -1,15 +1,24 @@
 import * as OtelMetrics from "@effect/opentelemetry/OtelMetrics"
 import * as Resource from "@effect/opentelemetry/Resource"
 import { assert, describe, it, vi } from "@effect/vitest"
-import { Duration, Fiber, Layer, Metric, Ref, String } from "effect"
+import { Context, Duration, Exit, Fiber, Layer, Metric, Ref, String } from "effect"
 import * as Effect from "effect/Effect"
+import { constVoid } from "effect/Function"
+import { HttpClient, type HttpClientError, HttpClientResponse } from "effect/http"
+import { OtlpExporter, OtlpMetrics, OtlpSerialization } from "effect/observability"
 import { TestClock } from "effect/testing"
-import { HttpClient, type HttpClientError, HttpClientResponse } from "effect/unstable/http"
-import { OtlpExporter, OtlpMetrics, OtlpSerialization } from "effect/unstable/observability"
 
 const attributes = { x: "a", y: "b" }
 
 describe("Metric", () => {
+  const series = Effect.map(
+    Metric.snapshot,
+    (snapshots) =>
+      snapshots
+        .map((snapshot) => [snapshot.attributes ?? null, "count" in snapshot.state ? snapshot.state.count : null])
+        .sort((a, b) => JSON.stringify(a[0]) < JSON.stringify(b[0]) ? -1 : 1)
+  )
+
   it.effect("keeps shared metrics scoped to the active registry", () =>
     Effect.gen(function*() {
       const counter = Metric.counter(nextId())
@@ -41,6 +50,36 @@ describe("Metric", () => {
       assert.strictEqual(valueB.count, 10)
     }))
 
+  it.effect("registers an unattributed metric again after the registry is cleared", () => {
+    const registry: Metric.MetricRegistry = new Map()
+    return Effect.gen(function*() {
+      const counter = Metric.counter(nextId())
+
+      yield* Metric.update(counter, 1)
+      registry.clear()
+      yield* Metric.update(counter, 10)
+
+      const snapshots = yield* Metric.snapshot
+      assert.deepStrictEqual(snapshots.map((snapshot) => snapshot.state), [{ count: 10, incremental: false }])
+      assert.strictEqual((yield* Metric.value(counter)).count, 10)
+    }).pipe(Effect.provideService(Metric.MetricRegistry, registry))
+  })
+
+  it.effect("shares one series between no attributes and empty attributes", () =>
+    Effect.gen(function*() {
+      const id = nextId()
+      const first = Metric.counter(id)
+      const second = Metric.counter(id, { attributes: {} })
+      const third = Metric.counter(id, { attributes: [] })
+
+      yield* Metric.update(first, 1)
+      yield* Metric.update(second, 10)
+      yield* Metric.update(third, 100)
+
+      assert.strictEqual((yield* Metric.snapshot).length, 1)
+      assert.strictEqual((yield* Metric.value(first)).count, 111)
+    }).pipe(Effect.provideService(Metric.MetricRegistry, new Map())))
+
   it.effect("keeps distinct attribute sets in separate series", () =>
     Effect.gen(function*() {
       const id = nextId()
@@ -53,6 +92,34 @@ describe("Metric", () => {
       assert.strictEqual((yield* Metric.value(first)).count, 1)
       assert.strictEqual((yield* Metric.value(second)).count, 10)
     }))
+
+  it.effect("keeps an id containing a colon apart from an id with a description", () =>
+    Effect.gen(function*() {
+      const id = nextId()
+      const first = Metric.counter(`${id}:requests`)
+      const second = Metric.counter(id, { description: "requests" })
+
+      yield* Metric.update(first, 1)
+      yield* Metric.update(second, 10)
+
+      assert.strictEqual((yield* Metric.value(first)).count, 1)
+      assert.strictEqual((yield* Metric.value(second)).count, 10)
+      assert.strictEqual((yield* Metric.snapshot).length, 2)
+    }).pipe(Effect.provideService(Metric.MetricRegistry, new Map())))
+
+  it.effect("keeps a description apart from attributes", () =>
+    Effect.gen(function*() {
+      const id = nextId()
+      const first = Metric.counter(id, { description: `[["route","/users"]]` })
+      const second = Metric.counter(id, { attributes: { route: "/users" } })
+
+      yield* Metric.update(first, 1)
+      yield* Metric.update(second, 10)
+
+      assert.strictEqual((yield* Metric.value(first)).count, 1)
+      assert.strictEqual((yield* Metric.value(second)).count, 10)
+      assert.strictEqual((yield* Metric.snapshot).length, 2)
+    }).pipe(Effect.provideService(Metric.MetricRegistry, new Map())))
 
   it.effect("keeps equal attribute names with different values in separate series", () =>
     Effect.gen(function*() {
@@ -77,6 +144,19 @@ describe("Metric", () => {
 
       assert.strictEqual((yield* Metric.value(first)).count, 11)
     }))
+
+  it.effect("follows contextual attributes that change between updates of a plain metric", () =>
+    Effect.gen(function*() {
+      const counter = Metric.counter(nextId())
+      const tenantA = { tenant: "a" }
+
+      yield* Metric.update(counter, 1).pipe(Effect.provideService(Metric.CurrentMetricAttributes, tenantA))
+      yield* Metric.update(counter, 10).pipe(Effect.provideService(Metric.CurrentMetricAttributes, { tenant: "b" }))
+      yield* Metric.update(counter, 100).pipe(Effect.provideService(Metric.CurrentMetricAttributes, tenantA))
+      yield* Metric.update(counter, 1000)
+
+      assert.deepStrictEqual(yield* series, [[null, 1000], [{ tenant: "a" }, 101], [{ tenant: "b" }, 10]])
+    }).pipe(Effect.provideService(Metric.MetricRegistry, new Map())))
 
   it.effect("shares a series after merging metric and contextual attributes", () =>
     Effect.gen(function*() {
@@ -105,6 +185,128 @@ describe("Metric", () => {
 
       assert.deepStrictEqual(Object.keys(snapshot[0].attributes ?? {}), ["route", "method"])
     }).pipe(Effect.provideService(Metric.MetricRegistry, new Map())))
+
+  it.effect("remove deletes only the series for the current attributes", () =>
+    Effect.gen(function*() {
+      const counter = Metric.counter(nextId())
+      const tenantA = Effect.provideService(Metric.CurrentMetricAttributes, { tenant: "a" })
+
+      yield* Metric.update(counter, 1).pipe(tenantA)
+      yield* Metric.update(counter, 10)
+      yield* Metric.remove(counter).pipe(tenantA)
+      assert.deepStrictEqual(yield* series, [[null, 10]])
+
+      yield* Metric.update(counter, 100).pipe(tenantA)
+      assert.deepStrictEqual(yield* series, [[null, 10], [{ tenant: "a" }, 100]])
+    }).pipe(Effect.provideService(Metric.MetricRegistry, new Map())))
+
+  it("registerUnsafe reads on snapshot and removes only its own registration", () => {
+    const context = Context.make(Metric.MetricRegistry, new Map())
+    const gauge = Metric.gauge(nextId(), { bigint: true })
+    const values = () => Metric.snapshotUnsafe(context).map((snapshot) => snapshot.state)
+    const callback = (get: () => Metric.GaugeState<bigint>) => ({ get, update: constVoid, modify: constVoid })
+    let size = BigInt(1)
+
+    const first = Metric.registerUnsafe(gauge, context, callback(() => ({ value: size })))
+    assert.deepStrictEqual(values(), [{ value: BigInt(1) }])
+    size = BigInt(2)
+    assert.deepStrictEqual(values(), [{ value: BigInt(2) }])
+
+    const second = Metric.registerUnsafe(gauge, context, callback(() => ({ value: BigInt(3) })))
+    first.remove()
+    assert.deepStrictEqual(values(), [{ value: BigInt(3) }])
+    second.remove()
+    assert.deepStrictEqual(values(), [])
+  })
+
+  it("registerUnsafe ignores update and modify through an input-changing transform", () => {
+    const context = Context.make(Metric.MetricRegistry, new Map())
+    const lengths = Metric.mapInput(Metric.gauge(nextId()), (input: string) => input.length)
+    const received: Array<unknown> = []
+    const record = (input: string) => {
+      received.push(input)
+    }
+
+    Metric.registerUnsafe(lengths, context, { get: () => ({ value: 1 }), update: record, modify: record })
+    lengths.updateUnsafe("hello", context)
+    lengths.modifyUnsafe("hi", context)
+
+    assert.deepStrictEqual(received, [])
+    assert.deepStrictEqual(lengths.valueUnsafe(context), { value: 1 })
+  })
+
+  describe("withAttributes", () => {
+    it.effect("follows the contextual attributes when they change between updates", () =>
+      Effect.gen(function*() {
+        const counter = Metric.withAttributes(Metric.counter(nextId()), { route: "/users" })
+
+        yield* Metric.update(counter, 1)
+        yield* Metric.update(counter, 10).pipe(Effect.provideService(Metric.CurrentMetricAttributes, { tenant: "a" }))
+        yield* Metric.update(counter, 100).pipe(Effect.provideService(Metric.CurrentMetricAttributes, { tenant: "b" }))
+        yield* Metric.update(counter, 1000)
+
+        assert.deepStrictEqual(yield* series, [
+          [{ route: "/users" }, 1001],
+          [{ tenant: "a", route: "/users" }, 10],
+          [{ tenant: "b", route: "/users" }, 100]
+        ])
+      }).pipe(Effect.provideService(Metric.MetricRegistry, new Map())))
+
+    it.effect("applies inner attributes over outer, contextual and metric attributes", () =>
+      Effect.gen(function*() {
+        const counter = Metric.counter(nextId(), { attributes: { a: "own", b: "own", c: "own", d: "own" } }).pipe(
+          Metric.withAttributes({ a: "inner" }),
+          Metric.withAttributes({ a: "outer", b: "outer" })
+        )
+
+        yield* Metric.update(counter, 1).pipe(
+          Effect.provideService(Metric.CurrentMetricAttributes, { a: "context", b: "context", c: "context" })
+        )
+        yield* Metric.update(counter, 10)
+
+        assert.deepStrictEqual(yield* series, [
+          [{ a: "inner", b: "outer", c: "context", d: "own" }, 1],
+          [{ a: "inner", b: "outer", c: "own", d: "own" }, 10]
+        ])
+      }).pipe(Effect.provideService(Metric.MetricRegistry, new Map())))
+
+    it.effect("registers the series again after the registry is cleared", () => {
+      const registry: Metric.MetricRegistry = new Map()
+      return Effect.gen(function*() {
+        const counter = Metric.withAttributes(Metric.counter(nextId()), { route: "/users" })
+
+        yield* Metric.update(counter, 1)
+        registry.clear()
+        yield* Metric.update(counter, 10)
+
+        assert.deepStrictEqual(yield* series, [[{ route: "/users" }, 10]])
+      }).pipe(Effect.provideService(Metric.MetricRegistry, registry))
+    })
+
+    it.effect("uses the unattributed series for empty attributes", () =>
+      Effect.gen(function*() {
+        const counter = Metric.counter(nextId())
+
+        yield* Metric.update(Metric.withAttributes(counter, {}), 10)
+        yield* Metric.update(Metric.withAttributes(counter, []), 100)
+        yield* Metric.update(counter, 1)
+
+        assert.deepStrictEqual(yield* series, [[null, 111]])
+      }).pipe(Effect.provideService(Metric.MetricRegistry, new Map())))
+
+    it.effect("modifies and reads the attributed series", () =>
+      Effect.gen(function*() {
+        const gauge = Metric.gauge(nextId())
+        const tagged = Metric.withAttributes(gauge, [["route", "/users"]])
+
+        yield* Metric.update(tagged, 5)
+        yield* Metric.modify(tagged, 2)
+        yield* Metric.update(gauge, 1)
+
+        assert.strictEqual((yield* Metric.value(tagged)).value, 7)
+        assert.strictEqual((yield* Metric.value(gauge)).value, 1)
+      }).pipe(Effect.provideService(Metric.MetricRegistry, new Map())))
+  })
 
   it.effect.each([
     { name: "counter", makeUpdate: () => Metric.update(Metric.counter(nextId()), 1) },
@@ -135,7 +337,7 @@ describe("Metric", () => {
         [[1, 0], [2, 0]],
         [[2, 0], [3, 0]]
       ])
-    }).pipe(Effect.provideService(Metric.MetricRegistry, new Map())))
+    }).pipe(Effect.provideService(Metric.MetricRegistry, new Map())), { concurrent: false })
 
   it.effect("should be referentially transparent", () =>
     Effect.gen(function*() {
@@ -707,158 +909,35 @@ describe("Metric", () => {
       }))
   })
 
-  describe("track", () => {
-    it.effect("updates on success", () =>
-      Effect.gen(function*() {
-        const id = nextId()
-        const counter = Metric.counter(id).pipe(Metric.withConstantInput(1))
-        yield* Effect.succeed(1).pipe(
-          Effect.track(counter)
-        )
-        const result = yield* Metric.value(counter)
-        assert.deepStrictEqual(result, { count: 1, incremental: false })
-      }))
+  describe("track, trackErrors and trackDefects", () => {
+    type Counter = Metric.Metric<unknown, Metric.CounterState<number>>
+    const effects = [Effect.succeed(1), Effect.fail(1), Effect.die(1)]
+    const cases: ReadonlyArray<
+      readonly [string, (self: Effect.Effect<number, number>, counter: Counter) => Effect.Effect<number, number>, [
+        number,
+        number,
+        number
+      ]]
+    > = [
+      ["track", (self, counter) => self.pipe(Effect.track(counter)), [1, 2, 3]],
+      ["trackErrors", (self, counter) => self.pipe(Effect.trackErrors(counter)), [0, 1, 1]],
+      ["trackDefects", (self, counter) => self.pipe(Effect.trackDefects(counter)), [0, 0, 1]]
+    ]
 
-    it.effect("updates on failure", () =>
-      Effect.gen(function*() {
-        const id = nextId()
-        const counter = Metric.counter(id).pipe(Metric.withConstantInput(1))
-        yield* Effect.fail(1).pipe(
-          Effect.track(counter),
-          Effect.exit
-        )
-        const result = yield* Metric.value(counter)
-        assert.deepStrictEqual(result, { count: 1, incremental: false })
-      }))
-
-    it.effect("updates on defect", () =>
-      Effect.gen(function*() {
-        const id = nextId()
-        const counter = Metric.counter(id).pipe(Metric.withConstantInput(1))
-        yield* Effect.die(1).pipe(
-          Effect.track(counter),
-          Effect.exit
-        )
-        const result = yield* Metric.value(counter)
-        assert.deepStrictEqual(result, { count: 1, incremental: false })
-      }))
-  })
-
-  describe("track", () => {
-    it.effect("maps exits while preserving the instrumented effect result", () =>
-      Effect.gen(function*() {
-        const id = nextId()
-        const counter = Metric.counter(id).pipe(
-          Metric.withConstantInput(1)
-        )
-        yield* Effect.succeed(1).pipe(
-          Effect.track(counter)
-        )
-        const result = yield* Metric.value(counter)
-        assert.deepStrictEqual(result, { count: 1, incremental: false })
-      }))
-
-    it.effect("updates on failure", () =>
-      Effect.gen(function*() {
-        const id = nextId()
-        const counter = Metric.counter(id).pipe(
-          Metric.withConstantInput(1)
-        )
-        yield* Effect.fail(1).pipe(
-          Effect.track(counter),
-          Effect.exit
-        )
-        const result = yield* Metric.value(counter)
-        assert.deepStrictEqual(result, { count: 1, incremental: false })
-      }))
-
-    it.effect("updates on defect", () =>
-      Effect.gen(function*() {
-        const id = nextId()
-        const counter = Metric.counter(id).pipe(
-          Metric.withConstantInput(1)
-        )
-        yield* Effect.die(1).pipe(
-          Effect.track(counter),
-          Effect.exit
-        )
-        const result = yield* Metric.value(counter)
-        assert.deepStrictEqual(result, { count: 1, incremental: false })
-      }))
-  })
-
-  describe("trackErrors", () => {
-    it.effect("does not update on success", () =>
-      Effect.gen(function*() {
-        const id = nextId()
-        const counter = Metric.counter(id).pipe(Metric.withConstantInput(1))
-        yield* Effect.succeed(1).pipe(
-          Effect.trackErrors(counter)
-        )
-        const result = yield* Metric.value(counter)
-        assert.deepStrictEqual(result, { count: 0, incremental: false })
-      }))
-
-    it.effect("updates on failure", () =>
-      Effect.gen(function*() {
-        const id = nextId()
-        const counter = Metric.counter(id).pipe(Metric.withConstantInput(1))
-        yield* Effect.fail(1).pipe(
-          Effect.trackErrors(counter),
-          Effect.exit
-        )
-        const result = yield* Metric.value(counter)
-        assert.deepStrictEqual(result, { count: 1, incremental: false })
-      }))
-
-    it.effect("does not update on defect", () =>
-      Effect.gen(function*() {
-        const id = nextId()
-        const counter = Metric.counter(id).pipe(Metric.withConstantInput(1))
-        yield* Effect.die(1).pipe(
-          Effect.trackErrors(counter),
-          Effect.exit
-        )
-        const result = yield* Metric.value(counter)
-        assert.deepStrictEqual(result, { count: 0, incremental: false })
-      }))
-  })
-
-  describe("trackDefects", () => {
-    it.effect("does not update on success", () =>
-      Effect.gen(function*() {
-        const id = nextId()
-        const counter = Metric.counter(id).pipe(Metric.withConstantInput(1))
-        yield* Effect.succeed(1).pipe(
-          Effect.trackDefects(counter)
-        )
-        const result = yield* Metric.value(counter)
-        assert.deepStrictEqual(result, { count: 0, incremental: false })
-      }))
-
-    it.effect("does not update on failure", () =>
-      Effect.gen(function*() {
-        const id = nextId()
-        const counter = Metric.counter(id).pipe(Metric.withConstantInput(1))
-        yield* Effect.fail(1).pipe(
-          Effect.trackDefects(counter),
-          Effect.exit
-        )
-        const result = yield* Metric.value(counter)
-        assert.deepStrictEqual(result, { count: 0, incremental: false })
-      }))
-
-    it.effect("updates on defect", () =>
-      Effect.gen(function*() {
-        const id = nextId()
-        const counter = Metric.counter(id).pipe(Metric.withConstantInput(1))
-        yield* Effect.die(1).pipe(
-          Effect.trackDefects(counter),
-          Effect.exit
-        )
-        const result = yield* Metric.value(counter)
-        assert.deepStrictEqual(result, { count: 1, incremental: false })
-      }))
+    for (const [name, track, expected] of cases) {
+      it.effect(`${name} updates after success, failure and defect: ${expected.join(", ")}`, () =>
+        Effect.gen(function*() {
+          const counter = Metric.counter(nextId()).pipe(Metric.withConstantInput(1))
+          const exits: Array<Exit.Exit<number, number>> = []
+          const counts: Array<number> = []
+          for (const effect of effects) {
+            exits.push(yield* Effect.exit(track(effect, counter)))
+            counts.push((yield* Metric.value(counter)).count)
+          }
+          assert.deepStrictEqual(exits, [Exit.succeed(1), Exit.fail(1), Exit.die(1)])
+          assert.deepStrictEqual(counts, expected)
+        }))
+    }
   })
 
   describe("trackDuration", () => {

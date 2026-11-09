@@ -6,16 +6,16 @@ import {
   Data,
   Duration,
   Effect,
-  type ExecutionPlan,
+  ExecutionPlan,
   Exit,
   Fiber,
   HashMap,
-  type Layer,
+  Layer,
   Metric,
   type Option,
   pipe,
   Result,
-  type Schedule,
+  Schedule,
   type Scope,
   type Sink,
   type Stream,
@@ -77,6 +77,25 @@ declare const numberRecord: Record<string, Effect.Effect<number, "err-4", "dep-4
 declare const unionRecord: { a: typeof string } | { b: typeof number }
 declare const optionalEffect: Option.Option<Effect.Effect<string, "err-1", "dep-1">>
 declare const iterableString: Effect.Effect<Iterable<string>, "err-1", "dep-1">
+declare const unknownValue: unknown
+
+describe("Effect.isEffect", () => {
+  it("narrows unknown values to unknown success, error, and service types", () => {
+    if (Effect.isEffect(unknownValue)) {
+      expect(unknownValue).type.toBe<Effect.Effect<unknown, unknown, unknown>>()
+    }
+  })
+})
+
+describe("Effect.orElseSucceed", () => {
+  it("passes the previous error in data-first usage", () => {
+    const result = Effect.orElseSucceed(string, (error) => {
+      expect(error).type.toBe<"err-1">()
+      return error.length
+    })
+    expect(result).type.toBe<Effect.Effect<string | number, never, "dep-1">>()
+  })
+})
 
 class AcquireReleaseDependency extends Context.Service<AcquireReleaseDependency, string>()(
   "AcquireReleaseDependency"
@@ -577,6 +596,27 @@ describe("Effect.catchIf", () => {
     )
     expect(_program).type.toBe<Effect.Effect<string, SimpleError>>()
   })
+
+  it("supports unknown refinement input in data-first usage", () => {
+    const result = Effect.catchIf(
+      mixedEffect,
+      (e: unknown): e is AiError => e instanceof AiError,
+      () => Effect.succeed("ok")
+    )
+    expect(result).type.toBe<Effect.Effect<string, OtherError>>()
+  })
+
+  it("does not widen to unknown with unrelated refinement in data-first usage", () => {
+    const result = Effect.catchIf(
+      mixedEffect,
+      (e: unknown): e is { _tag: "Whatever" } => (e as { _tag: string })._tag === "Whatever",
+      (e) => {
+        expect(e).type.toBe<AiError | OtherError>()
+        return Effect.succeed(12 as const)
+      }
+    )
+    expect(result).type.toBe<Effect.Effect<string | 12, AiError | OtherError>>()
+  })
 })
 
 describe("Effect.catchFilter", () => {
@@ -794,6 +834,29 @@ describe("Effect.unwrapReason", () => {
   })
 })
 
+describe("Effect.fnUntraced", () => {
+  it("with self", () => {
+    const fn = Effect.fnUntraced({ self: { value: 1 } }, function*(amount: number) {
+      return yield* Effect.fail(this.value + amount)
+    })
+    expect(fn).type.toBe<(amount: number) => Effect.Effect<never, number, never>>()
+  })
+
+  it("with self and pipe arguments", () => {
+    const fn = Effect.fnUntraced(
+      { self: { value: 1 } },
+      function*(amount: number) {
+        return this.value + amount
+      },
+      Effect.map((x) => {
+        expect(x).type.toBe<number>()
+        return String(x)
+      })
+    )
+    expect(fn).type.toBe<(amount: number) => Effect.Effect<string, never, never>>()
+  })
+})
+
 describe("Effect.fn", () => {
   it("with a span, generator", () => {
     const fn = Effect.fn("span")(function*() {
@@ -903,7 +966,7 @@ describe("Effect.partition", () => {
       [1, 2, 3],
       (n) => n % 2 === 0 ? Effect.fail(`${n}`) : Effect.succeed(n)
     )
-    expect(result).type.toBe<Effect.Effect<[excluded: Array<string>, satisfying: Array<number>], never, never>>()
+    expect(result).type.toBe<Effect.Effect<[passes: Array<number>, fails: Array<string>], never, never>>()
   })
 
   it("data-last", () => {
@@ -911,7 +974,7 @@ describe("Effect.partition", () => {
       [1, 2, 3],
       Effect.partition((n) => n % 2 === 0 ? Effect.fail(n) : Effect.succeed(`${n}`))
     )
-    expect(result).type.toBe<Effect.Effect<[excluded: Array<number>, satisfying: Array<string>], never, never>>()
+    expect(result).type.toBe<Effect.Effect<[passes: Array<string>, fails: Array<number>], never, never>>()
   })
 })
 
@@ -1183,6 +1246,42 @@ describe("all", () => {
   })
 })
 
+describe("Effect.repeat", () => {
+  type Status = "pending" | "done"
+  const source = null as unknown as Effect.Effect<Status>
+  const schedule = Schedule.recurs(3)
+
+  it("narrows the result with an unbounded while refinement", () => {
+    expect(Effect.repeat(source, {
+      while: (status): status is "pending" => status === "pending"
+    })).type.toBe<Effect.Effect<"done">>()
+  })
+
+  it("narrows the result with an unbounded until refinement", () => {
+    expect(Effect.repeat(source, {
+      until: (status): status is "done" => status === "done"
+    })).type.toBe<Effect.Effect<"done">>()
+  })
+
+  it("preserves the full result with optional times and a while refinement", () => {
+    const options: {
+      times?: number
+      while: (status: Status) => status is "pending"
+    } = {
+      times: 3,
+      while: (status): status is "pending" => status === "pending"
+    }
+    expect(Effect.repeat(source, options)).type.toBe<Effect.Effect<Status>>()
+  })
+
+  it("preserves the full result with a schedule and an until refinement", () => {
+    expect(Effect.repeat(source, {
+      schedule,
+      until: (status): status is "done" => status === "done"
+    })).type.toBe<Effect.Effect<Status>>()
+  })
+})
+
 describe("Effect.repeatOrElse", () => {
   const source = Effect.succeed("input")
   const schedule = null as unknown as Schedule.Schedule<number, string>
@@ -1384,6 +1483,44 @@ describe("Effect.withExecutionPlan", () => {
     const result = Effect.withExecutionPlan(self, plan)
     expect(result).type.toBe<Effect.Effect<number, string, "other-dep" | "plan-dep">>()
   })
+
+  it("tracks predicate errors and requirements with an unconditional fallback", () => {
+    class Dep extends Context.Service<Dep, number>()("Dep") {}
+    const predicatePlan = ExecutionPlan.make({
+      provide: Layer.empty,
+      while: () => Effect.flatMap(Dep, () => Effect.fail("predicate-failed" as const))
+    }, { provide: Layer.empty })
+    const result = Effect.withExecutionPlan(Effect.fail("operation-failed" as const), predicatePlan)
+    expect(result).type.toBe<Effect.Effect<never, "operation-failed" | "predicate-failed", Dep>>()
+  })
+
+  it("tracks layer requirements with a context fallback", () => {
+    class Dep extends Context.Service<Dep, number>()("Dep") {}
+    const layerPlan = ExecutionPlan.make({
+      provide: Layer.effect(Dep, Effect.flatMap(Dep, () => Effect.fail("layer-failed" as const)))
+    }, { provide: Context.empty() })
+    const result = Effect.withExecutionPlan(Effect.fail("operation-failed" as const), layerPlan)
+    expect(result).type.toBe<Effect.Effect<never, "operation-failed" | "layer-failed", Dep>>()
+  })
+
+  it("tracks schedule errors and requirements with an unscheduled fallback", () => {
+    class PolicyService extends Context.Service<PolicyService, number>()("PolicyService") {}
+    const schedulePlan = ExecutionPlan.make({
+      provide: Layer.empty,
+      schedule: Schedule.map(
+        Schedule.forever,
+        () => Effect.flatMap(PolicyService, () => Effect.fail("policy-failed" as const))
+      )
+    }, { provide: Layer.empty })
+    const result = Effect.withExecutionPlan(Effect.fail("operation-failed" as const), schedulePlan)
+    expect(result).type.toBe<Effect.Effect<never, "operation-failed" | "policy-failed", PolicyService>>()
+    const capturedResult = Effect.flatMap(schedulePlan.captureRequirements, (captured) => {
+      const result = Effect.withExecutionPlan(Effect.fail("operation-failed" as const), captured)
+      expect(result).type.toBe<Effect.Effect<never, "operation-failed" | "policy-failed">>()
+      return result
+    })
+    expect(capturedResult).type.toBe<Effect.Effect<never, "operation-failed" | "policy-failed", PolicyService>>()
+  })
 })
 
 describe("Effect.cachedWithTTL", () => {
@@ -1403,6 +1540,26 @@ describe("Effect.cachedWithTTL", () => {
     }))
 
     expect(cached).type.toBe<Effect.Effect<Effect.Effect<number, "err-2", "dep-2">>>()
+  })
+})
+
+describe("Effect.cachedInvalidateWithTTL", () => {
+  it("data-first", () => {
+    const cached = Effect.cachedInvalidateWithTTL(number, (exit) => {
+      expect(exit).type.toBe<Exit.Exit<number, "err-2">>()
+      return Exit.isSuccess(exit) ? Duration.seconds(exit.value) : 0
+    })
+
+    expect(cached).type.toBe<Effect.Effect<[Effect.Effect<number, "err-2", "dep-2">, Effect.Effect<void>]>>()
+  })
+
+  it("data-last", () => {
+    const cached = number.pipe(Effect.cachedInvalidateWithTTL((exit) => {
+      expect(exit).type.toBe<Exit.Exit<number, "err-2">>()
+      return Exit.isSuccess(exit) ? "1 second" : 0
+    }))
+
+    expect(cached).type.toBe<Effect.Effect<[Effect.Effect<number, "err-2", "dep-2">, Effect.Effect<void>]>>()
   })
 })
 

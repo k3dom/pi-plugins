@@ -179,7 +179,7 @@ describe('through the pi anthropic adapter', () => {
       display: 'summarized',
       block_binding: { prefix_mismatch_behavior: 'drop_block' },
     })
-    deepStrictEqual(body.output_config, { effort: 'high' })
+    deepStrictEqual(body.output_config, { effort: 'low' })
     assert.deepInclude(body.messages, {
       role: 'system',
       content: [],
@@ -218,14 +218,21 @@ describe('through the pi anthropic adapter', () => {
             },
             {
               type: 'tool_addition',
-              tool: { type: 'tool_reference', name: 'Bash' },
+              tool: {
+                type: 'tool_definition',
+                definition: {
+                  name: 'Bash',
+                  description: 'bash tool',
+                  input_schema: { type: 'object', properties: {}, required: [] },
+                  eager_input_streaming: true,
+                },
+              },
               cache_control: { type: 'ephemeral' },
             },
           ],
         },
       ],
     )
-    assert.include(body.tools?.map((declared) => declared.name) ?? [], 'Bash')
   })
 
   it('leaves API-key requests without OAuth identity or header overrides', async () => {

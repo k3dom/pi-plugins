@@ -1,3 +1,39 @@
+effect/Stream#bind:
+  include: true
+  replacement: "Stream.bind"
+  note: "The input must be a record. Start from Stream.Do or use Stream.bindTo(name) to wrap a non-record element. The field name may now re-bind an existing key; the resulting record type is Simplify<Omit<A, N> & Record<N, B>>."
+effect/Stream#bindEffect:
+  include: true
+  replacement: "Stream.bindEffect"
+  note: "The input must be a record. Start from Stream.Do or use Stream.bindTo(name) to wrap a non-record element. Existing keys may be re-bound, with the new value replacing the old field type. The callback still returns an Effect."
+effect/Stream#catchTags:
+  include: true
+  replacement: "Stream.catchTags"
+  note: "Only keys in the tagged error union are accepted; untagged errors remain in the error channel. Causes containing defects skip handlers and convert typed errors to defects; interruptions alongside typed errors do not block recovery."
+effect/Stream#mapBoth:
+  include: true
+  replacement: "Stream.mapBoth"
+  note: "Rename the options onSuccess to onElement and onFailure to onError. The callbacks still transform emitted elements and typed errors respectively. Maps every typed error in the cause, preserving defects, interruptions and reason order. Unlike typed recovery, mapping does not convert errors to defects."
+effect/Stream#partition:
+  include: true
+  replacement: "Stream.partition"
+  note: "Pass a Result-returning Filter instead of a boolean predicate or refinement; Filter.fromPredicate(predicate) adapts existing predicates. The tuple order is now [passes, fails], the reverse of v3 [excluded, satisfying]. Rename bufferSize to capacity (default 16; also accepts \"unbounded\"). Acquisition is scoped and does not fail with E; the returned streams carry E."
+effect/Stream#scan:
+  include: true
+  replacement: "Stream.scan"
+  note: "Wrap the initial state in a thunk: Stream.scan(() => initial, step). The thunk is evaluated for each stream run; allocate mutable initial state inside it to avoid sharing state between runs."
+effect/Stream#scanEffect:
+  include: true
+  replacement: "Stream.scanEffect"
+  note: "Wrap the initial state in a thunk: Stream.scanEffect(() => initial, step). It is evaluated for each stream run; the step still returns an Effect."
+effect/Stream#runIntoPubSub:
+  include: true
+  replacement: "Stream.runIntoPubSub"
+  note: "Pass a PubSub of plain elements rather than Take wrappers. Both overloads return Effect<void, E, R>, so handle stream failures on the returned Effect instead of expecting them as PubSub messages. The optional shutdownOnEnd flag controls PubSub shutdown."
+effect/Stream#let:
+  include: true
+  replacement: "Stream.let"
+  note: "Retained in v4 and aligned with Effect.let: the field name may re-bind an existing key (the computed value replaces it) and the record type is Simplify<Omit<A, N> & Record<N, B>>."
 effect/Stream#Stream:
   replacement: "Stream"
   note: "The Stream<A, E, R> interface is unchanged in shape and keeps the effect/Stream import path; the type-id key is now the string literal \"~effect/Stream\" instead of a unique symbol."
@@ -29,14 +65,15 @@ effect/Stream#aggregateWithinEither:
   replacement: "Stream.aggregateWithin"
   note: "Either-emitting variant removed; v4 aggregateWithin(sink, schedule) emits only the sink outputs B (schedule outputs are no longer surfaced as Either.right)."
 effect/Stream#as:
-  replacement: "Stream.map(() => value)"
-  note: "Stream.as was removed; replace each element with a constant via Stream.map."
+  include: true
+  replacement: "Stream.as"
+  note: "Retained in v4 with the same signature; replaces every element with the provided constant value."
 effect/Stream#async:
   replacement: "Stream.callback"
   note: "Stream.callback((queue) => Effect | void, { bufferSize?, strategy? }) replaces the Emit-based async; push with Queue.offer/offerAll, end with Queue.end, fail with Queue.fail."
 effect/Stream#asyncEffect:
   replacement: "Stream.callback"
-  note: "The register function of Stream.callback may return an Effect (run before the stream starts pulling), covering asyncEffect; signal end/failure through the provided Queue."
+  note: "The register function of Stream.callback may return an Effect, covering asyncEffect. Unlike v3, it is started before the stream pulls but not awaited: it runs synchronously until its first async boundary, so asynchronous setup may still be in progress when pulling begins. Signal end/failure through the provided Queue."
 effect/Stream#asyncPush:
   replacement: "Stream.callback"
   note: "Stream.callback's register effect can use Scope for acquire/release of the external subscription, replacing asyncPush; the Emit ops helpers become plain Queue operations."
@@ -61,13 +98,13 @@ effect/Stream#bufferChunks:
   note: "Chunk->Array rename; buffers whole arrays (chunks) up to capacity with the same strategy options."
 effect/Stream#catchAll:
   replacement: "Stream.catch"
-  note: "Renamed to Stream.catch (exported keyword-style); same (error) => Stream handler for all typed failures."
+  note: "Rename to Stream.catch with an (error) => Stream handler. Causes containing defects skip typed recovery and convert typed errors to defects; interruptions alongside typed errors do not block recovery. Use Stream.catchCause for full-cause handling."
 effect/Stream#catchAllCause:
   replacement: "Stream.catchCause"
   note: "Renamed; handler receives the full Cause<E> and returns a recovery stream, identical semantics."
 effect/Stream#catchSome:
   replacement: "Stream.catchFilter"
-  note: "Option-returning partial handler replaced by the Filter API: Stream.catchFilter(filter, f, orElse?) recovers matched errors, unmatched failures pass through (Stream.catchIf for refinement/predicate matching)."
+  note: "Use Stream.catchFilter(filter, f, orElse?) instead of an Option-returning partial handler. Causes containing defects skip typed recovery and convert typed errors to defects; interruptions alongside typed errors do not block recovery."
 effect/Stream#catchSomeCause:
   replacement: "Stream.catchCauseFilter"
   note: "Option-returning cause handler replaced by Stream.catchCauseFilter(filter, f, orElse?) using a Filter on the Cause (Stream.catchCauseIf for refinements)."
@@ -112,7 +149,7 @@ effect/Stream#distributedWithDynamic:
   note: "Dynamic predicate-routed fan-out removed with distributedWith. Use Stream.broadcast/Stream.share for dynamic mirrors plus per-subscriber Stream.filter, or hand-roll routing into Queues via Stream.runForEach."
 effect/Stream#either:
   replacement: "Stream.result"
-  note: "Either is replaced by Result in v4: Stream.result yields Stream<Result.Result<A, E>, never, R> (element -> Result.succeed, first error -> Result.fail and the stream ends, as before)."
+  note: "Either is replaced by Result in v4: Stream.result yields Stream<Result.Result<A, E>, never, R> (element -> Result.succeed, first error -> Result.fail and the stream ends, as before). Causes containing defects are not emitted as Result failures and propagate with typed errors converted to defects; interruptions alongside typed errors do not block typed recovery."
 effect/Stream#ensuringWith:
   replacement: "Stream.onExit"
   note: "Renamed; Stream.onExit runs the finalizer with the Exit<unknown, E> of the stream, identical shape."
@@ -225,13 +262,13 @@ effect/Stream#orDieWith:
   note: "orDieWith removed; transform the error first, then convert failures to defects: `self.pipe(Stream.mapError(f), Stream.orDie)`."
 effect/Stream#orElse:
   replacement: "Stream.catch"
-  note: "v3 catchAll was renamed to Stream.catch in v4; orElse ignored the error, so write `Stream.catch(self, () => that())`."
+  note: "Use Stream.catch(self, () => that()). Causes containing defects skip the fallback and convert typed errors to defects; interruptions alongside typed errors do not block recovery."
 effect/Stream#orElseEither:
   replacement: "Stream.catch"
-  note: "Removed; Either is replaced by Result in v4. Emulate: `Stream.map(self, Result.succeed).pipe(Stream.catch(() => Stream.map(that(), Result.fail)))` (same encoding v4 Stream.mergeResult uses)."
+  note: "Replace Either with Result: Stream.map(self, Result.succeed).pipe(Stream.catch(() => Stream.map(that(), Result.fail))). Causes containing defects skip the fallback and convert typed errors to defects; interruptions alongside typed errors do not block recovery."
 effect/Stream#orElseFail:
   replacement: "Stream.mapError"
-  note: "Removed; it only replaced the failure value: `Stream.mapError(self, () => error())` or `Stream.catch(self, () => Stream.fail(error()))`."
+  note: "Use Stream.mapError(self, () => error()) to replace each typed error while preserving existing defects and interruptions. Stream.catch is not equivalent for causes containing defects because it skips typed recovery."
 effect/Stream#orElseIfEmptyChunk:
   replacement: "Stream.orElseIfEmpty"
   note: "Folded into Stream.orElseIfEmpty, which now takes a lazy fallback Stream: `Stream.orElseIfEmpty(self, () => Stream.fromArray(array))`; Chunk is replaced by plain arrays."
@@ -264,10 +301,10 @@ effect/Stream#provideSomeLayer:
   note: "v4 Stream.provide accepts a Layer (or Context) and excludes only the provided services from R — same partial-provision semantics."
 effect/Stream#refineOrDie:
   replacement: "Stream.catch"
-  note: "Removed; emulate with `Stream.catch(self, (e) => { const r = pf(e); return Option.isSome(r) ? Stream.fail(r.value) : Stream.die(e) })` — refail refined errors, die on the rest."
+  note: "For recoverable typed errors, use Stream.catch(self, (e) => { const r = pf(e); return Option.isSome(r) ? Stream.fail(r.value) : Stream.die(e) }). Causes containing defects skip pf and convert typed errors to defects; use Stream.catchCause for full-cause handling."
 effect/Stream#refineOrDieWith:
   replacement: "Stream.catch"
-  note: "Removed; same as refineOrDie but die with the mapped defect: `Stream.die(f(e))` for unrefined errors."
+  note: "Use the refineOrDie recipe with Stream.die(f(e)) for unrefined errors. Causes containing defects skip pf and f and convert typed errors to defects; use Stream.catchCause for full-cause handling."
 effect/Stream#repeatEffect:
   replacement: "Stream.fromEffectRepeat"
   note: "Renamed; repeats the effect forever emitting each result."
@@ -392,6 +429,7 @@ effect/Stream#toReadableStreamRuntime:
   replacement: "Stream.toReadableStreamWith"
   note: "Renamed; takes a `Context.Context<XR>` instead of a Runtime (v4 removed Runtime); options `{ strategy?: QueuingStrategy }` unchanged."
 effect/Stream#transduce:
+  include: true
   replacement: "Stream.transduce"
   note: "Unchanged name and Sink-based shape; chunks are plain arrays in v4."
 effect/Stream#unfoldChunk:
@@ -448,3 +486,27 @@ effect/Stream#zipAllWith:
 effect/Stream#zipWithChunks:
   replacement: "Stream.zipWithArray"
   note: "Renamed; the combiner now receives two NonEmptyReadonlyArrays and returns `[output: NonEmptyReadonlyArray, leftoverLeft: ReadonlyArray, leftoverRight: ReadonlyArray]` — the Either-wrapped leftover (ZipChunksResult) is replaced by the two explicit leftover arrays."
+effect/Stream#mapError:
+  include: true
+  replacement: "Stream.mapError"
+  note: "Maps every typed error in the cause, preserving defects, interruptions and reason order. Unlike typed recovery, mapping does not convert errors to defects."
+
+effect/Stream#orDie:
+  include: true
+  replacement: "Stream.orDie"
+  note: "Converts typed errors to defects. If a defect is already present, every typed error is converted to a defect, preserving reason order and interruptions."
+
+effect/Stream#retry:
+  include: true
+  replacement: "Stream.retry"
+  note: "Retries typed source errors, including those alongside interruptions. A source cause containing a defect is not retried and propagates with typed errors converted to defects."
+
+effect/Stream#catchTag:
+  include: true
+  replacement: "Stream.catchTag"
+  note: "Causes containing defects skip typed recovery and convert typed errors to defects, preserving reason order and interruptions. An interruption alongside a typed error does not block recovery."
+
+effect/Stream#orElseSucceed:
+  include: true
+  replacement: "Stream.orElseSucceed"
+  note: "Causes containing defects skip typed recovery and convert typed errors to defects, preserving reason order and interruptions. An interruption alongside a typed error does not block recovery."
