@@ -1,5 +1,11 @@
 # @pi-plugins/checkpoint
 
+## 0.1.7
+
+### Patch Changes
+
+- b481122: Bundle Effect 4.1.4 instead of 4.1.2 and build against pi 1.5.2.
+
 ## 0.1.6
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # @pi-plugins/webfetch
 
+## 0.3.3
+
+### Patch Changes
+
+- b481122: Bundle Effect 4.1.4 instead of 4.1.2 and build against pi 1.5.2.
+
 ## 0.3.2
 
 ### Patch Changes
