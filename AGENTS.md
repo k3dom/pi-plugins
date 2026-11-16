@@ -22,6 +22,10 @@ Subtrees are tracked in `.agents/repos/.subtrees`, pinned to the release each
 dependency is on, and managed with `scripts/add-subtree.sh` (add a new repo) and
 `scripts/update-subtree.sh` (pull the registered ref).
 
+Merge a PR that adds or pulls a subtree with a merge commit, never squash or rebase.
+`git subtree pull --squash` finds the previous pull through its squash commit, which
+has to stay in `master`'s history with its own `git-subtree-*` trailers.
+
 ## Agent skills
 
 ### Issue tracker
