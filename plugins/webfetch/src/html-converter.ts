@@ -1,5 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { Defuddle } from 'defuddle/node'
-import { Context, Effect, Layer, Schema } from 'effect'
+import { Context, Effect, Layer, Record, Schema } from 'effect'
 import { parseHTML } from 'linkedom'
 
 export class HtmlConverterError extends Schema.TaggedError<HtmlConverterError>()(
@@ -11,6 +12,15 @@ export class HtmlConverterError extends Schema.TaggedError<HtmlConverterError>()
   }
 }
 
+// defuddle logs the errors it recovers from to the console, which writes over pi's TUI.
+const muted = new AsyncLocalStorage<true>()
+let mutedConsole:
+  | {
+      readonly original: Pick<Console, 'error' | 'warn' | 'log'>
+      conversions: number
+    }
+  | undefined
+
 export class HtmlConverter extends Context.Service<HtmlConverter>()(
   '@pi-plugins/webfetch/HtmlConverter',
   {
@@ -19,16 +29,48 @@ export class HtmlConverter extends Context.Service<HtmlConverter>()(
         html: string,
         url: string,
       ) {
-        const response = yield* Effect.tryPromise({
+        return yield* Effect.tryPromise({
           try: () => {
-            const { document } = parseHTML(html)
-            // defuddle reads the page URL from `location`, which linkedom leaves unset.
-            Object.assign(document, { location: { href: url } })
-            return Defuddle(document, url, { markdown: true })
+            if (mutedConsole === undefined) {
+              const original = {
+                error: console.error,
+                warn: console.warn,
+                log: console.log,
+              }
+              Object.assign(
+                console,
+                Record.map(original, (method) => (...args: Array<unknown>) => {
+                  if (muted.getStore() === undefined) {
+                    method.apply(console, args)
+                  }
+                }),
+              )
+              mutedConsole = { original, conversions: 0 }
+            }
+            mutedConsole.conversions++
+            // Restore once defuddle settles, since interrupting the fiber doesn't stop it.
+            return muted
+              .run(true, async () => {
+                const { document } = parseHTML(html)
+                // linkedom builds no document element from a body without markup, such as
+                // an empty page or plain text, and defuddle fails on it.
+                if (document.documentElement === null) {
+                  return html
+                }
+                // defuddle reads the page URL from `location`, which linkedom leaves unset.
+                Object.assign(document, { location: { href: url } })
+                const response = await Defuddle(document, url, { markdown: true })
+                return response.content
+              })
+              .finally(() => {
+                if (mutedConsole !== undefined && --mutedConsole.conversions === 0) {
+                  Object.assign(console, mutedConsole.original)
+                  mutedConsole = undefined
+                }
+              })
           },
           catch: (cause) => new HtmlConverterError({ cause }),
         })
-        return response.content
       })
 
       return { toMarkdown }
