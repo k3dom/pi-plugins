@@ -1,5 +1,11 @@
 # @pi-plugins/subagent
 
+## 0.4.4
+
+### Patch Changes
+
+- 16e8941: Bundle Effect 4.1.5 instead of 4.1.4 and build against pi 1.6.0.
+
 ## 0.4.3
 
 ### Patch Changes

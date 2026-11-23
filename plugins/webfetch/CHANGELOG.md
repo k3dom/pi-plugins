@@ -1,5 +1,13 @@
 # @pi-plugins/webfetch
 
+## 0.3.5
+
+### Patch Changes
+
+- 16e8941: Bundle Effect 4.1.5 instead of 4.1.4 and build against pi 1.6.0.
+- 16e8941: Depend on defuddle 0.19.13, which fixes an XSS through an unescaped `<title>` inside
+  `<math>` (GHSA-w8hh-2cpq-9whp).
+
 ## 0.3.4
 
 ### Patch Changes
