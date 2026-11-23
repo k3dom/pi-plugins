@@ -15,8 +15,8 @@
   "devDependencies": {
     "@changesets/cli": "3.0.3",
     "@pi-plugins/fmt": "workspace:*",
-    "oxfmt": "0.78.0",
-    "turbo": "2.11.11"
+    "oxfmt": "0.79.0",
+    "turbo": "2.11.13"
   },
   "packageManager": "pnpm@12.21.0"
 }

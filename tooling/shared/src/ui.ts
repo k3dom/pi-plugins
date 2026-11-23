@@ -44,7 +44,7 @@ export class TextPreview implements Component {
     this.body.invalidate()
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     const lines = this.body.render(width)
     const hidden = lines.length - this.maxLines
     if (this.expanded || hidden <= 0) {
@@ -102,7 +102,7 @@ export class ExpandableText implements Component {
     }
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     return Array.flatMap(this.parts, (part) => part.render(width))
   }
 }
