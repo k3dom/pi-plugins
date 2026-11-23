@@ -1,5 +1,17 @@
 # @pi-plugins/fast-mode
 
+## 0.2.0
+
+### Minor Changes
+
+- 13dd3af: Add GPT-6.1 Terra, GPT-6.2 Sol and GPT-6.2 Astra to the default fast-mode models for OpenAI
+  and OpenAI Codex, and drop the GPT-5.4, GPT-5.5 and GPT-5.6 models from the defaults. List
+  them in `models` in `fast-mode.json` to keep fast mode on for them.
+
+### Patch Changes
+
+- 16e8941: Bundle Effect 4.1.5 instead of 4.1.4 and build against pi 1.6.0.
+
 ## 0.1.16
 
 ### Patch Changes
